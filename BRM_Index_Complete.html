@@ -1,0 +1,1757 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Red Leg BRM - Complete System</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: linear-gradient(135deg, #1F4E78 0%, #2C5F8D 100%);
+      min-height: 100vh;
+      padding-bottom: 70px;
+    }
+    
+    .container {
+      max-width: 1400px;
+      margin: 0 auto;
+      padding: 20px;
+    }
+    
+    .header {
+      text-align: center;
+      color: white;
+      padding: 20px 0;
+      margin-bottom: 20px;
+    }
+    
+    .header h1 {
+      font-size: 32px;
+      margin-bottom: 8px;
+    }
+    
+    .header p {
+      font-size: 14px;
+      opacity: 0.9;
+    }
+    
+    /* Tab Content Areas */
+    .tab-content {
+      display: none;
+    }
+    
+    .tab-content.active {
+      display: block;
+    }
+    
+    /* Cards */
+    .card {
+      background: white;
+      border-radius: 12px;
+      padding: 25px;
+      margin-bottom: 20px;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.1);
+    }
+    
+    .card h2 {
+      color: #1F4E78;
+      margin-bottom: 20px;
+      font-size: 24px;
+    }
+    
+    .card h3 {
+      color: #1F4E78;
+      margin-bottom: 15px;
+      font-size: 18px;
+    }
+    
+    /* Forms */
+    .form-group {
+      margin-bottom: 20px;
+    }
+    
+    .form-label {
+      display: block;
+      font-weight: 600;
+      color: #333;
+      margin-bottom: 8px;
+      font-size: 14px;
+    }
+    
+    .form-input,
+    .form-select,
+    .form-textarea {
+      width: 100%;
+      padding: 12px;
+      border: 2px solid #e0e0e0;
+      border-radius: 8px;
+      font-size: 14px;
+      font-family: inherit;
+      transition: border-color 0.3s;
+    }
+    
+    .form-input:focus,
+    .form-select:focus,
+    .form-textarea:focus {
+      outline: none;
+      border-color: #1F4E78;
+    }
+    
+    .form-textarea {
+      min-height: 80px;
+      resize: vertical;
+    }
+    
+    .form-row {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 15px;
+    }
+    
+    /* Buttons */
+    .btn {
+      padding: 12px 24px;
+      border: none;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.3s;
+      text-align: center;
+    }
+    
+    .btn:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    }
+    
+    .btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+      transform: none;
+    }
+    
+    .btn-primary {
+      background: #1F4E78;
+      color: white;
+    }
+    
+    .btn-success {
+      background: #27ae60;
+      color: white;
+    }
+    
+    .btn-warning {
+      background: #f39c12;
+      color: white;
+    }
+    
+    .btn-danger {
+      background: #e74c3c;
+      color: white;
+    }
+    
+    .btn-secondary {
+      background: #95a5a6;
+      color: white;
+    }
+    
+    .btn-small {
+      padding: 8px 16px;
+      font-size: 12px;
+    }
+    
+    /* Stats Cards */
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 15px;
+      margin-bottom: 25px;
+    }
+    
+    .stat-card {
+      background: white;
+      border-radius: 10px;
+      padding: 20px;
+      text-align: center;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.08);
+    }
+    
+    .stat-value {
+      font-size: 32px;
+      font-weight: bold;
+      color: #1F4E78;
+      margin-bottom: 8px;
+    }
+    
+    .stat-label {
+      font-size: 13px;
+      color: #666;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    
+    .stat-card.green .stat-value {
+      color: #27ae60;
+    }
+    
+    .stat-card.orange .stat-value {
+      color: #f39c12;
+    }
+    
+    .stat-card.red .stat-value {
+      color: #e74c3c;
+    }
+    
+    /* Allocation Form */
+    .allocation-section {
+      background: #f8f9fa;
+      padding: 20px;
+      border-radius: 8px;
+      margin-top: 20px;
+    }
+    
+    .allocation-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 15px;
+      align-items: end;
+    }
+    
+    .allocation-total {
+      background: #e3f2fd;
+      padding: 15px;
+      border-radius: 8px;
+      margin-top: 15px;
+      text-align: center;
+    }
+    
+    .allocation-total.error {
+      background: #ffebee;
+      color: #c62828;
+    }
+    
+    .allocation-total.success {
+      background: #e8f5e9;
+      color: #2e7d32;
+    }
+    
+    /* Taproom Sales Entry */
+    .sales-entry-row {
+      background: #f8f9fa;
+      padding: 15px;
+      border-radius: 8px;
+      margin-bottom: 15px;
+    }
+    
+    .sales-entry-grid {
+      display: grid;
+      grid-template-columns: 2fr 1fr 1fr 1fr 1fr 80px;
+      gap: 10px;
+      align-items: end;
+    }
+    
+    .remove-btn {
+      padding: 8px;
+      background: #e74c3c;
+      color: white;
+      border: none;
+      border-radius: 5px;
+      cursor: pointer;
+      font-size: 18px;
+    }
+    
+    /* Channel Badge */
+    .channel-badge {
+      display: inline-block;
+      padding: 4px 12px;
+      border-radius: 12px;
+      font-size: 11px;
+      font-weight: bold;
+      text-transform: uppercase;
+    }
+    
+    .channel-badge.b2b {
+      background: #3498db;
+      color: white;
+    }
+    
+    .channel-badge.taproom {
+      background: #f39c12;
+      color: white;
+    }
+    
+    /* Calendar */
+    .calendar-grid {
+      display: grid;
+      grid-template-columns: repeat(7, 1fr);
+      gap: 10px;
+      margin-top: 20px;
+    }
+    
+    .calendar-day {
+      background: white;
+      border: 2px solid #e0e0e0;
+      border-radius: 8px;
+      padding: 10px;
+      min-height: 100px;
+      cursor: pointer;
+      transition: all 0.3s;
+    }
+    
+    .calendar-day:hover {
+      border-color: #1F4E78;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    }
+    
+    .calendar-day.today {
+      border-color: #f39c12;
+      background: #fff8e1;
+    }
+    
+    .calendar-day.has-batch {
+      background: #e3f2fd;
+      border-color: #2196f3;
+    }
+    
+    .calendar-date {
+      font-weight: bold;
+      color: #333;
+      margin-bottom: 5px;
+    }
+    
+    .calendar-batch {
+      font-size: 11px;
+      color: #666;
+      padding: 3px 6px;
+      background: white;
+      border-radius: 4px;
+      margin-top: 5px;
+    }
+    
+    /* Recipe Card */
+    .recipe-card {
+      background: #f8f9fa;
+      border-radius: 8px;
+      padding: 15px;
+      margin-bottom: 15px;
+      border-left: 4px solid #1F4E78;
+    }
+    
+    .recipe-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 10px;
+    }
+    
+    .recipe-name {
+      font-weight: bold;
+      color: #1F4E78;
+      font-size: 16px;
+    }
+    
+    .recipe-details {
+      font-size: 13px;
+      color: #666;
+      line-height: 1.6;
+    }
+    
+    /* Demand Planning */
+    .demand-item {
+      background: white;
+      border: 2px solid #e0e0e0;
+      border-radius: 8px;
+      padding: 15px;
+      margin-bottom: 15px;
+    }
+    
+    .demand-item.urgent {
+      border-color: #e74c3c;
+      background: #ffebee;
+    }
+    
+    .demand-item.low {
+      border-color: #f39c12;
+      background: #fff8e1;
+    }
+    
+    .demand-item.good {
+      border-color: #27ae60;
+      background: #e8f5e9;
+    }
+    
+    .demand-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 10px;
+    }
+    
+    .demand-beer {
+      font-weight: bold;
+      font-size: 16px;
+      color: #333;
+    }
+    
+    .demand-status {
+      padding: 4px 12px;
+      border-radius: 12px;
+      font-size: 11px;
+      font-weight: bold;
+      text-transform: uppercase;
+    }
+    
+    .demand-status.urgent {
+      background: #e74c3c;
+      color: white;
+    }
+    
+    .demand-status.low {
+      background: #f39c12;
+      color: white;
+    }
+    
+    .demand-status.good {
+      background: #27ae60;
+      color: white;
+    }
+    
+    .demand-info {
+      font-size: 13px;
+      color: #666;
+      line-height: 1.8;
+    }
+    
+    /* Equipment Schedule */
+    .equipment-item {
+      background: #f8f9fa;
+      border-radius: 8px;
+      padding: 15px;
+      margin-bottom: 15px;
+      border-left: 4px solid #27ae60;
+    }
+    
+    .equipment-item.in-use {
+      border-color: #f39c12;
+      background: #fff8e1;
+    }
+    
+    .equipment-item.cleaning {
+      border-color: #3498db;
+      background: #e3f2fd;
+    }
+    
+    .equipment-name {
+      font-weight: bold;
+      color: #333;
+      font-size: 16px;
+      margin-bottom: 8px;
+    }
+    
+    .equipment-status {
+      display: inline-block;
+      padding: 4px 12px;
+      border-radius: 12px;
+      font-size: 11px;
+      font-weight: bold;
+      text-transform: uppercase;
+      margin-bottom: 10px;
+    }
+    
+    .equipment-status.available {
+      background: #27ae60;
+      color: white;
+    }
+    
+    .equipment-status.in-use {
+      background: #f39c12;
+      color: white;
+    }
+    
+    .equipment-status.cleaning {
+      background: #3498db;
+      color: white;
+    }
+    
+    .equipment-info {
+      font-size: 13px;
+      color: #666;
+    }
+    
+    /* Bottom Navigation */
+    .bottom-nav {
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      background: white;
+      box-shadow: 0 -2px 10px rgba(0,0,0,0.1);
+      z-index: 1000;
+      overflow-x: auto;
+      white-space: nowrap;
+    }
+    
+    .nav-container {
+      display: flex;
+      justify-content: flex-start;
+      min-width: min-content;
+    }
+    
+    .nav-item {
+      flex: 0 0 auto;
+      min-width: 80px;
+      text-align: center;
+      padding: 10px 8px;
+      cursor: pointer;
+      transition: all 0.3s;
+      border-bottom: 3px solid transparent;
+    }
+    
+    .nav-item.active {
+      background: #f0f7ff;
+      border-bottom-color: #1F4E78;
+    }
+    
+    .nav-item:hover {
+      background: #f8f9fa;
+    }
+    
+    .nav-icon {
+      font-size: 20px;
+      display: block;
+      margin-bottom: 4px;
+    }
+    
+    .nav-label {
+      font-size: 10px;
+      font-weight: 600;
+      color: #333;
+    }
+    
+    /* Alerts */
+    .alert {
+      padding: 15px;
+      border-radius: 8px;
+      margin-bottom: 20px;
+      font-weight: 500;
+    }
+    
+    .alert-success {
+      background: #d4edda;
+      color: #155724;
+      border: 1px solid #c3e6cb;
+    }
+    
+    .alert-warning {
+      background: #fff3cd;
+      color: #856404;
+      border: 1px solid #ffc107;
+    }
+    
+    .alert-danger {
+      background: #f8d7da;
+      color: #721c24;
+      border: 1px solid #f5c6cb;
+    }
+    
+    .alert-info {
+      background: #d1ecf1;
+      color: #0c5460;
+      border: 1px solid #bee5eb;
+    }
+    
+    /* Loading */
+    .loading {
+      text-align: center;
+      padding: 40px;
+      color: #666;
+    }
+    
+    .hidden {
+      display: none !important;
+    }
+    
+    /* Tables */
+    .data-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 15px;
+    }
+    
+    .data-table th {
+      background: #f8f9fa;
+      padding: 12px;
+      text-align: left;
+      font-weight: 600;
+      color: #333;
+      border-bottom: 2px solid #dee2e6;
+      font-size: 13px;
+    }
+    
+    .data-table td {
+      padding: 12px;
+      border-bottom: 1px solid #dee2e6;
+      font-size: 13px;
+    }
+    
+    .data-table tr:hover {
+      background: #f8f9fa;
+    }
+    
+    /* Quick Actions */
+    .quick-actions {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 15px;
+      margin-bottom: 20px;
+    }
+    
+    .quick-action-card {
+      background: linear-gradient(135deg, #1F4E78 0%, #2C5F8D 100%);
+      color: white;
+      border-radius: 10px;
+      padding: 20px;
+      text-align: center;
+      cursor: pointer;
+      transition: all 0.3s;
+    }
+    
+    .quick-action-card:hover {
+      transform: translateY(-5px);
+      box-shadow: 0 8px 20px rgba(0,0,0,0.15);
+    }
+    
+    .quick-action-icon {
+      font-size: 40px;
+      margin-bottom: 10px;
+    }
+    
+    .quick-action-label {
+      font-weight: 600;
+      font-size: 14px;
+    }
+    
+    /* Responsive */
+    @media (max-width: 768px) {
+      .form-row {
+        grid-template-columns: 1fr;
+      }
+      
+      .sales-entry-grid {
+        grid-template-columns: 1fr;
+      }
+      
+      .allocation-row {
+        grid-template-columns: 1fr;
+      }
+      
+      .calendar-grid {
+        grid-template-columns: repeat(2, 1fr);
+      }
+      
+      .quick-actions {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <!-- Header -->
+    <div class="header">
+      <h1>🍺 Red Leg BRM</h1>
+      <p>Complete Brewery Management System</p>
+    </div>
+    
+    <!-- Dashboard Tab -->
+    <div id="dashboardTab" class="tab-content active">
+      <div class="card">
+        <h2>📊 Dashboard</h2>
+        
+        <div class="stats-grid" id="dashboardStats">
+          <div class="stat-card">
+            <div class="stat-value" id="fccr">-</div>
+            <div class="stat-label">FCCR</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-value" id="revenue">-</div>
+            <div class="stat-label">Revenue YTD</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-value" id="inventory">-</div>
+            <div class="stat-label">Inventory Value</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-value" id="activeBatches">-</div>
+            <div class="stat-label">Active Batches</div>
+          </div>
+        </div>
+        
+        <h3>Channel Breakdown</h3>
+        <div class="stats-grid">
+          <div class="stat-card">
+            <div class="stat-value" id="b2bRevenue">-</div>
+            <div class="stat-label">
+              <span class="channel-badge b2b">B2B</span> Revenue
+            </div>
+          </div>
+          <div class="stat-card green">
+            <div class="stat-value" id="taproomRevenue">-</div>
+            <div class="stat-label">
+              <span class="channel-badge taproom">Taproom</span> Revenue
+            </div>
+          </div>
+        </div>
+      </div>
+      
+      <div class="card">
+        <h2>⚡ Quick Actions</h2>
+        <div class="quick-actions">
+          <div class="quick-action-card" onclick="switchTab('calendar')">
+            <div class="quick-action-icon">📅</div>
+            <div class="quick-action-label">Production Calendar</div>
+          </div>
+          <div class="quick-action-card" onclick="switchTab('batches')">
+            <div class="quick-action-icon">🍺</div>
+            <div class="quick-action-label">New Batch</div>
+          </div>
+          <div class="quick-action-card" onclick="switchTab('taproom')">
+            <div class="quick-action-icon">💰</div>
+            <div class="quick-action-label">Log Taproom Sales</div>
+          </div>
+          <div class="quick-action-card" onclick="switchTab('demand')">
+            <div class="quick-action-icon">📊</div>
+            <div class="quick-action-label">Demand Planning</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    
+    <!-- Production Calendar Tab (NEW!) -->
+    <div id="calendarTab" class="tab-content">
+      <div class="card">
+        <h2>📅 Production Calendar</h2>
+        
+        <div class="form-row" style="margin-bottom: 20px;">
+          <div class="form-group">
+            <button class="btn btn-primary" onclick="changeCalendarMonth(-1)">← Previous Month</button>
+          </div>
+          <div class="form-group" style="text-align: center;">
+            <h3 id="calendarMonthYear">Loading...</h3>
+          </div>
+          <div class="form-group" style="text-align: right;">
+            <button class="btn btn-primary" onclick="changeCalendarMonth(1)">Next Month →</button>
+          </div>
+        </div>
+        
+        <div id="calendarContainer">
+          <div class="loading">Loading calendar...</div>
+        </div>
+        
+        <button class="btn btn-success" onclick="showScheduleBatchModal()" style="margin-top: 20px;">
+          ➕ Schedule New Batch
+        </button>
+      </div>
+    </div>
+    
+    <!-- Recipes Tab (NEW!) -->
+    <div id="recipesTab" class="tab-content">
+      <div class="card">
+        <h2>🍺 Recipe Library</h2>
+        
+        <button class="btn btn-success" onclick="showAddRecipeModal()" style="margin-bottom: 20px;">
+          ➕ Add New Recipe
+        </button>
+        
+        <div id="recipesList">
+          <div class="loading">Loading recipes...</div>
+        </div>
+      </div>
+    </div>
+    
+    <!-- Demand Planning Tab (NEW!) -->
+    <div id="demandTab" class="tab-content">
+      <div class="card">
+        <h2>📊 Demand Planning</h2>
+        <p style="color: #666; margin-bottom: 20px;">
+          Based on sales velocity and current inventory. Suggestions for what to brew next.
+        </p>
+        
+        <button class="btn btn-primary" onclick="loadDemandPlanning()" style="margin-bottom: 20px;">
+          🔄 Refresh Forecast
+        </button>
+        
+        <div id="demandList">
+          <div class="loading">Loading demand forecast...</div>
+        </div>
+      </div>
+    </div>
+    
+    <!-- Equipment Tab (NEW!) -->
+    <div id="equipmentTab" class="tab-content">
+      <div class="card">
+        <h2>🏭 Equipment Schedule</h2>
+        <p style="color: #666; margin-bottom: 20px;">
+          Track fermenter, bright tank, and vessel availability.
+        </p>
+        
+        <button class="btn btn-primary" onclick="loadEquipmentSchedule()" style="margin-bottom: 20px;">
+          🔄 Refresh Status
+        </button>
+        
+        <div id="equipmentList">
+          <div class="loading">Loading equipment...</div>
+        </div>
+      </div>
+    </div>
+    
+    <!-- Batches Tab -->
+    <div id="batchesTab" class="tab-content">
+      <div class="card">
+        <h2>🍺 New Batch</h2>
+        
+        <form id="batchForm">
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label">Beer Type</label>
+              <input type="text" class="form-input" id="batchBeerType" required>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Batch Size (BBL)</label>
+              <input type="number" class="form-input" id="batchSize" required>
+            </div>
+          </div>
+          
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label">Product Type</label>
+              <select class="form-select" id="batchProductType">
+                <option value="1/2 BBL Keg">1/2 BBL Keg</option>
+                <option value="1/6 BBL Keg">1/6 BBL Keg</option>
+                <option value="Case">Case (24-pack)</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Expected Yield</label>
+              <input type="number" class="form-input" id="batchYield" required>
+            </div>
+          </div>
+          
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label">Cost Per Unit ($)</label>
+              <input type="number" step="0.01" class="form-input" id="batchCost" required>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Package Date</label>
+              <input type="date" class="form-input" id="batchPackageDate" required>
+            </div>
+          </div>
+          
+          <!-- Allocation Section -->
+          <div class="allocation-section" id="allocationSection">
+            <h3>📦 Channel Allocation</h3>
+            <p style="color: #666; margin-bottom: 15px; font-size: 14px;">
+              Decide how to split this batch between B2B distribution and taproom.
+            </p>
+            
+            <div class="allocation-row">
+              <div class="form-group">
+                <label class="form-label">
+                  <span class="channel-badge b2b">B2B</span> Quantity
+                </label>
+                <input type="number" class="form-input" id="b2bQty" min="0" value="0" oninput="updateAllocationTotal()">
+              </div>
+              <div class="form-group">
+                <label class="form-label">
+                  <span class="channel-badge taproom">Taproom</span> Quantity
+                </label>
+                <input type="number" class="form-input" id="taproomQty" min="0" value="0" oninput="updateAllocationTotal()">
+              </div>
+              <div class="form-group">
+                <label class="form-label">Total Yield</label>
+                <input type="text" class="form-input" id="totalYield" readonly style="background: #f8f9fa;">
+              </div>
+            </div>
+            
+            <div class="allocation-total" id="allocationStatus">
+              <strong>Allocation: </strong><span id="allocationText">Not allocated</span>
+            </div>
+          </div>
+          
+          <button type="submit" class="btn btn-success" style="width: 100%; margin-top: 20px;">
+            💾 Create Batch & Allocate
+          </button>
+        </form>
+      </div>
+    </div>
+    
+    <!-- Taproom Tab -->
+    <div id="taproomTab" class="tab-content">
+      <div class="card">
+        <h2>💰 Taproom Sales Entry</h2>
+        <p style="color: #666; margin-bottom: 20px;">
+          Enter today's taproom sales. System will automatically deplete inventory using FIFO.
+        </p>
+        
+        <div class="form-group">
+          <label class="form-label">Date</label>
+          <input type="date" class="form-input" id="salesDate" style="max-width: 200px;">
+        </div>
+        
+        <h3>🍺 Draft Sales</h3>
+        <div id="salesEntriesContainer">
+          <!-- Sales entries will be added here -->
+        </div>
+        
+        <button class="btn btn-primary" onclick="addSalesEntry()" style="margin-bottom: 20px;">
+          ➕ Add Beer
+        </button>
+        
+        <div class="form-group">
+          <label class="form-label">Notes (Optional)</label>
+          <textarea class="form-textarea" id="salesNotes" placeholder="Any notes about today's sales..."></textarea>
+        </div>
+        
+        <div class="allocation-total" id="salesTotal">
+          <strong>Daily Total: </strong>
+          <span id="totalRevenue">$0.00</span> Revenue | 
+          <span id="totalPints">0</span> Pints
+        </div>
+        
+        <button class="btn btn-success" onclick="submitTaproomSales()" style="width: 100%; margin-top: 20px;">
+          💾 Log Sales & Deplete Inventory
+        </button>
+      </div>
+    </div>
+    
+    <!-- Inventory Tab -->
+    <div id="inventoryTab" class="tab-content">
+      <div class="card">
+        <h2>📦 Inventory Overview</h2>
+        
+        <h3>By Channel</h3>
+        <div class="stats-grid">
+          <div class="stat-card">
+            <div class="stat-value" id="b2bInventory">-</div>
+            <div class="stat-label">
+              <span class="channel-badge b2b">B2B</span> Available
+            </div>
+          </div>
+          <div class="stat-card orange">
+            <div class="stat-value" id="taproomInventory">-</div>
+            <div class="stat-label">
+              <span class="channel-badge taproom">Taproom</span> Available
+            </div>
+          </div>
+        </div>
+        
+        <div id="inventoryList">
+          <div class="loading">Loading inventory...</div>
+        </div>
+      </div>
+    </div>
+    
+    <!-- Reports Tab -->
+    <div id="reportsTab" class="tab-content">
+      <div class="card">
+        <h2>📊 Channel Performance</h2>
+        
+        <div class="form-row" style="margin-bottom: 20px;">
+          <div class="form-group">
+            <label class="form-label">Start Date</label>
+            <input type="date" class="form-input" id="reportStartDate">
+          </div>
+          <div class="form-group">
+            <label class="form-label">End Date</label>
+            <input type="date" class="form-input" id="reportEndDate">
+          </div>
+          <div class="form-group" style="display: flex; align-items: flex-end;">
+            <button class="btn btn-primary" onclick="loadChannelReport()" style="width: 100%;">
+              📈 Generate Report
+            </button>
+          </div>
+        </div>
+        
+        <div id="channelReportContainer">
+          <p style="color: #666; text-align: center; padding: 40px;">
+            Select date range and click Generate Report
+          </p>
+        </div>
+      </div>
+    </div>
+  </div>
+  
+  <!-- Bottom Navigation -->
+  <div class="bottom-nav">
+    <div class="nav-container">
+      <div class="nav-item active" onclick="switchTab('dashboard')">
+        <span class="nav-icon">📊</span>
+        <span class="nav-label">Dashboard</span>
+      </div>
+      <div class="nav-item" onclick="switchTab('calendar')">
+        <span class="nav-icon">📅</span>
+        <span class="nav-label">Calendar</span>
+      </div>
+      <div class="nav-item" onclick="switchTab('recipes')">
+        <span class="nav-icon">📝</span>
+        <span class="nav-label">Recipes</span>
+      </div>
+      <div class="nav-item" onclick="switchTab('demand')">
+        <span class="nav-icon">📊</span>
+        <span class="nav-label">Demand</span>
+      </div>
+      <div class="nav-item" onclick="switchTab('equipment')">
+        <span class="nav-icon">🏭</span>
+        <span class="nav-label">Equipment</span>
+      </div>
+      <div class="nav-item" onclick="switchTab('batches')">
+        <span class="nav-icon">🍺</span>
+        <span class="nav-label">Batches</span>
+      </div>
+      <div class="nav-item" onclick="switchTab('taproom')">
+        <span class="nav-icon">💰</span>
+        <span class="nav-label">Taproom</span>
+      </div>
+      <div class="nav-item" onclick="switchTab('inventory')">
+        <span class="nav-icon">📦</span>
+        <span class="nav-label">Inventory</span>
+      </div>
+      <div class="nav-item" onclick="switchTab('reports')">
+        <span class="nav-icon">📈</span>
+        <span class="nav-label">Reports</span>
+      </div>
+    </div>
+  </div>
+  
+  <script>
+    // Global variables
+    var salesEntryCount = 0;
+    var productPrices = {};
+    var currentCalendarDate = new Date();
+    
+    // Initialize
+    window.onload = function() {
+      // Set today's date for sales
+      document.getElementById('salesDate').valueAsDate = new Date();
+      
+      // Set default report dates (last 30 days)
+      var today = new Date();
+      var thirtyDaysAgo = new Date(today.getTime() - (30 * 24 * 60 * 60 * 1000));
+      document.getElementById('reportStartDate').valueAsDate = thirtyDaysAgo;
+      document.getElementById('reportEndDate').valueAsDate = today;
+      
+      // Load initial data
+      loadDashboard();
+      loadProductPrices();
+      
+      // Add first sales entry row
+      addSalesEntry();
+    };
+    
+    // Tab switching
+    function switchTab(tabName) {
+      // Hide all tabs
+      document.querySelectorAll('.tab-content').forEach(tab => tab.classList.remove('active'));
+      document.querySelectorAll('.nav-item').forEach(nav => nav.classList.remove('active'));
+      
+      // Show selected tab
+      document.getElementById(tabName + 'Tab').classList.add('active');
+      event.currentTarget.classList.add('active');
+      
+      // Load data for tab
+      if (tabName === 'dashboard') {
+        loadDashboard();
+      } else if (tabName === 'calendar') {
+        loadProductionCalendar();
+      } else if (tabName === 'recipes') {
+        loadRecipes();
+      } else if (tabName === 'demand') {
+        loadDemandPlanning();
+      } else if (tabName === 'equipment') {
+        loadEquipmentSchedule();
+      } else if (tabName === 'inventory') {
+        loadInventory();
+      }
+    }
+    
+    // ==========================================================================
+    // DASHBOARD
+    // ==========================================================================
+    
+    function loadDashboard() {
+      // Load dashboard stats
+      google.script.run
+        .withSuccessHandler(function(result) {
+          if (result.success) {
+            document.getElementById('fccr').textContent = result.fccr || '-';
+            document.getElementById('revenue').textContent = formatCurrency(result.revenue || 0);
+            document.getElementById('inventory').textContent = formatCurrency(result.inventory || 0);
+            document.getElementById('activeBatches').textContent = result.activeBatches || '0';
+            document.getElementById('b2bRevenue').textContent = formatCurrency(result.b2bRevenue || 0);
+            document.getElementById('taproomRevenue').textContent = formatCurrency(result.taproomRevenue || 0);
+          }
+        })
+        .getDashboardStats();
+    }
+    
+    // ==========================================================================
+    // PRODUCTION CALENDAR
+    // ==========================================================================
+    
+    function loadProductionCalendar() {
+      var year = currentCalendarDate.getFullYear();
+      var month = currentCalendarDate.getMonth();
+      
+      document.getElementById('calendarMonthYear').textContent = 
+        getMonthName(month) + ' ' + year;
+      
+      google.script.run
+        .withSuccessHandler(function(result) {
+          if (result.success) {
+            renderCalendar(result.batches, year, month);
+          }
+        })
+        .getProductionCalendar(year, month + 1);
+    }
+    
+    function renderCalendar(batches, year, month) {
+      var container = document.getElementById('calendarContainer');
+      var firstDay = new Date(year, month, 1).getDay();
+      var daysInMonth = new Date(year, month + 1, 0).getDate();
+      var today = new Date();
+      
+      var html = '<div class="calendar-grid">';
+      
+      // Day headers
+      ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].forEach(function(day) {
+        html += '<div style="text-align: center; font-weight: bold; color: #666;">' + day + '</div>';
+      });
+      
+      // Empty cells for days before month starts
+      for (var i = 0; i < firstDay; i++) {
+        html += '<div class="calendar-day" style="opacity: 0.3;"></div>';
+      }
+      
+      // Days of month
+      for (var day = 1; day <= daysInMonth; day++) {
+        var dateStr = year + '-' + String(month + 1).padStart(2, '0') + '-' + String(day).padStart(2, '0');
+        var isToday = (today.getDate() === day && today.getMonth() === month && today.getFullYear() === year);
+        var dayBatches = batches.filter(function(b) { return b.date === dateStr; });
+        
+        var classes = 'calendar-day';
+        if (isToday) classes += ' today';
+        if (dayBatches.length > 0) classes += ' has-batch';
+        
+        html += '<div class="' + classes + '">';
+        html += '<div class="calendar-date">' + day + '</div>';
+        
+        dayBatches.forEach(function(batch) {
+          html += '<div class="calendar-batch">' + batch.beerName + '</div>';
+        });
+        
+        html += '</div>';
+      }
+      
+      html += '</div>';
+      container.innerHTML = html;
+    }
+    
+    function changeCalendarMonth(delta) {
+      currentCalendarDate.setMonth(currentCalendarDate.getMonth() + delta);
+      loadProductionCalendar();
+    }
+    
+    function showScheduleBatchModal() {
+      // Switch to batches tab for now
+      switchTab('batches');
+    }
+    
+    // ==========================================================================
+    // RECIPES
+    // ==========================================================================
+    
+    function loadRecipes() {
+      document.getElementById('recipesList').innerHTML = '<div class="loading">Loading recipes...</div>';
+      
+      google.script.run
+        .withSuccessHandler(function(result) {
+          if (result.success) {
+            renderRecipes(result.recipes);
+          } else {
+            document.getElementById('recipesList').innerHTML = 
+              '<p style="text-align: center; color: #666;">No recipes found. Add your first recipe!</p>';
+          }
+        })
+        .getRecipes();
+    }
+    
+    function renderRecipes(recipes) {
+      var html = '';
+      
+      recipes.forEach(function(recipe) {
+        html += '<div class="recipe-card">';
+        html += '<div class="recipe-header">';
+        html += '<div class="recipe-name">' + recipe.beerName + '</div>';
+        html += '<button class="btn btn-small btn-primary" onclick="viewRecipe(\'' + recipe.beerName + '\')">View Details</button>';
+        html += '</div>';
+        html += '<div class="recipe-details">';
+        html += '<strong>Batch Size:</strong> ' + recipe.batchSize + ' BBL | ';
+        html += '<strong>ABV:</strong> ' + recipe.abv + '% | ';
+        html += '<strong>IBU:</strong> ' + recipe.ibu;
+        html += '</div>';
+        html += '</div>';
+      });
+      
+      document.getElementById('recipesList').innerHTML = html;
+    }
+    
+    function viewRecipe(beerName) {
+      // This would open a detailed view
+      alert('Viewing recipe: ' + beerName);
+    }
+    
+    function showAddRecipeModal() {
+      var modal = document.createElement('div');
+      modal.id = 'recipeModal';
+      modal.style.cssText = 'position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 2000; display: flex; align-items: center; justify-content: center; padding: 20px;';
+      
+      modal.innerHTML = `
+        <div style="background: white; border-radius: 12px; padding: 30px; max-width: 600px; width: 100%; max-height: 90vh; overflow-y: auto;">
+          <h2 style="color: #1F4E78; margin-bottom: 20px;">📝 Add New Recipe</h2>
+          
+          <form id="addRecipeForm">
+            <div class="form-group">
+              <label class="form-label">Beer Name *</label>
+              <input type="text" class="form-input" id="recipeBeerName" required>
+            </div>
+            
+            <div class="form-row">
+              <div class="form-group">
+                <label class="form-label">Batch Size (BBL) *</label>
+                <input type="number" step="0.1" class="form-input" id="recipeBatchSize" required>
+              </div>
+              <div class="form-group">
+                <label class="form-label">ABV (%) *</label>
+                <input type="number" step="0.1" class="form-input" id="recipeABV" required>
+              </div>
+              <div class="form-group">
+                <label class="form-label">IBU *</label>
+                <input type="number" class="form-input" id="recipeIBU" required>
+              </div>
+            </div>
+            
+            <div class="form-group">
+              <label class="form-label">Ingredients</label>
+              <textarea class="form-textarea" id="recipeIngredients" placeholder="List ingredients and amounts..."></textarea>
+            </div>
+            
+            <div class="form-group">
+              <label class="form-label">Process</label>
+              <textarea class="form-textarea" id="recipeProcess" placeholder="Brewing process steps..."></textarea>
+            </div>
+            
+            <div class="form-group">
+              <label class="form-label">Notes</label>
+              <textarea class="form-textarea" id="recipeNotes" placeholder="Any additional notes..."></textarea>
+            </div>
+            
+            <div style="display: flex; gap: 10px; margin-top: 20px;">
+              <button type="submit" class="btn btn-success" style="flex: 1;">💾 Save Recipe</button>
+              <button type="button" class="btn btn-secondary" onclick="closeRecipeModal()" style="flex: 1;">Cancel</button>
+            </div>
+          </form>
+        </div>
+      `;
+      
+      document.body.appendChild(modal);
+      
+      document.getElementById('addRecipeForm').addEventListener('submit', function(e) {
+        e.preventDefault();
+        saveNewRecipe();
+      });
+    }
+    
+    function closeRecipeModal() {
+      var modal = document.getElementById('recipeModal');
+      if (modal) {
+        modal.remove();
+      }
+    }
+    
+    function saveNewRecipe() {
+      var recipeData = {
+        beerName: document.getElementById('recipeBeerName').value,
+        batchSize: parseFloat(document.getElementById('recipeBatchSize').value),
+        abv: parseFloat(document.getElementById('recipeABV').value),
+        ibu: parseInt(document.getElementById('recipeIBU').value),
+        ingredients: document.getElementById('recipeIngredients').value,
+        process: document.getElementById('recipeProcess').value,
+        notes: document.getElementById('recipeNotes').value
+      };
+      
+      google.script.run
+        .withSuccessHandler(function(result) {
+          if (result.success) {
+            alert('✅ Recipe saved successfully!\n\n' + recipeData.beerName + ' has been added to the recipe library.');
+            closeRecipeModal();
+            loadRecipes(); // Refresh the recipe list
+          } else {
+            alert('❌ Error saving recipe: ' + result.message);
+          }
+        })
+        .withFailureHandler(function(error) {
+          alert('❌ Error: ' + error);
+        })
+        .saveRecipe(recipeData);
+    }
+    
+    // ==========================================================================
+    // DEMAND PLANNING
+    // ==========================================================================
+    
+    function loadDemandPlanning() {
+      document.getElementById('demandList').innerHTML = '<div class="loading">Calculating demand forecast...</div>';
+      
+      google.script.run
+        .withSuccessHandler(function(result) {
+          if (result.success) {
+            renderDemandPlanning(result.items);
+          }
+        })
+        .getDemandForecast();
+    }
+    
+    function renderDemandPlanning(items) {
+      var html = '';
+      
+      items.forEach(function(item) {
+        var statusClass = item.status.toLowerCase();
+        
+        html += '<div class="demand-item ' + statusClass + '">';
+        html += '<div class="demand-header">';
+        html += '<div class="demand-beer">' + item.beerName + '</div>';
+        html += '<div class="demand-status ' + statusClass + '">' + item.status + '</div>';
+        html += '</div>';
+        html += '<div class="demand-info">';
+        html += '<strong>Current Inventory:</strong> ' + item.currentInventory + ' units<br>';
+        html += '<strong>Daily Sales Rate:</strong> ' + item.dailySalesRate + ' units/day<br>';
+        html += '<strong>Days Until Out:</strong> ' + item.daysUntilOut + ' days<br>';
+        html += '<strong>Recommendation:</strong> ' + item.recommendation;
+        html += '</div>';
+        
+        if (item.status === 'URGENT') {
+          html += '<button class="btn btn-danger btn-small" onclick="scheduleBrew(\'' + item.beerName + '\')" style="margin-top: 10px;">📅 Schedule Brew Now</button>';
+        }
+        
+        html += '</div>';
+      });
+      
+      document.getElementById('demandList').innerHTML = html;
+    }
+    
+    function scheduleBrew(beerName) {
+      // Pre-fill batch form and switch to batches tab
+      document.getElementById('batchBeerType').value = beerName;
+      switchTab('batches');
+    }
+    
+    // ==========================================================================
+    // EQUIPMENT
+    // ==========================================================================
+    
+    function loadEquipmentSchedule() {
+      document.getElementById('equipmentList').innerHTML = '<div class="loading">Loading equipment...</div>';
+      
+      google.script.run
+        .withSuccessHandler(function(result) {
+          if (result.success) {
+            renderEquipment(result.equipment);
+          }
+        })
+        .getEquipmentSchedule();
+    }
+    
+    function renderEquipment(equipment) {
+      var html = '';
+      
+      equipment.forEach(function(item) {
+        var statusClass = item.status.toLowerCase().replace(' ', '-');
+        
+        html += '<div class="equipment-item ' + statusClass + '">';
+        html += '<div class="equipment-name">' + item.name + '</div>';
+        html += '<div class="equipment-status ' + statusClass + '">' + item.status + '</div>';
+        html += '<div class="equipment-info">';
+        html += '<strong>Capacity:</strong> ' + item.capacity + ' BBL<br>';
+        
+        if (item.status === 'In Use') {
+          html += '<strong>Current Beer:</strong> ' + item.currentBeer + '<br>';
+          html += '<strong>Brew Date:</strong> ' + item.brewDate + '<br>';
+          html += '<strong>Ready:</strong> ' + item.readyDate;
+        } else if (item.status === 'Cleaning') {
+          html += '<strong>Started:</strong> ' + item.cleaningStarted + '<br>';
+          html += '<strong>Available:</strong> ' + item.availableDate;
+        } else {
+          html += '<strong>Available Now</strong> - Ready for use';
+        }
+        
+        html += '</div>';
+        html += '</div>';
+      });
+      
+      document.getElementById('equipmentList').innerHTML = html;
+    }
+    
+    // ==========================================================================
+    // BATCH FORM (Existing - with allocation)
+    // ==========================================================================
+    
+    function updateAllocationTotal() {
+      var expectedYield = parseFloat(document.getElementById('batchYield').value) || 0;
+      var b2bQty = parseFloat(document.getElementById('b2bQty').value) || 0;
+      var taproomQty = parseFloat(document.getElementById('taproomQty').value) || 0;
+      var total = b2bQty + taproomQty;
+      
+      document.getElementById('totalYield').value = expectedYield;
+      
+      var statusDiv = document.getElementById('allocationStatus');
+      var statusText = document.getElementById('allocationText');
+      
+      if (total === 0) {
+        statusDiv.className = 'allocation-total';
+        statusText.textContent = 'Not allocated';
+      } else if (total === expectedYield) {
+        statusDiv.className = 'allocation-total success';
+        statusText.textContent = '✓ Perfect! B2B: ' + b2bQty + ' + Taproom: ' + taproomQty + ' = ' + total;
+      } else if (total < expectedYield) {
+        statusDiv.className = 'allocation-total error';
+        statusText.textContent = '⚠️ Under-allocated: ' + (expectedYield - total) + ' units remaining';
+      } else {
+        statusDiv.className = 'allocation-total error';
+        statusText.textContent = '❌ Over-allocated: ' + (total - expectedYield) + ' units over limit';
+      }
+    }
+    
+    document.addEventListener('DOMContentLoaded', function() {
+      var yieldInput = document.getElementById('batchYield');
+      if (yieldInput) {
+        yieldInput.addEventListener('input', updateAllocationTotal);
+      }
+    });
+    
+    document.getElementById('batchForm').addEventListener('submit', function(e) {
+      e.preventDefault();
+      
+      var expectedYield = parseFloat(document.getElementById('batchYield').value);
+      var b2bQty = parseFloat(document.getElementById('b2bQty').value) || 0;
+      var taproomQty = parseFloat(document.getElementById('taproomQty').value) || 0;
+      
+      if (b2bQty + taproomQty !== expectedYield) {
+        alert('❌ Allocation mismatch! Please allocate all ' + expectedYield + ' units.');
+        return;
+      }
+      
+      var batchData = {
+        beerType: document.getElementById('batchBeerType').value,
+        batchSize: parseFloat(document.getElementById('batchSize').value),
+        productType: document.getElementById('batchProductType').value,
+        expectedYield: expectedYield,
+        costPerUnit: parseFloat(document.getElementById('batchCost').value),
+        packageDate: document.getElementById('batchPackageDate').value,
+        b2bQty: b2bQty,
+        taproomQty: taproomQty
+      };
+      
+      google.script.run
+        .withSuccessHandler(function(result) {
+          if (result.success) {
+            alert('✅ Batch created and allocated!\n\nB2B: ' + b2bQty + ' units\nTaproom: ' + taproomQty + ' units');
+            document.getElementById('batchForm').reset();
+            document.getElementById('allocationStatus').className = 'allocation-total';
+            document.getElementById('allocationText').textContent = 'Not allocated';
+            loadDashboard();
+          } else {
+            alert('❌ Error: ' + result.message);
+          }
+        })
+        .withFailureHandler(function(error) {
+          alert('❌ Error: ' + error);
+        })
+        .createBatchWithAllocation(batchData);
+    });
+    
+    // ==========================================================================
+    // TAPROOM SALES (Existing)
+    // ==========================================================================
+    
+    function loadProductPrices() {
+      google.script.run
+        .withSuccessHandler(function(result) {
+          if (result.success) {
+            result.products.forEach(function(product) {
+              var key = product.beerName + '|' + product.productType;
+              productPrices[key] = product.price;
+            });
+          }
+        })
+        .getProductsByChannel('Taproom');
+    }
+    
+    function addSalesEntry() {
+      salesEntryCount++;
+      var container = document.getElementById('salesEntriesContainer');
+      
+      var row = document.createElement('div');
+      row.className = 'sales-entry-row';
+      row.id = 'salesEntry' + salesEntryCount;
+      
+      row.innerHTML = `
+        <div class="sales-entry-grid">
+          <div class="form-group">
+            <label class="form-label">Beer</label>
+            <input type="text" class="form-input" id="beer${salesEntryCount}" placeholder="e.g., Prospector's Pick Lager">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Pints</label>
+            <input type="number" class="form-input" id="pints${salesEntryCount}" min="0" value="0" oninput="calculateSalesTotal()">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Half Pints</label>
+            <input type="number" class="form-input" id="halfPints${salesEntryCount}" min="0" value="0" oninput="calculateSalesTotal()">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Flights</label>
+            <input type="number" class="form-input" id="flights${salesEntryCount}" min="0" value="0" oninput="calculateSalesTotal()">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Crowlers</label>
+            <input type="number" class="form-input" id="crowlers${salesEntryCount}" min="0" value="0" oninput="calculateSalesTotal()">
+          </div>
+          <div class="form-group">
+            <label class="form-label">&nbsp;</label>
+            <button class="remove-btn" onclick="removeSalesEntry(${salesEntryCount})" type="button">✕</button>
+          </div>
+        </div>
+      `;
+      
+      container.appendChild(row);
+    }
+    
+    function removeSalesEntry(id) {
+      var row = document.getElementById('salesEntry' + id);
+      if (row) {
+        row.remove();
+        calculateSalesTotal();
+      }
+    }
+    
+    function calculateSalesTotal() {
+      var totalRevenue = 0;
+      var totalPints = 0;
+      
+      var pintPrice = 7;
+      var halfPintPrice = 4;
+      var flightPrice = 2;
+      var crowlerPrice = 12;
+      
+      document.querySelectorAll('.sales-entry-row').forEach(function(row) {
+        var id = row.id.replace('salesEntry', '');
+        
+        var pints = parseFloat(document.getElementById('pints' + id)?.value) || 0;
+        var halfPints = parseFloat(document.getElementById('halfPints' + id)?.value) || 0;
+        var flights = parseFloat(document.getElementById('flights' + id)?.value) || 0;
+        var crowlers = parseFloat(document.getElementById('crowlers' + id)?.value) || 0;
+        
+        totalRevenue += (pints * pintPrice) + (halfPints * halfPintPrice) + (flights * flightPrice) + (crowlers * crowlerPrice);
+        totalPints += pints + (halfPints * 0.5) + (flights * 0.25) + (crowlers * 2);
+      });
+      
+      document.getElementById('totalRevenue').textContent = '$' + totalRevenue.toFixed(2);
+      document.getElementById('totalPints').textContent = totalPints.toFixed(1);
+    }
+    
+    function submitTaproomSales() {
+      var entries = [];
+      var hasData = false;
+      
+      document.querySelectorAll('.sales-entry-row').forEach(function(row) {
+        var id = row.id.replace('salesEntry', '');
+        var beer = document.getElementById('beer' + id)?.value;
+        
+        if (beer) {
+          var pints = parseFloat(document.getElementById('pints' + id)?.value) || 0;
+          var halfPints = parseFloat(document.getElementById('halfPints' + id)?.value) || 0;
+          var flights = parseFloat(document.getElementById('flights' + id)?.value) || 0;
+          var crowlers = parseFloat(document.getElementById('crowlers' + id)?.value) || 0;
+          
+          if (pints > 0) {
+            entries.push({beerType: beer, productType: 'Pint', quantity: pints});
+            hasData = true;
+          }
+          if (halfPints > 0) {
+            entries.push({beerType: beer, productType: 'Half Pint', quantity: halfPints});
+            hasData = true;
+          }
+          if (flights > 0) {
+            entries.push({beerType: beer, productType: 'Flight', quantity: flights});
+            hasData = true;
+          }
+          if (crowlers > 0) {
+            entries.push({beerType: beer, productType: 'Crowler', quantity: crowlers});
+            hasData = true;
+          }
+        }
+      });
+      
+      if (!hasData) {
+        alert('Please enter at least one sale!');
+        return;
+      }
+      
+      var salesData = {
+        date: document.getElementById('salesDate').value,
+        entries: entries,
+        enteredBy: 'Manager',
+        notes: document.getElementById('salesNotes').value
+      };
+      
+      google.script.run
+        .withSuccessHandler(function(result) {
+          if (result.success) {
+            alert('✅ Sales logged successfully!\n\n' +
+                  'Revenue: $' + result.totalRevenue.toFixed(2) + '\n' +
+                  'COGS: $' + result.totalCogs.toFixed(2) + '\n' +
+                  'Margin: $' + result.totalMargin.toFixed(2) + ' (' + result.marginPercent + '%)');
+            
+            document.getElementById('salesEntriesContainer').innerHTML = '';
+            salesEntryCount = 0;
+            addSalesEntry();
+            document.getElementById('salesNotes').value = '';
+            calculateSalesTotal();
+            loadDashboard();
+          } else {
+            alert('❌ Error: ' + result.message);
+          }
+        })
+        .withFailureHandler(function(error) {
+          alert('❌ Error: ' + error);
+        })
+        .logTaproomSales(salesData);
+    }
+    
+    // ==========================================================================
+    // INVENTORY (Existing)
+    // ==========================================================================
+    
+    function loadInventory() {
+      document.getElementById('inventoryList').innerHTML = '<div class="loading">Loading inventory...</div>';
+      
+      google.script.run
+        .withSuccessHandler(function(result) {
+          if (result.success) {
+            document.getElementById('b2bInventory').textContent = result.b2bTotal;
+            document.getElementById('taproomInventory').textContent = result.taproomTotal;
+            renderInventoryTable(result.items);
+          }
+        })
+        .getInventorySummary();
+    }
+    
+    function renderInventoryTable(items) {
+      var html = '<table class="data-table">';
+      html += '<tr><th>Beer</th><th>Product</th><th>B2B Available</th><th>Taproom Available</th></tr>';
+      
+      items.forEach(function(item) {
+        html += '<tr>';
+        html += '<td>' + item.beerType + '</td>';
+        html += '<td>' + item.productType + '</td>';
+        html += '<td>' + item.b2bAvailable + '</td>';
+        html += '<td>' + item.taproomAvailable + '</td>';
+        html += '</tr>';
+      });
+      
+      html += '</table>';
+      document.getElementById('inventoryList').innerHTML = html;
+    }
+    
+    // ==========================================================================
+    // REPORTS (Existing)
+    // ==========================================================================
+    
+    function loadChannelReport() {
+      var startDate = document.getElementById('reportStartDate').value;
+      var endDate = document.getElementById('reportEndDate').value;
+      
+      if (!startDate || !endDate) {
+        alert('Please select both start and end dates');
+        return;
+      }
+      
+      document.getElementById('channelReportContainer').innerHTML = '<div class="loading">Generating report...</div>';
+      
+      google.script.run
+        .withSuccessHandler(function(result) {
+          if (result.success) {
+            renderChannelReport(result);
+          }
+        })
+        .getChannelComparisonReport(startDate, endDate);
+    }
+    
+    function renderChannelReport(data) {
+      var html = '<div class="stats-grid">';
+      html += '<div class="stat-card">';
+      html += '<div class="stat-value">' + formatCurrency(data.b2b.revenue) + '</div>';
+      html += '<div class="stat-label"><span class="channel-badge b2b">B2B</span> Revenue</div>';
+      html += '<div style="margin-top: 10px; font-size: 14px; color: #666;">';
+      html += 'Margin: ' + formatCurrency(data.b2b.margin) + ' (' + ((data.b2b.margin / data.b2b.revenue) * 100).toFixed(0) + '%)';
+      html += '</div>';
+      html += '</div>';
+      
+      html += '<div class="stat-card green">';
+      html += '<div class="stat-value">' + formatCurrency(data.taproom.totalRevenue) + '</div>';
+      html += '<div class="stat-label"><span class="channel-badge taproom">Taproom</span> Revenue</div>';
+      html += '<div style="margin-top: 10px; font-size: 14px; color: #27ae60;">';
+      html += 'Margin: ' + formatCurrency(data.taproom.totalMargin) + ' (' + data.taproom.marginPercent + '%)';
+      html += '</div>';
+      html += '</div>';
+      html += '</div>';
+      
+      var marginRatio = (data.taproom.totalMargin / data.b2b.margin).toFixed(1);
+      html += '<div class="alert alert-success" style="margin-top: 20px;">';
+      html += '🎉 <strong>Taproom is ' + marginRatio + 'X more profitable!</strong> ';
+      html += 'Taproom margin is ' + formatCurrency(data.taproom.totalMargin) + ' vs B2B margin of ' + formatCurrency(data.b2b.margin) + '.';
+      html += '</div>';
+      
+      document.getElementById('channelReportContainer').innerHTML = html;
+    }
+    
+    // ==========================================================================
+    // UTILITY FUNCTIONS
+    // ==========================================================================
+    
+    function formatCurrency(value) {
+      if (value >= 1000000) {
+        return '$' + (value / 1000000).toFixed(1) + 'M';
+      } else if (value >= 1000) {
+        return '$' + (value / 1000).toFixed(0) + 'K';
+      } else {
+        return '$' + value.toFixed(0);
+      }
+    }
+    
+    function getMonthName(month) {
+      var months = ['January', 'February', 'March', 'April', 'May', 'June',
+                    'July', 'August', 'September', 'October', 'November', 'December'];
+      return months[month];
+    }
+  </script>
+</body>
+</html>

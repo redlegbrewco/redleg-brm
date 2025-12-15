@@ -1,0 +1,1773 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      background: linear-gradient(135deg, #1F4E78 0%, #2C5F8D 100%);
+      padding-bottom: 80px;
+      min-height: 100vh;
+    }
+    
+    .header {
+      background: white;
+      padding: 20px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+      margin-bottom: 20px;
+    }
+    
+    .header-content {
+      max-width: 1200px;
+      margin: 0 auto;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 15px;
+    }
+    
+    .logo-icon {
+      font-size: 36px;
+    }
+    
+    .logo-text h1 {
+      color: #1F4E78;
+      font-size: 24px;
+      margin-bottom: 5px;
+    }
+    
+    .logo-text p {
+      color: #666;
+      font-size: 13px;
+    }
+    
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 0 20px;
+    }
+    
+    .card {
+      background: white;
+      border-radius: 12px;
+      padding: 25px;
+      margin-bottom: 20px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    }
+    
+    .hidden {
+      display: none !important;
+    }
+    
+    h2 {
+      color: #1F4E78;
+      margin-bottom: 20px;
+      font-size: 22px;
+    }
+    
+    h3 {
+      color: #1F4E78;
+      margin: 20px 0 15px 0;
+      font-size: 18px;
+    }
+    
+    /* Stats Grid */
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 15px;
+      margin-bottom: 30px;
+    }
+    
+    .stat-card {
+      background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+      padding: 20px;
+      border-radius: 10px;
+      border-left: 4px solid #1F4E78;
+    }
+    
+    .stat-label {
+      font-size: 12px;
+      color: #666;
+      font-weight: 600;
+      margin-bottom: 8px;
+      text-transform: uppercase;
+    }
+    
+    .stat-value {
+      font-size: 28px;
+      font-weight: bold;
+      color: #1F4E78;
+    }
+    
+    .stat-card.good {
+      border-left-color: #27ae60;
+    }
+    
+    .stat-card.good .stat-value {
+      color: #27ae60;
+    }
+    
+    .stat-card.warning {
+      border-left-color: #f39c12;
+    }
+    
+    .stat-card.warning .stat-value {
+      color: #f39c12;
+    }
+    
+    .stat-card.critical {
+      border-left-color: #e74c3c;
+    }
+    
+    .stat-card.critical .stat-value {
+      color: #e74c3c;
+    }
+    
+    /* Forms */
+    .form-group {
+      margin-bottom: 20px;
+    }
+    
+    .form-label {
+      display: block;
+      font-weight: 600;
+      color: #333;
+      margin-bottom: 8px;
+      font-size: 14px;
+    }
+    
+    .form-input {
+      width: 100%;
+      padding: 12px;
+      border: 2px solid #e0e0e0;
+      border-radius: 8px;
+      font-size: 16px;
+      transition: all 0.3s;
+    }
+    
+    .form-input:focus {
+      outline: none;
+      border-color: #1F4E78;
+    }
+    
+    .form-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 20px;
+    }
+    
+    @media (max-width: 768px) {
+      .form-row {
+        grid-template-columns: 1fr;
+      }
+    }
+    
+    /* Buttons */
+    .btn {
+      padding: 12px 24px;
+      border: none;
+      border-radius: 8px;
+      font-size: 16px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.3s;
+    }
+    
+    .btn-primary {
+      background: #1F4E78;
+      color: white;
+    }
+    
+    .btn-primary:hover {
+      background: #163a5e;
+      transform: translateY(-2px);
+      box-shadow: 0 4px 12px rgba(31,78,120,0.3);
+    }
+    
+    .btn-success {
+      background: #27ae60;
+      color: white;
+    }
+    
+    .btn-success:hover {
+      background: #229954;
+    }
+    
+    .btn-secondary {
+      background: #95a5a6;
+      color: white;
+    }
+    
+    .btn-secondary:hover {
+      background: #7f8c8d;
+    }
+    
+    /* Tables */
+    .table-container {
+      overflow-x: auto;
+      margin-top: 20px;
+    }
+    
+    table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+    
+    th {
+      background: #1F4E78;
+      color: white;
+      padding: 12px;
+      text-align: left;
+      font-weight: 600;
+      font-size: 14px;
+    }
+    
+    td {
+      padding: 12px;
+      border-bottom: 1px solid #e0e0e0;
+      font-size: 14px;
+    }
+    
+    tr:hover {
+      background: #f8f9fa;
+    }
+    
+    /* Alerts */
+    .alert {
+      padding: 15px 20px;
+      border-radius: 8px;
+      margin-bottom: 20px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    
+    .alert-success {
+      background: #d4edda;
+      color: #155724;
+      border-left: 4px solid #27ae60;
+    }
+    
+    .alert-warning {
+      background: #fff3cd;
+      color: #856404;
+      border-left: 4px solid #f39c12;
+    }
+    
+    .alert-danger {
+      background: #f8d7da;
+      color: #721c24;
+      border-left: 4px solid #e74c3c;
+    }
+    
+    /* FCCR Monitor */
+    .fccr-monitor {
+      background: linear-gradient(135deg, #1F4E78 0%, #2C5F8D 100%);
+      color: white;
+      padding: 30px;
+      border-radius: 12px;
+      margin-bottom: 30px;
+    }
+    
+    .fccr-display {
+      text-align: center;
+      margin-bottom: 20px;
+    }
+    
+    .fccr-value {
+      font-size: 64px;
+      font-weight: bold;
+      margin: 20px 0;
+    }
+    
+    .fccr-label {
+      font-size: 18px;
+      opacity: 0.9;
+      text-transform: uppercase;
+      letter-spacing: 2px;
+    }
+    
+    .fccr-status {
+      display: inline-block;
+      padding: 8px 20px;
+      border-radius: 20px;
+      font-size: 14px;
+      font-weight: 600;
+      margin-top: 10px;
+    }
+    
+    .fccr-good {
+      background: #27ae60;
+    }
+    
+    .fccr-warning {
+      background: #f39c12;
+    }
+    
+    .fccr-critical {
+      background: #e74c3c;
+    }
+    
+    /* Budget Progress */
+    .progress-bar {
+      background: #e0e0e0;
+      height: 30px;
+      border-radius: 15px;
+      overflow: hidden;
+      margin-top: 10px;
+    }
+    
+    .progress-fill {
+      height: 100%;
+      background: #27ae60;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: white;
+      font-weight: 600;
+      font-size: 14px;
+      transition: width 0.5s;
+    }
+    
+    .progress-fill.warning {
+      background: #f39c12;
+    }
+    
+    .progress-fill.danger {
+      background: #e74c3c;
+    }
+    
+    /* Loading */
+    .loading {
+      text-align: center;
+      padding: 40px;
+      color: #999;
+      font-size: 16px;
+    }
+    
+    /* Bottom Navigation */
+    .bottom-nav {
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      background: white;
+      display: flex;
+      justify-content: flex-start;
+      padding: 10px 0;
+      box-shadow: 0 -2px 10px rgba(0,0,0,0.1);
+      z-index: 1000;
+      overflow-x: auto;
+      overflow-y: hidden;
+      -webkit-overflow-scrolling: touch;
+    }
+    
+    .bottom-nav::-webkit-scrollbar {
+      height: 0px;
+      display: none;
+    }
+    
+    .nav-item {
+      flex: 0 0 80px;
+      min-width: 80px;
+      text-align: center;
+      padding: 8px;
+      cursor: pointer;
+      transition: all 0.3s;
+      color: #666;
+    }
+    
+    .nav-item:hover {
+      background: #f8f9fa;
+    }
+    
+    .nav-item.active {
+      color: #1F4E78;
+      background: #e3f2fd;
+    }
+    
+    .nav-icon {
+      font-size: 22px;
+      display: block;
+      margin-bottom: 4px;
+    }
+    
+    .nav-label {
+      font-size: 11px;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+    
+    /* Inventory Card */
+    .inventory-card {
+      background: #f8f9fa;
+      padding: 15px;
+      border-radius: 8px;
+      margin-bottom: 10px;
+      border-left: 4px solid #1F4E78;
+    }
+    
+    .inventory-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 10px;
+    }
+    
+    .inventory-product {
+      font-weight: 600;
+      font-size: 16px;
+      color: #1F4E78;
+    }
+    
+    .inventory-qty {
+      font-size: 20px;
+      font-weight: bold;
+      color: #27ae60;
+    }
+    
+    .inventory-details {
+      font-size: 14px;
+      color: #666;
+    }
+  </style>
+</head>
+<body>
+  
+  <!-- Header -->
+  <div class="header">
+    <div class="header-content">
+      <div class="logo">
+        <span class="logo-icon">🏭</span>
+        <div class="logo-text">
+          <h1>Red Leg BRM</h1>
+          <p>Brewery Resource Manager</p>
+        </div>
+      </div>
+    </div>
+  </div>
+  
+  <div class="container">
+    
+    <!-- Dashboard View -->
+    <div id="dashboardView">
+      <div class="card">
+        <div class="fccr-monitor">
+          <div class="fccr-display">
+            <div class="fccr-label">Current FCCR</div>
+            <div class="fccr-value" id="fccrValue">--</div>
+            <div>
+              <span class="fccr-status" id="fccrStatus">Loading...</span>
+            </div>
+            <div style="margin-top: 15px; font-size: 14px; opacity: 0.9;">
+              Target: <span id="fccrTarget">1.25</span>
+            </div>
+          </div>
+        </div>
+        
+        <h2>📊 Financial Performance</h2>
+        <div class="stats-grid" id="financialStats">
+          <div class="loading">Loading dashboard...</div>
+        </div>
+        
+        <h2>📦 Inventory Summary</h2>
+        <div class="stats-grid" id="inventoryStats">
+          <div class="loading">Loading inventory...</div>
+        </div>
+      </div>
+    </div>
+    
+    <!-- Financial Targets View -->
+    <div id="targetsView" class="hidden">
+      <div class="card">
+        <h2>🎯 Financial Targets</h2>
+        <p style="color: #666; margin-bottom: 30px;">Set your financial goals and the system will calculate required margins and budgets.</p>
+        
+        <form id="targetsForm">
+          <h3>Bank Covenant</h3>
+          <div class="form-group">
+            <label class="form-label">FCCR Requirement</label>
+            <input type="number" class="form-input" id="fccrReq" step="0.01" min="0">
+          </div>
+          
+          <h3>Revenue Targets</h3>
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label">Annual Revenue Target ($)</label>
+              <input type="number" class="form-input" id="revenueTarget" step="1000">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Annual Fixed Costs ($)</label>
+              <input type="number" class="form-input" id="fixedCosts" step="1000">
+            </div>
+          </div>
+          
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label">Taproom Revenue (%)</label>
+              <input type="number" class="form-input" id="taproomPercent" min="0" max="100">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Wholesale Revenue (%)</label>
+              <input type="number" class="form-input" id="wholesalePercent" min="0" max="100">
+            </div>
+          </div>
+          
+          <h3>Margin Targets</h3>
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label">Taproom Margin Target (%)</label>
+              <input type="number" class="form-input" id="taproomMargin" min="0" max="100">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Wholesale Margin Target (%)</label>
+              <input type="number" class="form-input" id="wholesaleMargin" min="0" max="100">
+            </div>
+          </div>
+          
+          <h3>Volume & Pricing</h3>
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label">Annual Keg Volume</label>
+              <input type="number" class="form-input" id="kegVolume" step="100">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Keg Price ($)</label>
+              <input type="number" class="form-input" id="kegPrice" step="1">
+            </div>
+          </div>
+          
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label">Annual Case Volume</label>
+              <input type="number" class="form-input" id="caseVolume" step="100">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Case Price ($)</label>
+              <input type="number" class="form-input" id="casePrice" step="1">
+            </div>
+          </div>
+          
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label">Annual Bottle Volume</label>
+              <input type="number" class="form-input" id="bottleVolume" step="100">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Bottle Price ($)</label>
+              <input type="number" class="form-input" id="bottlePrice" step="1">
+            </div>
+          </div>
+          
+          <div style="margin-top: 30px;">
+            <button type="button" class="btn btn-primary" onclick="saveTargets()">💾 Save Targets & Calculate Budgets</button>
+          </div>
+        </form>
+      </div>
+    </div>
+    
+    <!-- Batch Log View -->
+    <div id="batchView" class="hidden">
+      <div class="card">
+        <h2>🍺 Batch Log</h2>
+        <button class="btn btn-success" onclick="showNewBatchForm()" style="margin-bottom: 20px;">➕ New Batch</button>
+        
+        <div id="newBatchForm" class="hidden" style="background: #f8f9fa; padding: 20px; border-radius: 8px; margin-bottom: 20px;">
+          <h3>Create New Batch</h3>
+          <form id="batchForm">
+            <div class="form-row">
+              <div class="form-group">
+                <label class="form-label">Beer Type</label>
+                <input type="text" class="form-input" id="beerType" placeholder="e.g., Lager">
+              </div>
+              <div class="form-group">
+                <label class="form-label">Batch Size (BBL)</label>
+                <input type="number" class="form-input" id="batchSize" step="0.1">
+              </div>
+            </div>
+            
+            <div class="form-row">
+              <div class="form-group">
+                <label class="form-label">Product Type</label>
+                <select class="form-input" id="productType">
+                  <option value="Keg">Keg</option>
+                  <option value="Case">Case</option>
+                  <option value="Bottle">Bottle</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label class="form-label">Expected Yield (units)</label>
+                <input type="number" class="form-input" id="expectedYield">
+              </div>
+            </div>
+            
+            <div class="form-row">
+              <div class="form-group">
+                <label class="form-label">Raw Materials Cost ($)</label>
+                <input type="number" class="form-input" id="rawCost" step="0.01">
+              </div>
+              <div class="form-group">
+                <label class="form-label">Labor Cost ($)</label>
+                <input type="number" class="form-input" id="laborCost" step="0.01">
+              </div>
+            </div>
+            
+            <div class="form-row">
+              <div class="form-group">
+                <label class="form-label">Overhead Cost ($)</label>
+                <input type="number" class="form-input" id="overheadCost" step="0.01">
+              </div>
+              <div class="form-group">
+                <label class="form-label">Budget Allocated ($)</label>
+                <input type="number" class="form-input" id="budget" step="0.01">
+              </div>
+            </div>
+            
+            <div class="form-row">
+              <div class="form-group">
+                <label class="form-label">Brew Date</label>
+                <input type="date" class="form-input" id="brewDate">
+              </div>
+              <div class="form-group">
+                <label class="form-label">Expected Package Date</label>
+                <input type="date" class="form-input" id="packageDate">
+              </div>
+            </div>
+            
+            <div class="form-group">
+              <label class="form-label">Notes</label>
+              <input type="text" class="form-input" id="batchNotes" placeholder="Optional notes">
+            </div>
+            
+            <div style="display: flex; gap: 10px;">
+              <button type="button" class="btn btn-success" onclick="createBatch()">✓ Create Batch</button>
+              <button type="button" class="btn btn-secondary" onclick="hideNewBatchForm()">Cancel</button>
+            </div>
+          </form>
+        </div>
+        
+        <div id="batchList">
+          <div class="loading">Loading batches...</div>
+        </div>
+      </div>
+    </div>
+    
+    <!-- Finished Goods View -->
+    <div id="inventoryView" class="hidden">
+      <div class="card">
+        <h2>📦 Finished Goods Inventory</h2>
+        <div id="inventoryList">
+          <div class="loading">Loading inventory...</div>
+        </div>
+      </div>
+    </div>
+    
+    <!-- Product Budgets View -->
+    <div id="budgetsView" class="hidden">
+      <div class="card">
+        <h2>💰 Product Budgets</h2>
+        <p style="color: #666; margin-bottom: 20px;">Target costs and margins calculated from financial goals (backward budgeting).</p>
+        <div id="budgetsList">
+          <div class="loading">Loading budgets...</div>
+        </div>
+      </div>
+    </div>
+    
+    <!-- Production Calendar View (NEW - Phase 6B) -->
+    <div id="calendarView" class="hidden">
+      <div class="card">
+        <h2>📅 Production Calendar</h2>
+        <button class="btn btn-success" onclick="showScheduleBatchForm()" style="margin-bottom: 20px;">➕ Schedule Batch</button>
+        
+        <div id="scheduleBatchForm" class="hidden" style="background: #f8f9fa; padding: 20px; border-radius: 8px; margin-bottom: 20px;">
+          <h3>Schedule Production Batch</h3>
+          <form id="scheduleForm">
+            <div class="form-row">
+              <div class="form-group">
+                <label class="form-label">Beer Type</label>
+                <input type="text" class="form-input" id="schedBeerType">
+              </div>
+              <div class="form-group">
+                <label class="form-label">Brew Date</label>
+                <input type="date" class="form-input" id="schedBrewDate">
+              </div>
+            </div>
+            <div class="form-row">
+              <div class="form-group">
+                <label class="form-label">Package Date</label>
+                <input type="date" class="form-input" id="schedPackageDate">
+              </div>
+              <div class="form-group">
+                <label class="form-label">Tank</label>
+                <select class="form-input" id="schedTank">
+                  <option value="Fermenter #1">Fermenter #1</option>
+                  <option value="Fermenter #2">Fermenter #2</option>
+                  <option value="Fermenter #3">Fermenter #3</option>
+                </select>
+              </div>
+            </div>
+            <div class="form-row">
+              <div class="form-group">
+                <label class="form-label">Batch Size (BBL)</label>
+                <input type="number" class="form-input" id="schedBatchSize" value="20">
+              </div>
+              <div class="form-group">
+                <label class="form-label">Expected Yield</label>
+                <input type="number" class="form-input" id="schedYield" value="40">
+              </div>
+            </div>
+            <div style="display: flex; gap: 10px;">
+              <button type="button" class="btn btn-success" onclick="scheduleBatch()">✓ Schedule</button>
+              <button type="button" class="btn btn-secondary" onclick="hideScheduleBatchForm()">Cancel</button>
+            </div>
+          </form>
+        </div>
+        
+        <div id="calendarList">
+          <div class="loading">Loading production calendar...</div>
+        </div>
+      </div>
+    </div>
+    
+    <!-- Recipes View (NEW - Phase 6B) -->
+    <div id="recipesView" class="hidden">
+      <div class="card">
+        <h2>📖 Recipes</h2>
+        <button class="btn btn-success" onclick="showNewRecipeForm()" style="margin-bottom: 20px;">➕ New Recipe</button>
+        
+        <div id="newRecipeForm" class="hidden" style="background: #f8f9fa; padding: 20px; border-radius: 8px; margin-bottom: 20px;">
+          <h3>Create Recipe</h3>
+          <form id="recipeForm">
+            <div class="form-row">
+              <div class="form-group">
+                <label class="form-label">Recipe Name</label>
+                <input type="text" class="form-input" id="recipeName" placeholder="e.g., Prospector's Pick Lager">
+              </div>
+              <div class="form-group">
+                <label class="form-label">Beer Type</label>
+                <input type="text" class="form-input" id="recipeBeerType" placeholder="e.g., Lager">
+              </div>
+            </div>
+            <div class="form-row">
+              <div class="form-group">
+                <label class="form-label">Batch Size (BBL)</label>
+                <input type="number" class="form-input" id="recipeBatchSize" value="20">
+              </div>
+              <div class="form-group">
+                <label class="form-label">Expected Yield</label>
+                <input type="number" class="form-input" id="recipeYield" value="40">
+              </div>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Ingredients</label>
+              <input type="text" class="form-input" id="recipeIngredients" placeholder="800 lbs Pale Malt, 15 lbs Cascade Hops...">
+            </div>
+            <div class="form-row">
+              <div class="form-group">
+                <label class="form-label">Estimated Cost ($)</label>
+                <input type="number" class="form-input" id="recipeCost" step="0.01">
+              </div>
+              <div class="form-group">
+                <label class="form-label">Fermentation Days</label>
+                <input type="number" class="form-input" id="recipeFermentDays" value="14">
+              </div>
+            </div>
+            <div style="display: flex; gap: 10px;">
+              <button type="button" class="btn btn-success" onclick="saveRecipe()">✓ Save Recipe</button>
+              <button type="button" class="btn btn-secondary" onclick="hideNewRecipeForm()">Cancel</button>
+            </div>
+          </form>
+        </div>
+        
+        <div id="recipesList">
+          <div class="loading">Loading recipes...</div>
+        </div>
+      </div>
+    </div>
+    
+    <!-- Demand Planning View (NEW - Phase 6B) -->
+    <div id="demandView" class="hidden">
+      <div class="card">
+        <h2>🎯 Demand Planning</h2>
+        <p style="color: #666; margin-bottom: 20px;">Sales forecasts and brew recommendations based on inventory levels.</p>
+        
+        <div style="margin-bottom: 30px;">
+          <h3>🚨 What to Brew Next</h3>
+          <button class="btn btn-primary" onclick="loadBrewRecommendations()" style="margin-bottom: 15px;">🔄 Refresh Recommendations</button>
+          <div id="brewRecommendations">
+            <div class="loading">Loading recommendations...</div>
+          </div>
+        </div>
+        
+        <div>
+          <h3>📊 Sales Forecast</h3>
+          <button class="btn btn-secondary" onclick="updateForecast()" style="margin-bottom: 15px;">🔄 Update with Actual Sales</button>
+          <div id="forecastList">
+            <div class="loading">Loading forecast...</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    
+    <!-- Equipment Schedule View (NEW - Phase 6B) -->
+    <div id="equipmentView" class="hidden">
+      <div class="card">
+        <h2>🔧 Equipment Schedule</h2>
+        <p style="color: #666; margin-bottom: 20px;">Tank availability and maintenance tracking.</p>
+        <div id="equipmentList">
+          <div class="loading">Loading equipment...</div>
+        </div>
+      </div>
+    </div>
+    
+    <!-- Product Pricing View (NEW - Phase 6B Enhancement) -->
+    <div id="pricingView" class="hidden">
+      <div class="card">
+        <h2>💰 Product Pricing</h2>
+        <p style="color: #666; margin-bottom: 20px;">Set specific prices for each beer. Each beer can have different pricing while maintaining budget control.</p>
+        
+        <button class="btn btn-success" onclick="showNewPriceForm()" style="margin-bottom: 20px;">➕ Add Product Price</button>
+        
+        <div id="newPriceForm" class="hidden" style="background: #f8f9fa; padding: 20px; border-radius: 8px; margin-bottom: 20px;">
+          <h3>Add/Edit Product Price</h3>
+          <form id="priceForm">
+            <div class="form-row">
+              <div class="form-group">
+                <label class="form-label">Beer Name</label>
+                <input type="text" class="form-input" id="priceBeerName" placeholder="e.g., Prospector's Pick Lager">
+              </div>
+              <div class="form-group">
+                <label class="form-label">Product Type</label>
+                <select class="form-input" id="priceProductType">
+                  <option value="Keg">Keg</option>
+                  <option value="Case">Case</option>
+                  <option value="Bottle">Bottle</option>
+                </select>
+              </div>
+            </div>
+            <div class="form-row">
+              <div class="form-group">
+                <label class="form-label">Selling Price ($)</label>
+                <input type="number" class="form-input" id="priceSellingPrice" step="0.01" placeholder="145.00">
+              </div>
+              <div class="form-group">
+                <label class="form-label">Target COGs ($)</label>
+                <input type="number" class="form-input" id="priceTargetCogs" step="0.01" placeholder="90.00">
+                <small style="color: #666;">From Financial Targets budget</small>
+              </div>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Notes (optional)</label>
+              <input type="text" class="form-input" id="priceNotes" placeholder="Premium IPA, seasonal pricing, etc.">
+            </div>
+            <div style="margin-top: 15px; padding: 15px; background: #e3f2fd; border-radius: 8px;">
+              <strong>Calculated Margin:</strong>
+              <div id="calculatedMargin" style="margin-top: 8px; font-size: 18px; color: #1F4E78;">
+                Enter prices to calculate margin
+              </div>
+            </div>
+            <div style="display: flex; gap: 10px; margin-top: 20px;">
+              <button type="button" class="btn btn-success" onclick="savePrice()">✓ Save Price</button>
+              <button type="button" class="btn btn-secondary" onclick="hideNewPriceForm()">Cancel</button>
+            </div>
+          </form>
+        </div>
+        
+        <div id="pricingList">
+          <div class="loading">Loading product prices...</div>
+        </div>
+      </div>
+    </div>
+    
+  </div>
+  
+  <!-- Bottom Navigation -->
+  <div class="bottom-nav">
+    <div class="nav-item active" onclick="showView('dashboard')">
+      <span class="nav-icon">📊</span>
+      <span class="nav-label">Dashboard</span>
+    </div>
+    <div class="nav-item" onclick="showView('calendar')">
+      <span class="nav-icon">📅</span>
+      <span class="nav-label">Calendar</span>
+    </div>
+    <div class="nav-item" onclick="showView('batch')">
+      <span class="nav-icon">🍺</span>
+      <span class="nav-label">Batches</span>
+    </div>
+    <div class="nav-item" onclick="showView('demand')">
+      <span class="nav-icon">🎯</span>
+      <span class="nav-label">Demand</span>
+    </div>
+    <div class="nav-item" onclick="showView('recipes')">
+      <span class="nav-icon">📖</span>
+      <span class="nav-label">Recipes</span>
+    </div>
+    <div class="nav-item" onclick="showView('pricing')">
+      <span class="nav-icon">💰</span>
+      <span class="nav-label">Pricing</span>
+    </div>
+    <div class="nav-item" onclick="showView('equipment')">
+      <span class="nav-icon">🔧</span>
+      <span class="nav-label">Equipment</span>
+    </div>
+    <div class="nav-item" onclick="showView('inventory')">
+      <span class="nav-icon">📦</span>
+      <span class="nav-label">Inventory</span>
+    </div>
+    <div class="nav-item" onclick="showMoreMenu()">
+      <span class="nav-icon">⋯</span>
+      <span class="nav-label">More</span>
+    </div>
+  </div>
+  
+  <!-- More Menu (Popup) -->
+  <div id="moreMenu" class="hidden" style="position: fixed; bottom: 70px; right: 20px; background: white; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.2); padding: 10px; z-index: 1001;">
+    <div style="padding: 10px; cursor: pointer; border-radius: 8px;" onclick="showView('targets'); hideMoreMenu();" onmouseover="this.style.background='#f8f9fa'" onmouseout="this.style.background='white'">
+      <span style="margin-right: 10px;">🎯</span> Financial Targets
+    </div>
+    <div style="padding: 10px; cursor: pointer; border-radius: 8px;" onclick="showView('budgets'); hideMoreMenu();" onmouseover="this.style.background='#f8f9fa'" onmouseout="this.style.background='white'">
+      <span style="margin-right: 10px;">💰</span> Product Budgets
+    </div>
+  </div>
+  
+  <script>
+    var currentView = 'dashboard';
+    var moreMenuOpen = false;
+    
+    window.onload = function() {
+      loadDashboard();
+      loadFinancialTargets();
+    };
+    
+    // ========== VIEW MANAGEMENT ==========
+    
+    function showView(view) {
+      currentView = view;
+      
+      // Hide all views
+      document.getElementById('dashboardView').classList.add('hidden');
+      document.getElementById('targetsView').classList.add('hidden');
+      document.getElementById('batchView').classList.add('hidden');
+      document.getElementById('inventoryView').classList.add('hidden');
+      document.getElementById('budgetsView').classList.add('hidden');
+      document.getElementById('calendarView').classList.add('hidden');
+      document.getElementById('recipesView').classList.add('hidden');
+      document.getElementById('demandView').classList.add('hidden');
+      document.getElementById('equipmentView').classList.add('hidden');
+      document.getElementById('pricingView').classList.add('hidden');
+      
+      // Update nav
+      document.querySelectorAll('.nav-item').forEach(item => item.classList.remove('active'));
+      
+      // Show selected view
+      if (view === 'dashboard') {
+        document.getElementById('dashboardView').classList.remove('hidden');
+        document.querySelectorAll('.nav-item')[0].classList.add('active');
+        loadDashboard();
+      } else if (view === 'calendar') {
+        document.getElementById('calendarView').classList.remove('hidden');
+        document.querySelectorAll('.nav-item')[1].classList.add('active');
+        loadProductionCalendar();
+      } else if (view === 'batch') {
+        document.getElementById('batchView').classList.remove('hidden');
+        document.querySelectorAll('.nav-item')[2].classList.add('active');
+      } else if (view === 'demand') {
+        document.getElementById('demandView').classList.remove('hidden');
+        document.querySelectorAll('.nav-item')[3].classList.add('active');
+        loadBrewRecommendations();
+        loadForecast();
+      } else if (view === 'recipes') {
+        document.getElementById('recipesView').classList.remove('hidden');
+        document.querySelectorAll('.nav-item')[4].classList.add('active');
+        loadRecipes();
+      } else if (view === 'pricing') {
+        document.getElementById('pricingView').classList.remove('hidden');
+        document.querySelectorAll('.nav-item')[5].classList.add('active');
+        loadProductPrices();
+      } else if (view === 'equipment') {
+        document.getElementById('equipmentView').classList.remove('hidden');
+        document.querySelectorAll('.nav-item')[6].classList.add('active');
+        loadEquipment();
+      } else if (view === 'inventory') {
+        document.getElementById('inventoryView').classList.remove('hidden');
+        document.querySelectorAll('.nav-item')[7].classList.add('active');
+        loadInventory();
+      } else if (view === 'targets') {
+        document.getElementById('targetsView').classList.remove('hidden');
+        loadFinancialTargets();
+      } else if (view === 'budgets') {
+        document.getElementById('budgetsView').classList.remove('hidden');
+        loadProductBudgets();
+      }
+      
+      hideMoreMenu();
+    }
+    
+    function showMoreMenu() {
+      moreMenuOpen = !moreMenuOpen;
+      if (moreMenuOpen) {
+        document.getElementById('moreMenu').classList.remove('hidden');
+      } else {
+        document.getElementById('moreMenu').classList.add('hidden');
+      }
+    }
+    
+    function hideMoreMenu() {
+      moreMenuOpen = false;
+      document.getElementById('moreMenu').classList.add('hidden');
+    }
+    
+    // ========== DASHBOARD ==========
+    
+    function loadDashboard() {
+      google.script.run
+        .withSuccessHandler(displayDashboard)
+        .withFailureHandler(function(error) {
+          console.error('Dashboard error:', error);
+          document.getElementById('financialStats').innerHTML = '<p style="color: #e74c3c;">Error loading dashboard</p>';
+        })
+        .getDashboardStats();
+    }
+    
+    function displayDashboard(result) {
+      if (!result.success) {
+        document.getElementById('financialStats').innerHTML = '<p style="color: #e74c3c;">' + result.message + '</p>';
+        return;
+      }
+      
+      var stats = result.stats;
+      
+      // Update FCCR Monitor
+      document.getElementById('fccrValue').textContent = stats.fccr.toFixed(2);
+      document.getElementById('fccrTarget').textContent = stats.fccrTarget.toFixed(2);
+      
+      var fccrStatus = document.getElementById('fccrStatus');
+      if (stats.fccr >= stats.fccrTarget) {
+        fccrStatus.textContent = '✓ GOOD - Above Covenant';
+        fccrStatus.className = 'fccr-status fccr-good';
+      } else if (stats.fccr >= stats.fccrTarget * 0.95) {
+        fccrStatus.textContent = '⚠️ WARNING - Near Limit';
+        fccrStatus.className = 'fccr-status fccr-warning';
+      } else {
+        fccrStatus.textContent = '⚠️ CRITICAL - Below Covenant';
+        fccrStatus.className = 'fccr-status fccr-critical';
+      }
+      
+      // Financial Stats
+      var financialHtml = '';
+      
+      financialHtml += '<div class="stat-card">';
+      financialHtml += '<div class="stat-label">Revenue Target</div>';
+      financialHtml += '<div class="stat-value">$' + formatNumber(stats.annualRevenueTarget) + '</div>';
+      financialHtml += '</div>';
+      
+      financialHtml += '<div class="stat-card">';
+      financialHtml += '<div class="stat-label">YTD Revenue</div>';
+      financialHtml += '<div class="stat-value">$' + formatNumber(stats.ytdRevenue) + '</div>';
+      financialHtml += '</div>';
+      
+      financialHtml += '<div class="stat-card">';
+      financialHtml += '<div class="stat-label">COGs Budget</div>';
+      financialHtml += '<div class="stat-value">$' + formatNumber(stats.annualCogsTarget) + '</div>';
+      financialHtml += '</div>';
+      
+      financialHtml += '<div class="stat-card">';
+      financialHtml += '<div class="stat-label">YTD COGs</div>';
+      financialHtml += '<div class="stat-value">$' + formatNumber(stats.ytdCogs) + '</div>';
+      financialHtml += '</div>';
+      
+      document.getElementById('financialStats').innerHTML = financialHtml;
+      
+      // Inventory Stats
+      var inventoryHtml = '';
+      
+      inventoryHtml += '<div class="stat-card good">';
+      inventoryHtml += '<div class="stat-label">Total Inventory Value</div>';
+      inventoryHtml += '<div class="stat-value">$' + formatNumber(stats.totalInventoryValue) + '</div>';
+      inventoryHtml += '</div>';
+      
+      for (var product in stats.inventoryByProduct) {
+        var inv = stats.inventoryByProduct[product];
+        inventoryHtml += '<div class="stat-card">';
+        inventoryHtml += '<div class="stat-label">' + product + 's Available</div>';
+        inventoryHtml += '<div class="stat-value">' + inv.qty + '</div>';
+        inventoryHtml += '<div style="font-size: 12px; color: #666; margin-top: 5px;">Value: $' + formatNumber(inv.value) + '</div>';
+        inventoryHtml += '</div>';
+      }
+      
+      document.getElementById('inventoryStats').innerHTML = inventoryHtml;
+    }
+    
+    // ========== FINANCIAL TARGETS ==========
+    
+    function loadFinancialTargets() {
+      google.script.run
+        .withSuccessHandler(displayTargets)
+        .withFailureHandler(function(error) {
+          console.error('Targets error:', error);
+        })
+        .getFinancialTargets();
+    }
+    
+    function displayTargets(result) {
+      if (!result.success) {
+        alert('Error loading targets: ' + result.message);
+        return;
+      }
+      
+      var t = result.targets;
+      
+      document.getElementById('fccrReq').value = t.fccr_requirement;
+      document.getElementById('revenueTarget').value = t.annual_revenue_target;
+      document.getElementById('fixedCosts').value = t.annual_fixed_costs;
+      document.getElementById('taproomPercent').value = t.taproom_percent;
+      document.getElementById('wholesalePercent').value = t.wholesale_percent;
+      document.getElementById('taproomMargin').value = t.taproom_margin_target;
+      document.getElementById('wholesaleMargin').value = t.wholesale_margin_target;
+      document.getElementById('kegVolume').value = t.annual_keg_volume;
+      document.getElementById('caseVolume').value = t.annual_case_volume;
+      document.getElementById('bottleVolume').value = t.annual_bottle_volume;
+      document.getElementById('kegPrice').value = t.keg_price;
+      document.getElementById('casePrice').value = t.case_price;
+      document.getElementById('bottlePrice').value = t.bottle_price;
+    }
+    
+    function saveTargets() {
+      var targets = {
+        fccr_requirement: parseFloat(document.getElementById('fccrReq').value),
+        annual_revenue_target: parseFloat(document.getElementById('revenueTarget').value),
+        annual_fixed_costs: parseFloat(document.getElementById('fixedCosts').value),
+        taproom_percent: parseFloat(document.getElementById('taproomPercent').value),
+        wholesale_percent: parseFloat(document.getElementById('wholesalePercent').value),
+        taproom_margin_target: parseFloat(document.getElementById('taproomMargin').value),
+        wholesale_margin_target: parseFloat(document.getElementById('wholesaleMargin').value),
+        annual_keg_volume: parseFloat(document.getElementById('kegVolume').value),
+        annual_case_volume: parseFloat(document.getElementById('caseVolume').value),
+        annual_bottle_volume: parseFloat(document.getElementById('bottleVolume').value),
+        keg_price: parseFloat(document.getElementById('kegPrice').value),
+        case_price: parseFloat(document.getElementById('casePrice').value),
+        bottle_price: parseFloat(document.getElementById('bottlePrice').value)
+      };
+      
+      google.script.run
+        .withSuccessHandler(function(result) {
+          if (result.success) {
+            alert('✅ ' + result.message);
+            loadDashboard();
+            loadProductBudgets();
+          } else {
+            alert('❌ ' + result.message);
+          }
+        })
+        .withFailureHandler(function(error) {
+          alert('❌ Error saving targets: ' + error);
+        })
+        .saveFinancialTargets(targets);
+    }
+    
+    // ========== BATCH MANAGEMENT ==========
+    
+    function showNewBatchForm() {
+      document.getElementById('newBatchForm').classList.remove('hidden');
+    }
+    
+    function hideNewBatchForm() {
+      document.getElementById('newBatchForm').classList.add('hidden');
+      document.getElementById('batchForm').reset();
+    }
+    
+    function createBatch() {
+      var batchData = {
+        beerType: document.getElementById('beerType').value,
+        batchSize: parseFloat(document.getElementById('batchSize').value),
+        productType: document.getElementById('productType').value,
+        expectedYield: parseInt(document.getElementById('expectedYield').value),
+        rawMaterialsCost: parseFloat(document.getElementById('rawCost').value),
+        laborCost: parseFloat(document.getElementById('laborCost').value),
+        overheadCost: parseFloat(document.getElementById('overheadCost').value),
+        budget: parseFloat(document.getElementById('budget').value),
+        brewDate: document.getElementById('brewDate').value,
+        packageDate: document.getElementById('packageDate').value,
+        notes: document.getElementById('batchNotes').value
+      };
+      
+      google.script.run
+        .withSuccessHandler(function(result) {
+          if (result.success) {
+            alert('✅ ' + result.message);
+            hideNewBatchForm();
+            // Reload batch list
+          } else {
+            alert('❌ ' + result.message);
+          }
+        })
+        .withFailureHandler(function(error) {
+          alert('❌ Error creating batch: ' + error);
+        })
+        .createBatch(batchData);
+    }
+    
+    // ========== INVENTORY ==========
+    
+    function loadInventory() {
+      google.script.run
+        .withSuccessHandler(displayInventory)
+        .withFailureHandler(function(error) {
+          console.error('Inventory error:', error);
+          document.getElementById('inventoryList').innerHTML = '<p style="color: #e74c3c;">Error loading inventory</p>';
+        })
+        .getFinishedGoods();
+    }
+    
+    function displayInventory(result) {
+      if (!result.success) {
+        document.getElementById('inventoryList').innerHTML = '<p style="color: #e74c3c;">' + result.message + '</p>';
+        return;
+      }
+      
+      if (result.inventory.length === 0) {
+        document.getElementById('inventoryList').innerHTML = '<p style="color: #999; text-align: center; padding: 40px;">No inventory yet. Create a batch and package it!</p>';
+        return;
+      }
+      
+      var html = '';
+      
+      result.inventory.forEach(function(item) {
+        html += '<div class="inventory-card">';
+        html += '<div class="inventory-header">';
+        html += '<div class="inventory-product">' + item.beerType + ' - ' + item.productType + '</div>';
+        html += '<div class="inventory-qty">' + item.availableQty + ' available</div>';
+        html += '</div>';
+        html += '<div class="inventory-details">';
+        html += 'Batch: ' + item.batchNumber + ' • ';
+        html += 'Cost/unit: $' + item.costPerUnit.toFixed(2) + ' • ';
+        html += 'Total value: $' + formatNumber(item.totalValue);
+        html += '</div>';
+        html += '</div>';
+      });
+      
+      document.getElementById('inventoryList').innerHTML = html;
+    }
+    
+    // ========== PRODUCT BUDGETS ==========
+    
+    function loadProductBudgets() {
+      // This would load from Product Budgets sheet
+      // For now, show placeholder
+      document.getElementById('budgetsList').innerHTML = '<p style="color: #999;">Configure financial targets first to see budgets.</p>';
+    }
+    
+    // ========== PRODUCTION CALENDAR (Phase 6B) ==========
+    
+    function showScheduleBatchForm() {
+      document.getElementById('scheduleBatchForm').classList.remove('hidden');
+    }
+    
+    function hideScheduleBatchForm() {
+      document.getElementById('scheduleBatchForm').classList.add('hidden');
+      document.getElementById('scheduleForm').reset();
+    }
+    
+    function scheduleBatch() {
+      var batchData = {
+        beerType: document.getElementById('schedBeerType').value,
+        brewDate: document.getElementById('schedBrewDate').value,
+        packageDate: document.getElementById('schedPackageDate').value,
+        tank: document.getElementById('schedTank').value,
+        batchSize: parseFloat(document.getElementById('schedBatchSize').value),
+        expectedYield: parseInt(document.getElementById('schedYield').value)
+      };
+      
+      google.script.run
+        .withSuccessHandler(function(result) {
+          if (result.success) {
+            alert('✅ ' + result.message);
+            hideScheduleBatchForm();
+            loadProductionCalendar();
+          } else {
+            alert('❌ ' + result.message);
+          }
+        })
+        .withFailureHandler(function(error) {
+          alert('❌ Error scheduling batch: ' + error);
+        })
+        .scheduleBatch(batchData);
+    }
+    
+    function loadProductionCalendar() {
+      google.script.run
+        .withSuccessHandler(displayProductionCalendar)
+        .withFailureHandler(function(error) {
+          console.error('Calendar error:', error);
+          document.getElementById('calendarList').innerHTML = '<p style="color: #e74c3c;">Error loading calendar</p>';
+        })
+        .getProductionCalendar(new Date().getFullYear());
+    }
+    
+    function displayProductionCalendar(result) {
+      if (!result.success) {
+        document.getElementById('calendarList').innerHTML = '<p style="color: #e74c3c;">' + result.message + '</p>';
+        return;
+      }
+      
+      if (result.batches.length === 0) {
+        document.getElementById('calendarList').innerHTML = '<p style="color: #999; text-align: center; padding: 40px;">No batches scheduled yet. Click "Schedule Batch" to plan production!</p>';
+        return;
+      }
+      
+      var html = '<div class="table-container"><table>';
+      html += '<thead><tr>';
+      html += '<th>Week</th><th>Beer Type</th><th>Brew Date</th><th>Package Date</th>';
+      html += '<th>Size (BBL)</th><th>Yield</th><th>Tank</th><th>Status</th>';
+      html += '</tr></thead><tbody>';
+      
+      result.batches.forEach(function(batch) {
+        html += '<tr>';
+        html += '<td>' + batch.weekNumber + '</td>';
+        html += '<td>' + batch.beerType + '</td>';
+        html += '<td>' + formatDate(batch.brewDate) + '</td>';
+        html += '<td>' + formatDate(batch.packageDate) + '</td>';
+        html += '<td>' + batch.batchSize + '</td>';
+        html += '<td>' + batch.expectedYield + '</td>';
+        html += '<td>' + batch.tank + '</td>';
+        html += '<td>' + batch.status + '</td>';
+        html += '</tr>';
+      });
+      
+      html += '</tbody></table></div>';
+      document.getElementById('calendarList').innerHTML = html;
+    }
+    
+    // ========== RECIPES (Phase 6B) ==========
+    
+    function showNewRecipeForm() {
+      document.getElementById('newRecipeForm').classList.remove('hidden');
+    }
+    
+    function hideNewRecipeForm() {
+      document.getElementById('newRecipeForm').classList.add('hidden');
+      document.getElementById('recipeForm').reset();
+    }
+    
+    function saveRecipe() {
+      var recipe = {
+        recipeName: document.getElementById('recipeName').value,
+        beerType: document.getElementById('recipeBeerType').value,
+        batchSize: parseFloat(document.getElementById('recipeBatchSize').value),
+        expectedYield: parseInt(document.getElementById('recipeYield').value),
+        ingredients: document.getElementById('recipeIngredients').value,
+        estimatedCost: parseFloat(document.getElementById('recipeCost').value),
+        fermentationDays: parseInt(document.getElementById('recipeFermentDays').value)
+      };
+      
+      google.script.run
+        .withSuccessHandler(function(result) {
+          if (result.success) {
+            alert('✅ ' + result.message);
+            hideNewRecipeForm();
+            loadRecipes();
+          } else {
+            alert('❌ ' + result.message);
+          }
+        })
+        .withFailureHandler(function(error) {
+          alert('❌ Error saving recipe: ' + error);
+        })
+        .saveRecipe(recipe);
+    }
+    
+    function loadRecipes() {
+      google.script.run
+        .withSuccessHandler(displayRecipes)
+        .withFailureHandler(function(error) {
+          console.error('Recipes error:', error);
+          document.getElementById('recipesList').innerHTML = '<p style="color: #e74c3c;">Error loading recipes</p>';
+        })
+        .getRecipes();
+    }
+    
+    function displayRecipes(result) {
+      if (!result.success) {
+        document.getElementById('recipesList').innerHTML = '<p style="color: #e74c3c;">' + result.message + '</p>';
+        return;
+      }
+      
+      if (result.recipes.length === 0) {
+        document.getElementById('recipesList').innerHTML = '<p style="color: #999; text-align: center; padding: 40px;">No recipes yet. Create your first standard recipe!</p>';
+        return;
+      }
+      
+      var html = '';
+      result.recipes.forEach(function(recipe) {
+        html += '<div class="inventory-card">';
+        html += '<div class="inventory-header">';
+        html += '<div class="inventory-product">' + recipe.recipeName + '</div>';
+        html += '<div style="font-size: 14px; color: #666;">' + recipe.beerType + '</div>';
+        html += '</div>';
+        html += '<div class="inventory-details">';
+        html += 'Batch: ' + recipe.batchSize + ' BBL → ' + recipe.expectedYield + ' units • ';
+        html += 'Cost: $' + formatNumber(recipe.estimatedCost) + ' • ';
+        html += 'Fermentation: ' + recipe.fermentationDays + ' days';
+        html += '</div>';
+        if (recipe.ingredients) {
+          html += '<div style="font-size: 13px; color: #999; margin-top: 8px; font-style: italic;">';
+          html += recipe.ingredients;
+          html += '</div>';
+        }
+        html += '</div>';
+      });
+      
+      document.getElementById('recipesList').innerHTML = html;
+    }
+    
+    // ========== DEMAND PLANNING (Phase 6B) ==========
+    
+    function loadBrewRecommendations() {
+      google.script.run
+        .withSuccessHandler(displayBrewRecommendations)
+        .withFailureHandler(function(error) {
+          console.error('Recommendations error:', error);
+          document.getElementById('brewRecommendations').innerHTML = '<p style="color: #e74c3c;">Error loading recommendations</p>';
+        })
+        .getBrewRecommendations();
+    }
+    
+    function displayBrewRecommendations(result) {
+      if (!result.success) {
+        document.getElementById('brewRecommendations').innerHTML = '<p style="color: #e74c3c;">' + result.message + '</p>';
+        return;
+      }
+      
+      if (result.recommendations.length === 0) {
+        document.getElementById('brewRecommendations').innerHTML = '<div class="alert alert-success"><strong>✅ All Good!</strong> Inventory levels are adequate. No urgent brewing needed.</div>';
+        return;
+      }
+      
+      var html = '';
+      result.recommendations.forEach(function(rec) {
+        var alertClass = rec.priority === 'URGENT' ? 'alert-danger' : (rec.priority === 'High' ? 'alert-warning' : 'alert-success');
+        
+        html += '<div class="alert ' + alertClass + '" style="margin-bottom: 15px;">';
+        html += '<div style="display: flex; justify-content: space-between; align-items: center;">';
+        html += '<div>';
+        html += '<strong>' + rec.priority + ': ' + rec.beerType + ' (' + rec.productType + ')</strong><br>';
+        html += '<span style="font-size: 14px;">' + rec.action + '</span><br>';
+        html += '<span style="font-size: 13px;">Current inventory: ' + rec.currentInventory + ' units (' + rec.daysSupply + ' days supply)</span>';
+        html += '</div>';
+        html += '<div style="font-size: 32px;">';
+        if (rec.priority === 'URGENT') html += '🚨';
+        else if (rec.priority === 'High') html += '⚠️';
+        else html += '📊';
+        html += '</div>';
+        html += '</div>';
+        html += '</div>';
+      });
+      
+      document.getElementById('brewRecommendations').innerHTML = html;
+    }
+    
+    function loadForecast() {
+      google.script.run
+        .withSuccessHandler(displayForecast)
+        .withFailureHandler(function(error) {
+          console.error('Forecast error:', error);
+          document.getElementById('forecastList').innerHTML = '<p style="color: #e74c3c;">Error loading forecast</p>';
+        })
+        .getSalesForecast();
+    }
+    
+    function displayForecast(result) {
+      if (!result.success) {
+        document.getElementById('forecastList').innerHTML = '<p style="color: #e74c3c;">' + result.message + '</p>';
+        return;
+      }
+      
+      if (result.forecasts.length === 0) {
+        document.getElementById('forecastList').innerHTML = '<p style="color: #999; text-align: center; padding: 40px;">No forecast data yet.</p>';
+        return;
+      }
+      
+      var html = '<div class="table-container"><table>';
+      html += '<thead><tr>';
+      html += '<th>Product</th><th>Beer Type</th><th>Forecast</th><th>Actual</th>';
+      html += '<th>Variance</th><th>Inventory</th><th>Days Supply</th><th>Alert</th>';
+      html += '</tr></thead><tbody>';
+      
+      result.forecasts.forEach(function(f) {
+        html += '<tr>';
+        html += '<td>' + f.product + '</td>';
+        html += '<td>' + f.beerType + '</td>';
+        html += '<td>' + formatNumber(f.monthlyForecast) + '</td>';
+        html += '<td>' + formatNumber(f.actualSales) + '</td>';
+        html += '<td style="color: ' + (f.variance >= 0 ? '#27ae60' : '#e74c3c') + ';">' + (f.variance >= 0 ? '+' : '') + formatNumber(f.variance) + '</td>';
+        html += '<td>' + formatNumber(f.currentInventory) + '</td>';
+        html += '<td>' + f.daysSupply + '</td>';
+        
+        var alertColor = f.reorderAlert === 'URGENT' ? '#e74c3c' : (f.reorderAlert === 'WARNING' ? '#f39c12' : '#27ae60');
+        html += '<td style="color: ' + alertColor + '; font-weight: 600;">' + f.reorderAlert + '</td>';
+        html += '</tr>';
+      });
+      
+      html += '</tbody></table></div>';
+      document.getElementById('forecastList').innerHTML = html;
+    }
+    
+    function updateForecast() {
+      google.script.run
+        .withSuccessHandler(function(result) {
+          if (result.success) {
+            alert('✅ ' + result.message);
+            loadForecast();
+            loadBrewRecommendations();
+          } else {
+            alert('❌ ' + result.message);
+          }
+        })
+        .withFailureHandler(function(error) {
+          alert('❌ Error updating forecast: ' + error);
+        })
+        .updateForecastActuals();
+    }
+    
+    // ========== EQUIPMENT SCHEDULE (Phase 6B) ==========
+    
+    function loadEquipment() {
+      google.script.run
+        .withSuccessHandler(displayEquipment)
+        .withFailureHandler(function(error) {
+          console.error('Equipment error:', error);
+          document.getElementById('equipmentList').innerHTML = '<p style="color: #e74c3c;">Error loading equipment</p>';
+        })
+        .getEquipmentSchedule();
+    }
+    
+    function displayEquipment(result) {
+      if (!result.success) {
+        document.getElementById('equipmentList').innerHTML = '<p style="color: #e74c3c;">' + result.message + '</p>';
+        return;
+      }
+      
+      if (result.equipment.length === 0) {
+        document.getElementById('equipmentList').innerHTML = '<p style="color: #999; text-align: center; padding: 40px;">No equipment configured yet.</p>';
+        return;
+      }
+      
+      var html = '';
+      result.equipment.forEach(function(eq) {
+        var statusColor = eq.status === 'Available' ? '#27ae60' : '#f39c12';
+        
+        html += '<div class="inventory-card" style="border-left-color: ' + statusColor + ';">';
+        html += '<div class="inventory-header">';
+        html += '<div class="inventory-product">' + eq.equipmentName + '</div>';
+        html += '<div style="color: ' + statusColor + '; font-weight: 600;">' + eq.status + '</div>';
+        html += '</div>';
+        html += '<div class="inventory-details">';
+        html += 'Type: ' + eq.type + ' • Capacity: ' + eq.capacity + ' BBL';
+        if (eq.currentBatch) {
+          html += '<br>Current Batch: ' + eq.currentBatch;
+          html += ' • In use until: ' + formatDate(eq.inUseUntil);
+        }
+        html += '<br>Next Available: ' + (eq.nextAvailable === 'Available Now' ? eq.nextAvailable : formatDate(eq.nextAvailable));
+        if (eq.maintenanceDue) {
+          html += ' • Maintenance due: ' + formatDate(eq.maintenanceDue);
+        }
+        html += '</div>';
+        html += '</div>';
+      });
+      
+      document.getElementById('equipmentList').innerHTML = html;
+    }
+    
+    // ========== PRODUCT PRICING (Phase 6B Enhancement) ==========
+    
+    function showNewPriceForm() {
+      document.getElementById('newPriceForm').classList.remove('hidden');
+      // Auto-calculate margin when prices change
+      document.getElementById('priceSellingPrice').addEventListener('input', updateMarginCalculation);
+      document.getElementById('priceTargetCogs').addEventListener('input', updateMarginCalculation);
+    }
+    
+    function hideNewPriceForm() {
+      document.getElementById('newPriceForm').classList.add('hidden');
+      document.getElementById('priceForm').reset();
+      document.getElementById('calculatedMargin').innerHTML = 'Enter prices to calculate margin';
+    }
+    
+    function updateMarginCalculation() {
+      var price = parseFloat(document.getElementById('priceSellingPrice').value) || 0;
+      var cogs = parseFloat(document.getElementById('priceTargetCogs').value) || 0;
+      
+      if (price > 0 && cogs > 0) {
+        var margin = price - cogs;
+        var marginPercent = (margin / price) * 100;
+        
+        var color = marginPercent >= 50 ? '#27ae60' : (marginPercent >= 30 ? '#f39c12' : '#e74c3c');
+        
+        document.getElementById('calculatedMargin').innerHTML = 
+          '<span style="color: ' + color + ';">$' + margin.toFixed(2) + ' per unit (' + marginPercent.toFixed(1) + '%)</span>';
+      } else {
+        document.getElementById('calculatedMargin').innerHTML = 'Enter prices to calculate margin';
+      }
+    }
+    
+    function savePrice() {
+      var productData = {
+        beerName: document.getElementById('priceBeerName').value,
+        productType: document.getElementById('priceProductType').value,
+        sellingPrice: parseFloat(document.getElementById('priceSellingPrice').value),
+        targetCogs: parseFloat(document.getElementById('priceTargetCogs').value),
+        notes: document.getElementById('priceNotes').value
+      };
+      
+      if (!productData.beerName || !productData.sellingPrice || !productData.targetCogs) {
+        alert('❌ Please fill in Beer Name, Selling Price, and Target COGs');
+        return;
+      }
+      
+      google.script.run
+        .withSuccessHandler(function(result) {
+          if (result.success) {
+            alert('✅ ' + result.message);
+            hideNewPriceForm();
+            loadProductPrices();
+          } else {
+            alert('❌ ' + result.message);
+          }
+        })
+        .withFailureHandler(function(error) {
+          alert('❌ Error saving price: ' + error);
+        })
+        .saveProductPrice(productData);
+    }
+    
+    function loadProductPrices() {
+      google.script.run
+        .withSuccessHandler(displayProductPrices)
+        .withFailureHandler(function(error) {
+          console.error('Pricing error:', error);
+          document.getElementById('pricingList').innerHTML = '<p style="color: #e74c3c;">Error loading prices</p>';
+        })
+        .getProductPrices();
+    }
+    
+    function displayProductPrices(result) {
+      if (!result.success) {
+        document.getElementById('pricingList').innerHTML = '<p style="color: #e74c3c;">' + result.message + '</p>';
+        return;
+      }
+      
+      if (result.products.length === 0) {
+        document.getElementById('pricingList').innerHTML = '<p style="color: #999; text-align: center; padding: 40px;">No product prices set yet. Click "Add Product Price" to get started!</p>';
+        return;
+      }
+      
+      var html = '<div style="margin-top: 20px;">';
+      
+      // Group by product type
+      var byType = {};
+      result.products.forEach(function(p) {
+        if (!byType[p.productType]) {
+          byType[p.productType] = [];
+        }
+        byType[p.productType].push(p);
+      });
+      
+      // Display by type
+      Object.keys(byType).forEach(function(type) {
+        html += '<h3 style="color: #1F4E78; margin: 20px 0 15px 0;">' + type + 's</h3>';
+        
+        byType[type].forEach(function(product) {
+          var marginColor = product.targetMarginPercent >= 0.50 ? '#27ae60' : (product.targetMarginPercent >= 0.30 ? '#f39c12' : '#e74c3c');
+          
+          html += '<div class="inventory-card">';
+          html += '<div class="inventory-header">';
+          html += '<div class="inventory-product">' + product.beerName + '</div>';
+          html += '<div style="font-size: 20px; font-weight: bold; color: #1F4E78;">$' + product.sellingPrice.toFixed(2) + '</div>';
+          html += '</div>';
+          html += '<div class="inventory-details">';
+          html += 'SKU: ' + product.sku + ' • ';
+          html += 'Target COGs: $' + product.targetCogs.toFixed(2) + '<br>';
+          html += '<span style="color: ' + marginColor + '; font-weight: 600; font-size: 15px;">';
+          html += 'Margin: $' + product.targetMarginDollars.toFixed(2) + ' (' + (product.targetMarginPercent * 100).toFixed(1) + '%)';
+          html += '</span>';
+          if (product.notes) {
+            html += '<br><span style="font-style: italic; color: #666; font-size: 13px;">' + product.notes + '</span>';
+          }
+          html += '</div>';
+          html += '<div style="margin-top: 10px; display: flex; gap: 10px;">';
+          html += '<button class="btn btn-secondary" style="font-size: 14px; padding: 8px 16px;" onclick="editPrice(\'' + product.beerName + '\', \'' + product.productType + '\')">✏️ Edit</button>';
+          html += '<button class="btn btn-secondary" style="font-size: 14px; padding: 8px 16px; background: #e74c3c;" onclick="deactivatePrice(\'' + product.beerName + '\', \'' + product.productType + '\')">🗑️ Deactivate</button>';
+          html += '</div>';
+          html += '</div>';
+        });
+      });
+      
+      html += '</div>';
+      document.getElementById('pricingList').innerHTML = html;
+    }
+    
+    function editPrice(beerName, productType) {
+      // Load product into form
+      google.script.run
+        .withSuccessHandler(function(result) {
+          if (result.success) {
+            document.getElementById('priceBeerName').value = beerName;
+            document.getElementById('priceProductType').value = productType;
+            document.getElementById('priceSellingPrice').value = result.price;
+            document.getElementById('priceTargetCogs').value = result.targetCogs;
+            showNewPriceForm();
+            updateMarginCalculation();
+          }
+        })
+        .getProductPrice(beerName, productType);
+    }
+    
+    function deactivatePrice(beerName, productType) {
+      if (!confirm('Deactivate ' + beerName + ' (' + productType + ')? This will remove it from active pricing but keep the record.')) {
+        return;
+      }
+      
+      google.script.run
+        .withSuccessHandler(function(result) {
+          if (result.success) {
+            alert('✅ ' + result.message);
+            loadProductPrices();
+          } else {
+            alert('❌ ' + result.message);
+          }
+        })
+        .withFailureHandler(function(error) {
+          alert('❌ Error deactivating: ' + error);
+        })
+        .deactivateProduct(beerName, productType);
+    }
+    
+    // ========== UTILITY FUNCTIONS ==========
+    
+    function formatNumber(num) {
+      if (!num) return '0';
+      return num.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+    }
+    
+    function formatDate(date) {
+      if (!date) return '-';
+      var d = new Date(date);
+      return (d.getMonth() + 1) + '/' + d.getDate() + '/' + d.getFullYear();
+    }
+  </script>
+</body>
+</html>
