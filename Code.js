@@ -49,6 +49,12 @@ var SHEETS = {
   FG_LOG: 'FG Log',
   MATERIAL_LOG: 'Material Log',
   BATCH_INGREDIENTS: 'Batch Ingredients',
+  BATCH_DETAILS: 'Batch Details',
+  
+  // Task Management
+  BATCH_TASKS: 'Batch Tasks',
+  TASK_MATERIALS: 'Task Materials',
+  RECIPE_TASK_TEMPLATES: 'Recipe Task Templates',
   
   // Exports
   QB_JOURNAL_EXPORT: 'QB Journal Export',
@@ -128,9 +134,70 @@ function getBrmSpreadsheet() {
   return SpreadsheetApp.openById(BRM_SPREADSHEET_ID);
 }
 
+/**
+ * BRM User Email-to-Name Mapping
+ * Used for "Execute as Me" deployment - returns actual logged-in user
+ */
+var BRM_USER_MAP = {
+  'todd@redlegbrewing.com': { name: 'Todd Baldwin', role: 'Owner' },
+  'steve@redlegbrewing.com': { name: 'Steve DeWeese', role: 'COO' },
+  'richard@redlegbrewing.com': { name: 'Richard Mar', role: 'Head Brewer' }
+};
+
+/**
+ * Get current user info with email, name, and role
+ * Uses Session.getActiveUser().getEmail() which returns the logged-in user
+ * even when script executes as owner ("Execute as Me" deployment)
+ * @returns {Object} { email: string, name: string, role: string }
+ */
 function getCurrentUser() {
-  var email = Session.getActiveUser().getEmail();
-  return { email: email, name: email.split('@')[0] };
+  var email = Session.getActiveUser().getEmail() || '';
+  var userInfo = BRM_USER_MAP[email.toLowerCase()];
+  
+  if (userInfo) {
+    return {
+      email: email,
+      name: userInfo.name,
+      role: userInfo.role
+    };
+  }
+  
+  // Fallback: use email prefix as name if not in map
+  return {
+    email: email,
+    name: email.split('@')[0] || 'User',
+    role: 'User'
+  };
+}
+
+/**
+ * Get current user info for UI display
+ * Returns both name and role separately for display and filtering
+ * @returns {Object} { success: boolean, user: { email, name, role } }
+ */
+function getCurrentUserInfo() {
+  try {
+    var user = getCurrentUser();
+    return serializeForHtml({
+      success: true,
+      user: {
+        email: user.email,
+        name: user.name,
+        role: user.role
+      }
+    });
+  } catch (e) {
+    Logger.log('Error getting current user info: ' + e.toString());
+    return {
+      success: false,
+      error: e.toString(),
+      user: {
+        email: '',
+        name: 'Unknown User',
+        role: 'User'
+      }
+    };
+  }
 }
 
 function formatCurrency(value) {
@@ -1256,6 +1323,64 @@ function getBrewers() {
   });
 }
 
+/**
+ * Get brewery staff names from Labor Config sheet
+ * Reads Salaried (rows 10-11) and Hourly (rows 16-18) from column A
+ * Returns array of name strings for dropdowns
+ */
+function getBreweryStaff() {
+  try {
+    var ss = getBrmSpreadsheet();
+    var sheet = ss.getSheetByName(SHEETS.LABOR_CONFIG);
+    
+    if (!sheet) {
+      Logger.log('Labor Config sheet not found');
+      return serializeForHtml({
+        success: true,
+        staff: ['Richard Mar', 'Alex Velasco'] // Fallback
+      });
+    }
+    
+    var staff = [];
+    
+    // Salaried Brewing Staff: rows 10-11 (0-indexed: 9-10)
+    for (var row = 10; row <= 11; row++) {
+      var name = sheet.getRange(row, 1).getValue(); // Column A
+      if (name && name.toString().trim() !== '' && name.toString().trim() !== 'Name') {
+        staff.push(name.toString().trim());
+      }
+    }
+    
+    // Hourly Brewing Staff: rows 16-18 (0-indexed: 15-17)
+    for (var row = 16; row <= 18; row++) {
+      var name = sheet.getRange(row, 1).getValue(); // Column A
+      if (name && name.toString().trim() !== '' && name.toString().trim() !== 'Name') {
+        staff.push(name.toString().trim());
+      }
+    }
+    
+    // Remove duplicates and sort
+    staff = staff.filter(function(name, index) {
+      return staff.indexOf(name) === index;
+    });
+    staff.sort();
+    
+    Logger.log('Found ' + staff.length + ' brewery staff members');
+    
+    return serializeForHtml({
+      success: true,
+      staff: staff
+    });
+    
+  } catch (e) {
+    Logger.log('Error getting brewery staff: ' + e.toString());
+    return serializeForHtml({
+      success: true,
+      staff: ['Richard Mar', 'Alex Velasco'] // Fallback
+    });
+  }
+}
+
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // SECTION 8: RECIPE FUNCTIONS
@@ -1481,7 +1606,7 @@ function addNewRecipe(data) {
 /**
  * Generate Brewer's Sheet for a recipe - supports "Brew This" button
  */
-function getBrewerSheet(recipeName, targetBatchSize) {
+function getBrewerSheet(recipeName, targetBatchSize, batchNumber) {
   try {
     var ss = getBrmSpreadsheet();
     var result = getAllRecipesEnhanced();
@@ -1493,6 +1618,147 @@ function getBrewerSheet(recipeName, targetBatchSize) {
     }
     
     var scaleFactor = (targetBatchSize || recipe.batchSize) / recipe.batchSize;
+    
+    // Fetch workflow data if batch exists
+    var workflowData = {
+      turn1Brewer: null,
+      turn2Brewer: null,
+      recipeChanges: [],
+      fvAssignment: null,
+      yeastDetails: recipe.yeast || '',
+      dryHopSchedule: [],
+      cleaningTasks: [],
+      batchExists: false
+    };
+    
+    // If no batchNumber provided, try to find most recent active batch for this recipe
+    if (!batchNumber) {
+      try {
+        var batchesResult = getBatchesData({ beer: recipeName });
+        if (batchesResult.success && batchesResult.batches && batchesResult.batches.length > 0) {
+          // Find most recent active batch (not packaged)
+          var activeBatches = batchesResult.batches.filter(function(b) {
+            return b.status && b.status.toLowerCase() !== 'packaged' && b.status.toLowerCase() !== 'complete';
+          });
+          if (activeBatches.length > 0) {
+            // Sort by brew date descending and take the most recent
+            activeBatches.sort(function(a, b) {
+              var dateA = a.brewDate ? new Date(a.brewDate) : new Date(0);
+              var dateB = b.brewDate ? new Date(b.brewDate) : new Date(0);
+              return dateB - dateA;
+            });
+            batchNumber = activeBatches[0].batchNumber;
+          }
+        }
+      } catch (e) {
+        Logger.log('Error finding existing batch: ' + e.toString());
+      }
+    }
+    
+    if (batchNumber) {
+      // Get batch data
+      var batchResult = getBatchSheet(batchNumber);
+      if (batchResult.success && batchResult.batch) {
+        workflowData.batchExists = true;
+        workflowData.batchNumber = batchNumber;
+        workflowData.fvAssignment = batchResult.batch.currentVessel || null;
+        workflowData.yeastDetails = batchResult.batch.yeast || recipe.yeast || '';
+        
+        // Get tasks for this batch
+        try {
+          var tasksResult = getBatchTasks(batchNumber);
+          if (tasksResult.success && tasksResult.tasks) {
+            workflowData.tasks = tasksResult.tasks;
+          } else {
+            workflowData.tasks = [];
+          }
+        } catch (e) {
+          Logger.log('Error getting batch tasks: ' + e.toString());
+          workflowData.tasks = [];
+        }
+        
+        // Get brewers from Batch Log (check for Brewers column)
+        var batchSheet = ss.getSheetByName(SHEETS.BATCH_LOG);
+        if (batchSheet) {
+          var batchData = batchSheet.getDataRange().getValues();
+          var headers = batchData[0] || [];
+          var brewersCol = -1;
+          for (var h = 0; h < headers.length; h++) {
+            var header = (headers[h] || '').toString().toLowerCase();
+            if (header.indexOf('brewer') !== -1) {
+              brewersCol = h;
+              break;
+            }
+          }
+          
+          // Find batch row and get brewers
+          for (var i = 1; i < batchData.length; i++) {
+            if (batchData[i][0] && batchData[i][0].toString() === batchNumber) {
+              if (brewersCol >= 0) {
+                var brewersStr = (batchData[i][brewersCol] || '').toString();
+                if (brewersStr) {
+                  var brewers = brewersStr.split(',').map(function(b) { return b.trim(); });
+                  workflowData.turn1Brewer = brewers[0] || null;
+                  workflowData.turn2Brewer = brewers[1] || null;
+                }
+              }
+              break;
+            }
+          }
+        }
+        
+        // Get Batch Details entries
+        if (batchResult.cellarEntries && batchResult.cellarEntries.length > 0) {
+          batchResult.cellarEntries.forEach(function(entry) {
+            var desc = (entry.description || '').toLowerCase();
+            var type = (entry.type || '').toLowerCase();
+            
+            // Dry hop additions
+            if (type === 'addition' && (desc.indexOf('hop') !== -1 || desc.indexOf('dry') !== -1)) {
+              workflowData.dryHopSchedule.push({
+                date: entry.date,
+                time: entry.time,
+                ingredient: entry.description,
+                amount: entry.value,
+                units: entry.units,
+                notes: entry.notes
+              });
+            }
+            
+            // Cleaning tasks (from notes or specific entries)
+            if (type === 'note' && (desc.indexOf('clean') !== -1 || desc.indexOf('sanitize') !== -1 || entry.notes.toLowerCase().indexOf('clean') !== -1)) {
+              workflowData.cleaningTasks.push({
+                date: entry.date,
+                time: entry.time,
+                description: entry.description,
+                notes: entry.notes
+              });
+            }
+          });
+        }
+      }
+    }
+    
+    // Get recipe changes from Recipe Change Log
+    try {
+      var changeHistory = getRecipeChangeHistory(recipeName);
+      if (changeHistory.success && changeHistory.history) {
+        // Get recent changes (last 10)
+        workflowData.recipeChanges = changeHistory.history.slice(0, 10).map(function(change) {
+          return {
+            date: change['Date'] || '',
+            time: change['Time'] || '',
+            user: change['User'] || '',
+            field: change['Field Changed'] || '',
+            oldValue: change['Old Value'] || '',
+            newValue: change['New Value'] || '',
+            reason: change['Reason'] || ''
+          };
+        });
+      }
+    } catch (e) {
+      Logger.log('Error getting recipe changes: ' + e.toString());
+    }
     
     // Load Ingredient Map for name translation
     var ingredientMap = {};
@@ -1620,7 +1886,8 @@ function getBrewerSheet(recipeName, targetBatchSize) {
         totalCOGS: Math.round(totalCOGS * 100) / 100,
         cogsPerBBL: Math.round(cogsPerBBL * 100) / 100,
         insufficientItems: insufficientItems,
-        hasWarnings: insufficientItems.length > 0
+        hasWarnings: insufficientItems.length > 0,
+        workflow: workflowData
       }
     });
   } catch (e) {
@@ -7816,6 +8083,16 @@ function startBrew(brewerData) {
       notes: 'Recipe: ' + brewerData.recipeName + ', Brewer: ' + (brewerData.brewer || 'Unknown')
     });
     
+    // Create tasks from recipe templates
+    try {
+      var tasksResult = createTasksFromTemplates(batchNumber, brewerData.recipeName, new Date());
+      if (tasksResult.success && tasksResult.tasksCreated > 0) {
+        Logger.log('Created ' + tasksResult.tasksCreated + ' tasks from templates');
+      }
+    } catch (taskError) {
+      Logger.log('Warning: Could not create tasks from templates: ' + taskError.toString());
+    }
+    
     Logger.log('Brew started: ' + batchNumber + ' (RM not depleted yet)');
     
     return serializeForHtml({
@@ -8019,7 +8296,7 @@ function addBatchEntry(batchNumber, type, data) {
 
 
 /**
- * Add gravity reading
+ * Add gravity reading (legacy - uses SG)
  */
 function addGravityReading(batchNumber, gravity, temperature, notes) {
   return addBatchEntry(batchNumber, 'Gravity', {
@@ -8028,6 +8305,129 @@ function addGravityReading(batchNumber, gravity, temperature, notes) {
     units: 'SG',
     notes: (temperature ? 'Temp: ' + temperature + '°F. ' : '') + (notes || '')
   });
+}
+
+/**
+ * Get package type components configuration
+ * Returns what materials/components are needed for each package type
+ */
+function getPackageTypeComponents(packageType) {
+  // Component definitions for each package type
+  var packageComponents = {
+    '1/2 BBL Keg': [
+      { item: '1/2 BBL Keg Shell', qtyPerUnit: 1, unit: 'each' },
+      { item: 'Keg Cap', qtyPerUnit: 1, unit: 'each' },
+      { item: 'Keg Collar', qtyPerUnit: 1, unit: 'each' },
+      { item: 'Product', qtyPerUnit: 15.5, unit: 'gal' }
+    ],
+    '1/6 BBL Keg': [
+      { item: '1/6 BBL Keg Shell', qtyPerUnit: 1, unit: 'each' },
+      { item: 'Keg Cap', qtyPerUnit: 1, unit: 'each' },
+      { item: 'Keg Collar', qtyPerUnit: 1, unit: 'each' },
+      { item: 'Product', qtyPerUnit: 5.17, unit: 'gal' }
+    ],
+    '1/4 BBL Keg': [
+      { item: '1/4 BBL Keg Shell', qtyPerUnit: 1, unit: 'each' },
+      { item: 'Keg Cap', qtyPerUnit: 1, unit: 'each' },
+      { item: 'Keg Collar', qtyPerUnit: 1, unit: 'each' },
+      { item: 'Product', qtyPerUnit: 7.75, unit: 'gal' }
+    ],
+    '12oz Case (4×6)': [
+      { item: '12oz Cans', qtyPerUnit: 24, unit: 'each' },
+      { item: 'Can Ends', qtyPerUnit: 24, unit: 'each' },
+      { item: '4-pack Carriers', qtyPerUnit: 6, unit: 'each' },
+      { item: 'Case Trays', qtyPerUnit: 1, unit: 'each' },
+      { item: 'Product', qtyPerUnit: 2.25, unit: 'gal' }
+    ],
+    '16oz Case (4×6)': [
+      { item: '16oz Cans', qtyPerUnit: 24, unit: 'each' },
+      { item: 'Can Ends', qtyPerUnit: 24, unit: 'each' },
+      { item: '4-pack Carriers', qtyPerUnit: 6, unit: 'each' },
+      { item: 'Case Trays', qtyPerUnit: 1, unit: 'each' },
+      { item: 'Product', qtyPerUnit: 3, unit: 'gal' }
+    ],
+    '12oz 6-pack': [
+      { item: '12oz Cans', qtyPerUnit: 6, unit: 'each' },
+      { item: 'Can Ends', qtyPerUnit: 6, unit: 'each' },
+      { item: '6-pack Carriers', qtyPerUnit: 1, unit: 'each' },
+      { item: 'Product', qtyPerUnit: 0.5625, unit: 'gal' }
+    ],
+    '16oz 4-pack': [
+      { item: '16oz Cans', qtyPerUnit: 4, unit: 'each' },
+      { item: 'Can Ends', qtyPerUnit: 4, unit: 'each' },
+      { item: '4-pack Carriers', qtyPerUnit: 1, unit: 'each' },
+      { item: 'Product', qtyPerUnit: 0.5, unit: 'gal' }
+    ],
+    'Growler': [
+      { item: 'Growler', qtyPerUnit: 1, unit: 'each' },
+      { item: 'Growler Cap', qtyPerUnit: 1, unit: 'each' },
+      { item: 'Product', qtyPerUnit: 0.5, unit: 'gal' }
+    ],
+    'Crowler': [
+      { item: 'Crowler Can', qtyPerUnit: 1, unit: 'each' },
+      { item: 'Can End', qtyPerUnit: 1, unit: 'each' },
+      { item: 'Product', qtyPerUnit: 0.25, unit: 'gal' }
+    ]
+  };
+  
+  return serializeForHtml({
+    success: true,
+    components: packageComponents[packageType] || []
+  });
+}
+
+/**
+ * Log gravity and pH reading (Plato scale)
+ * @param {string} batchNumber - Batch number
+ * @param {Object} data - { plato, pH, temperature, vessel, notes }
+ */
+function logGravityReading(batchNumber, data) {
+  try {
+    var plato = parseFloat(data.plato) || null;
+    var pH = parseFloat(data.pH) || null;
+    var temperature = parseFloat(data.temperature) || null;
+    var vessel = data.vessel || '';
+    var notes = data.notes || '';
+    
+    if (plato === null && pH === null) {
+      return { success: false, error: 'At least one reading (Plato or pH) is required' };
+    }
+    
+    var description = 'Gravity/pH reading';
+    if (plato !== null && pH !== null) {
+      description = plato.toFixed(1) + '°P, pH ' + pH.toFixed(2);
+    } else if (plato !== null) {
+      description = plato.toFixed(1) + '°P';
+    } else if (pH !== null) {
+      description = 'pH ' + pH.toFixed(2);
+    }
+    
+    var notesText = '';
+    if (temperature !== null) {
+      notesText += 'Temp: ' + temperature + '°F. ';
+    }
+    if (vessel) {
+      notesText += 'Vessel: ' + vessel + '. ';
+    }
+    notesText += notes;
+    
+    // Store both values in notes for retrieval
+    var fullNotes = 'Plato: ' + (plato !== null ? plato.toFixed(2) : 'N/A') + 
+                    ', pH: ' + (pH !== null ? pH.toFixed(2) : 'N/A') + 
+                    '. ' + notesText;
+    
+    return addBatchEntry(batchNumber, 'Gravity', {
+      description: description,
+      value: plato !== null ? plato : pH,
+      units: plato !== null ? '°P' : 'pH',
+      vessel: vessel,
+      notes: fullNotes
+    });
+    
+  } catch (e) {
+    Logger.log('Error logging gravity reading: ' + e.toString());
+    return { success: false, error: e.toString() };
+  }
 }
 
 
@@ -8913,7 +9313,83 @@ function setupBatchLogColumns() {
  * HTML calls confirmBrewStartEnhanced, but new function is startBrew
  */
 function confirmBrewStartEnhanced(brewerData) {
-  return startBrew(brewerData);
+  var result = startBrew(brewerData);
+  
+  // If Turn 1 and Turn 2 brewers are provided, update Brewers column with "Turn 1 / Turn 2" format
+  if (result.success && brewerData.turn1Brewer && brewerData.turn2Brewer) {
+    try {
+      var ss = getBrmSpreadsheet();
+      var batchSheet = ss.getSheetByName(SHEETS.BATCH_LOG);
+      if (batchSheet) {
+        var data = batchSheet.getDataRange().getValues();
+        var headers = data[0] || [];
+        var brewersCol = -1;
+        
+        for (var i = 0; i < headers.length; i++) {
+          if (headers[i] && headers[i].toString().toLowerCase().includes('brewer')) {
+            brewersCol = i + 1;
+            break;
+          }
+        }
+        
+        if (brewersCol > 0) {
+          for (var i = 1; i < data.length; i++) {
+            if (data[i][0] && data[i][0].toString() === result.batchNumber) {
+              var brewersStr = brewerData.turn1Brewer + ' / ' + brewerData.turn2Brewer;
+              batchSheet.getRange(i + 1, brewersCol).setValue(brewersStr);
+              break;
+            }
+          }
+        }
+      }
+    } catch (e) {
+      Logger.log('Warning: Could not update Brewers column: ' + e.toString());
+    }
+  }
+  
+  return result;
+}
+
+/**
+ * Update Batch Brewers column with Turn 1 / Turn 2 format
+ */
+function updateBatchBrewers(batchNumber, brewersString) {
+  try {
+    var ss = getBrmSpreadsheet();
+    var batchSheet = ss.getSheetByName(SHEETS.BATCH_LOG);
+    
+    if (!batchSheet) {
+      return { success: false, error: 'Batch Log not found' };
+    }
+    
+    var data = batchSheet.getDataRange().getValues();
+    var headers = data[0] || [];
+    var brewersCol = -1;
+    
+    for (var i = 0; i < headers.length; i++) {
+      if (headers[i] && headers[i].toString().toLowerCase().includes('brewer')) {
+        brewersCol = i + 1;
+        break;
+      }
+    }
+    
+    if (brewersCol <= 0) {
+      return { success: false, error: 'Brewers column not found' };
+    }
+    
+    for (var i = 1; i < data.length; i++) {
+      if (data[i][0] && data[i][0].toString() === batchNumber) {
+        batchSheet.getRange(i + 1, brewersCol).setValue(brewersString);
+        return { success: true, message: 'Brewers column updated' };
+      }
+    }
+    
+    return { success: false, error: 'Batch not found: ' + batchNumber };
+    
+  } catch (e) {
+    Logger.log('Error updating batch brewers: ' + e.toString());
+    return { success: false, error: e.toString() };
+  }
 }
 // ═══════════════════════════════════════════════════════════════════════════════
 // RED LEG BREWING - PERSISTENT BATCH SHEET SYSTEM
@@ -9050,6 +9526,669 @@ function getBatchSheet(batchNumber) {
     
   } catch (e) {
     Logger.log('Error getting batch sheet: ' + e.toString());
+    return { success: false, error: e.toString() };
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// TASK MANAGEMENT SYSTEM
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Ensure Batch Tasks sheet exists with proper structure
+ */
+function ensureBatchTasksSheet() {
+  try {
+    var ss = getBrmSpreadsheet();
+    var sheet = ss.getSheetByName(SHEETS.BATCH_TASKS);
+    
+    if (!sheet) {
+      sheet = ss.insertSheet(SHEETS.BATCH_TASKS);
+      
+      var headers = [
+        'Task ID',           // A - Auto-generated unique ID
+        'Batch Number',      // B - Links to Batch Log
+        'Task Type',         // C - Dropdown
+        'Task Name',         // D - Display name
+        'Assigned To',       // E - Brewer name
+        'Due Date',          // F - Expected completion
+        'Status',            // G - Planned/In Progress/Completed
+        'Completed By',      // H - Who marked complete
+        'Completed Date',    // I - When completed
+        'Volume In',         // J - BBL in (for transfers)
+        'Volume Out',        // K - BBL out (for transfers)
+        'Loss Reason',       // L - Dropdown
+        'Notes',             // M - Task notes/instructions
+        'Materials JSON',    // N - JSON array of materials
+        'Created Date',      // O - When created
+        'Created By'         // P - Who created
+      ];
+      
+      sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+      sheet.getRange(1, 1, 1, headers.length)
+        .setFontWeight('bold')
+        .setBackground('#1a365d')
+        .setFontColor('white');
+      sheet.setFrozenRows(1);
+      
+      // Column widths
+      sheet.setColumnWidth(1, 100);  // Task ID
+      sheet.setColumnWidth(2, 120);  // Batch Number
+      sheet.setColumnWidth(3, 120);  // Task Type
+      sheet.setColumnWidth(4, 200);  // Task Name
+      sheet.setColumnWidth(5, 120);  // Assigned To
+      sheet.setColumnWidth(6, 100);  // Due Date
+      sheet.setColumnWidth(7, 100);  // Status
+      sheet.setColumnWidth(8, 120);  // Completed By
+      sheet.setColumnWidth(9, 120);  // Completed Date
+      sheet.setColumnWidth(10, 80);  // Volume In
+      sheet.setColumnWidth(11, 80);  // Volume Out
+      sheet.setColumnWidth(12, 120); // Loss Reason
+      sheet.setColumnWidth(13, 300); // Notes
+      sheet.setColumnWidth(14, 400); // Materials JSON
+      sheet.setColumnWidth(15, 100); // Created Date
+      sheet.setColumnWidth(16, 120); // Created By
+      
+      Logger.log('Created Batch Tasks sheet');
+    }
+    
+    return sheet;
+  } catch (e) {
+    Logger.log('Error ensuring Batch Tasks sheet: ' + e.toString());
+    return null;
+  }
+}
+
+/**
+ * Generate unique Task ID
+ */
+function generateTaskId(batchNumber) {
+  try {
+    var ss = getBrmSpreadsheet();
+    var sheet = ss.getSheetByName(SHEETS.BATCH_TASKS);
+    if (!sheet) {
+      ensureBatchTasksSheet();
+      sheet = ss.getSheetByName(SHEETS.BATCH_TASKS);
+    }
+    
+    var data = sheet.getDataRange().getValues();
+    var taskCount = data.length - 1; // Exclude header
+    var taskId = 'TASK-' + batchNumber + '-' + String(taskCount + 1).padStart(3, '0');
+    
+    return taskId;
+  } catch (e) {
+    // Fallback if sheet doesn't exist
+    return 'TASK-' + batchNumber + '-' + Date.now();
+  }
+}
+
+/**
+ * CREATE BATCH TASK
+ */
+function createBatchTask(batchNumber, taskData) {
+  try {
+    var sheet = ensureBatchTasksSheet();
+    if (!sheet) {
+      return { success: false, error: 'Could not create Batch Tasks sheet' };
+    }
+    
+    var taskId = generateTaskId(batchNumber);
+    var user = getCurrentUser();
+    var now = new Date();
+    
+    var row = [
+      taskId,                                    // A: Task ID
+      batchNumber,                               // B: Batch Number
+      taskData.taskType || '',                   // C: Task Type
+      taskData.taskName || taskData.taskType || '', // D: Task Name
+      taskData.assignedTo || '',                 // E: Assigned To
+      taskData.dueDate || '',                    // F: Due Date
+      taskData.status || 'Planned',              // G: Status
+      '',                                        // H: Completed By
+      '',                                        // I: Completed Date
+      taskData.volumeIn || '',                  // J: Volume In
+      taskData.volumeOut || '',                 // K: Volume Out
+      taskData.lossReason || '',                // L: Loss Reason
+      taskData.notes || '',                     // M: Notes
+      JSON.stringify(taskData.materials || []), // N: Materials JSON
+      now,                                       // O: Created Date
+      user.name                                  // P: Created By
+    ];
+    
+    sheet.appendRow(row);
+    
+    return serializeForHtml({
+      success: true,
+      taskId: taskId,
+      message: 'Task created successfully'
+    });
+  } catch (e) {
+    Logger.log('Error creating batch task: ' + e.toString());
+    return { success: false, error: e.toString() };
+  }
+}
+
+/**
+ * GET BATCH TASKS
+ */
+function getBatchTasks(batchNumber) {
+  try {
+    var sheet = ensureBatchTasksSheet();
+    if (!sheet) {
+      return serializeForHtml({ success: true, tasks: [] });
+    }
+    
+    var data = sheet.getDataRange().getValues();
+    if (data.length <= 1) {
+      return serializeForHtml({ success: true, tasks: [] });
+    }
+    
+    var headers = data[0];
+    var tasks = [];
+    
+    for (var i = 1; i < data.length; i++) {
+      if (data[i][1] && data[i][1].toString() === batchNumber) {
+        var materialsJson = data[i][13] || '[]';
+        var materials = [];
+        try {
+          materials = JSON.parse(materialsJson);
+        } catch (e) {
+          materials = [];
+        }
+        
+        tasks.push({
+          taskId: data[i][0],
+          batchNumber: data[i][1],
+          taskType: data[i][2],
+          taskName: data[i][3],
+          assignedTo: data[i][4],
+          dueDate: data[i][5],
+          status: data[i][6],
+          completedBy: data[i][7],
+          completedDate: data[i][8],
+          volumeIn: data[i][9],
+          volumeOut: data[i][10],
+          lossReason: data[i][11],
+          notes: data[i][12],
+          materials: materials,
+          createdDate: data[i][14],
+          createdBy: data[i][15]
+        });
+      }
+    }
+    
+    return serializeForHtml({
+      success: true,
+      tasks: tasks
+    });
+  } catch (e) {
+    Logger.log('Error getting batch tasks: ' + e.toString());
+    return { success: false, error: e.toString() };
+  }
+}
+
+/**
+ * UPDATE BATCH TASK
+ */
+function updateBatchTask(taskId, updates) {
+  try {
+    var sheet = ensureBatchTasksSheet();
+    if (!sheet) {
+      return { success: false, error: 'Batch Tasks sheet not found' };
+    }
+    
+    var data = sheet.getDataRange().getValues();
+    var taskRow = -1;
+    
+    for (var i = 1; i < data.length; i++) {
+      if (data[i][0] && data[i][0].toString() === taskId) {
+        taskRow = i + 1;
+        break;
+      }
+    }
+    
+    if (taskRow === -1) {
+      return { success: false, error: 'Task not found: ' + taskId };
+    }
+    
+    // Update fields (preserve existing if not provided)
+    if (updates.taskType !== undefined) sheet.getRange(taskRow, 3).setValue(updates.taskType);
+    if (updates.taskName !== undefined) sheet.getRange(taskRow, 4).setValue(updates.taskName);
+    if (updates.assignedTo !== undefined) sheet.getRange(taskRow, 5).setValue(updates.assignedTo);
+    if (updates.dueDate !== undefined) sheet.getRange(taskRow, 6).setValue(updates.dueDate);
+    if (updates.status !== undefined) sheet.getRange(taskRow, 7).setValue(updates.status);
+    if (updates.volumeIn !== undefined) {
+      if (updates.volumeIn === null || updates.volumeIn === '') {
+        sheet.getRange(taskRow, 10).setValue('');
+      } else {
+        sheet.getRange(taskRow, 10).setValue(updates.volumeIn);
+      }
+    }
+    if (updates.volumeOut !== undefined) {
+      if (updates.volumeOut === null || updates.volumeOut === '') {
+        sheet.getRange(taskRow, 11).setValue('');
+      } else {
+        sheet.getRange(taskRow, 11).setValue(updates.volumeOut);
+      }
+    }
+    if (updates.lossReason !== undefined) sheet.getRange(taskRow, 12).setValue(updates.lossReason);
+    if (updates.notes !== undefined) sheet.getRange(taskRow, 13).setValue(updates.notes);
+    if (updates.materials !== undefined) {
+      sheet.getRange(taskRow, 14).setValue(JSON.stringify(updates.materials));
+    }
+    if (updates.packageType !== undefined) {
+      // Store in notes or create new column - for now, store in notes
+      var currentNotes = sheet.getRange(taskRow, 13).getValue();
+      if (currentNotes && currentNotes.indexOf('Package Type:') === -1) {
+        sheet.getRange(taskRow, 13).setValue(currentNotes + (currentNotes ? ' | ' : '') + 'Package Type: ' + updates.packageType);
+      }
+    }
+    if (updates.packageQty !== undefined) {
+      var currentNotes = sheet.getRange(taskRow, 13).getValue();
+      if (currentNotes && currentNotes.indexOf('Package Qty:') === -1) {
+        sheet.getRange(taskRow, 13).setValue(currentNotes + (currentNotes ? ' | ' : '') + 'Package Qty: ' + updates.packageQty);
+      }
+    }
+    
+    return { success: true, message: 'Task updated successfully' };
+  } catch (e) {
+    Logger.log('Error updating batch task: ' + e.toString());
+    return { success: false, error: e.toString() };
+  }
+}
+
+/**
+ * COMPLETE BATCH TASK
+ * Marks task as complete and handles material depletion
+ */
+function completeBatchTask(taskId, completionData) {
+  try {
+    var sheet = ensureBatchTasksSheet();
+    if (!sheet) {
+      return { success: false, error: 'Batch Tasks sheet not found' };
+    }
+    
+    var data = sheet.getDataRange().getValues();
+    var taskRow = -1;
+    var task = null;
+    
+    for (var i = 1; i < data.length; i++) {
+      if (data[i][0] && data[i][0].toString() === taskId) {
+        taskRow = i + 1;
+        var materialsJson = data[i][13] || '[]';
+        var materials = [];
+        try {
+          materials = JSON.parse(materialsJson);
+        } catch (e) {
+          materials = [];
+        }
+        
+        task = {
+          taskId: data[i][0],
+          batchNumber: data[i][1],
+          taskType: data[i][2],
+          taskName: data[i][3],
+          materials: materials,
+          materialsDepletedBy: completionData.materialsDepletedBy || null
+        };
+        break;
+      }
+    }
+    
+    if (!task) {
+      return { success: false, error: 'Task not found: ' + taskId };
+    }
+    
+    var user = getCurrentUser();
+    var now = new Date();
+    
+    // Update task status
+    sheet.getRange(taskRow, 7).setValue('Completed');  // Status
+    sheet.getRange(taskRow, 8).setValue(user.name);    // Completed By
+    sheet.getRange(taskRow, 9).setValue(now);          // Completed Date
+    
+    // Update volume if provided
+    if (completionData.volumeOut !== undefined) {
+      sheet.getRange(taskRow, 11).setValue(completionData.volumeOut);
+    }
+    if (completionData.lossReason !== undefined) {
+      sheet.getRange(taskRow, 12).setValue(completionData.lossReason);
+    }
+    
+    // Deplete materials if not already depleted
+    if (task.materials && task.materials.length > 0 && 
+        (!task.materialsDepletedBy || task.materialsDepletedBy === 'task')) {
+      for (var m = 0; m < task.materials.length; m++) {
+        var mat = task.materials[m];
+        if (mat.actualQty && mat.actualQty > 0) {
+          depleteRawMaterial(mat.item, mat.actualQty, task.batchNumber);
+        }
+      }
+    }
+    
+    // Log to Batch Details
+    addBatchEntry(task.batchNumber, 'Task', {
+      description: task.taskName || task.taskType,
+      notes: 'Task completed: ' + (completionData.notes || '')
+    });
+    
+    return { success: true, message: 'Task completed successfully' };
+  } catch (e) {
+    Logger.log('Error completing batch task: ' + e.toString());
+    return { success: false, error: e.toString() };
+  }
+}
+
+/**
+ * DELETE BATCH TASK
+ */
+function deleteBatchTask(taskId) {
+  try {
+    var sheet = ensureBatchTasksSheet();
+    if (!sheet) {
+      return { success: false, error: 'Batch Tasks sheet not found' };
+    }
+    
+    var data = sheet.getDataRange().getValues();
+    var taskRow = -1;
+    
+    for (var i = 1; i < data.length; i++) {
+      if (data[i][0] && data[i][0].toString() === taskId) {
+        taskRow = i + 1;
+        break;
+      }
+    }
+    
+    if (taskRow === -1) {
+      return { success: false, error: 'Task not found: ' + taskId };
+    }
+    
+    sheet.deleteRow(taskRow);
+    
+    return { success: true, message: 'Task deleted successfully' };
+  } catch (e) {
+    Logger.log('Error deleting batch task: ' + e.toString());
+    return { success: false, error: e.toString() };
+  }
+}
+
+/**
+ * ASSIGN BATCH TASK
+ */
+function assignBatchTask(taskId, assignee) {
+  try {
+    return updateBatchTask(taskId, { assignedTo: assignee });
+  } catch (e) {
+    Logger.log('Error assigning batch task: ' + e.toString());
+    return { success: false, error: e.toString() };
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// RECIPE TASK TEMPLATES
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Ensure Recipe Task Templates sheet exists
+ */
+function ensureRecipeTaskTemplatesSheet() {
+  try {
+    var ss = getBrmSpreadsheet();
+    var sheet = ss.getSheetByName(SHEETS.RECIPE_TASK_TEMPLATES);
+    
+    if (!sheet) {
+      sheet = ss.insertSheet(SHEETS.RECIPE_TASK_TEMPLATES);
+      
+      var headers = [
+        'Template ID',      // A - Auto-generated
+        'Recipe Name',      // B - Links to Recipes
+        'Task Type',        // C - Dropdown
+        'Task Name',        // D - Default name
+        'Day Offset',       // E - Days after brew (0=brew day)
+        'Default Assigned To', // F - Optional brewer
+        'Default Materials',   // G - JSON array
+        'Default Notes',       // H - Instructions
+        'Sort Order',          // I - Display order
+        'Active',              // J - TRUE/FALSE
+        'Created Date',        // K
+        'Created By'           // L
+      ];
+      
+      sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+      sheet.getRange(1, 1, 1, headers.length)
+        .setFontWeight('bold')
+        .setBackground('#1a365d')
+        .setFontColor('white');
+      sheet.setFrozenRows(1);
+      
+      Logger.log('Created Recipe Task Templates sheet');
+    }
+    
+    return sheet;
+  } catch (e) {
+    Logger.log('Error ensuring Recipe Task Templates sheet: ' + e.toString());
+    return null;
+  }
+}
+
+/**
+ * GET RECIPE TASK TEMPLATES
+ */
+function getRecipeTaskTemplates(recipeName) {
+  try {
+    var sheet = ensureRecipeTaskTemplatesSheet();
+    if (!sheet) {
+      return serializeForHtml({ success: true, templates: [] });
+    }
+    
+    var data = sheet.getDataRange().getValues();
+    if (data.length <= 1) {
+      return serializeForHtml({ success: true, templates: [] });
+    }
+    
+    var templates = [];
+    for (var i = 1; i < data.length; i++) {
+      if (data[i][1] && data[i][1].toString() === recipeName && 
+          (data[i][9] === true || data[i][9] === 'TRUE')) { // Active
+        var materialsJson = data[i][6] || '[]';
+        var materials = [];
+        try {
+          materials = JSON.parse(materialsJson);
+        } catch (e) {
+          materials = [];
+        }
+        
+        templates.push({
+          templateId: data[i][0],
+          recipeName: data[i][1],
+          taskType: data[i][2],
+          taskName: data[i][3],
+          dayOffset: data[i][4],
+          defaultAssignedTo: data[i][5],
+          defaultMaterials: materials,
+          defaultNotes: data[i][7],
+          sortOrder: data[i][8] || 0,
+          active: data[i][9],
+          createdDate: data[i][10],
+          createdBy: data[i][11]
+        });
+      }
+    }
+    
+    // Sort by sort order
+    templates.sort(function(a, b) {
+      return (a.sortOrder || 0) - (b.sortOrder || 0);
+    });
+    
+    return serializeForHtml({
+      success: true,
+      templates: templates
+    });
+  } catch (e) {
+    Logger.log('Error getting recipe task templates: ' + e.toString());
+    return { success: false, error: e.toString() };
+  }
+}
+
+/**
+ * CREATE TASKS FROM TEMPLATES
+ * Called when Start Brew is clicked
+ */
+function createTasksFromTemplates(batchNumber, recipeName, brewDate) {
+  try {
+    var templatesResult = getRecipeTaskTemplates(recipeName);
+    if (!templatesResult.success || !templatesResult.templates || templatesResult.templates.length === 0) {
+      return { success: true, message: 'No task templates for this recipe', tasksCreated: 0 };
+    }
+    
+    var brewDateObj = brewDate instanceof Date ? brewDate : new Date(brewDate);
+    var tasksCreated = 0;
+    
+    templatesResult.templates.forEach(function(template) {
+      var dueDate = new Date(brewDateObj);
+      dueDate.setDate(dueDate.getDate() + (template.dayOffset || 0));
+      
+      var taskData = {
+        taskType: template.taskType,
+        taskName: template.taskName || template.taskType,
+        assignedTo: template.defaultAssignedTo || '',
+        dueDate: dueDate.toISOString().split('T')[0],
+        status: 'Planned',
+        notes: template.defaultNotes || '',
+        materials: template.defaultMaterials || []
+      };
+      
+      var result = createBatchTask(batchNumber, taskData);
+      if (result.success) {
+        tasksCreated++;
+      }
+    });
+    
+    Logger.log('Created ' + tasksCreated + ' tasks from templates for ' + recipeName);
+    
+    return {
+      success: true,
+      tasksCreated: tasksCreated,
+      message: 'Created ' + tasksCreated + ' tasks from templates'
+    };
+  } catch (e) {
+    Logger.log('Error creating tasks from templates: ' + e.toString());
+    return { success: false, error: e.toString() };
+  }
+}
+
+/**
+ * ADD RECIPE TASK TEMPLATE
+ */
+function addRecipeTaskTemplate(recipeName, templateData) {
+  try {
+    var sheet = ensureRecipeTaskTemplatesSheet();
+    if (!sheet) {
+      return { success: false, error: 'Could not create Recipe Task Templates sheet' };
+    }
+    
+    var templateId = 'TEMPLATE-' + recipeName + '-' + Date.now();
+    var user = getCurrentUser();
+    var now = new Date();
+    
+    var row = [
+      templateId,                                    // A: Template ID
+      recipeName,                                    // B: Recipe Name
+      templateData.taskType || '',                   // C: Task Type
+      templateData.taskName || templateData.taskType || '', // D: Task Name
+      templateData.dayOffset || 0,                   // E: Day Offset
+      templateData.defaultAssignedTo || '',           // F: Default Assigned To
+      JSON.stringify(templateData.defaultMaterials || []), // G: Default Materials
+      templateData.defaultNotes || '',               // H: Default Notes
+      templateData.sortOrder || 0,                   // I: Sort Order
+      true,                                          // J: Active
+      now,                                           // K: Created Date
+      user.name                                      // L: Created By
+    ];
+    
+    sheet.appendRow(row);
+    
+    return serializeForHtml({
+      success: true,
+      templateId: templateId,
+      message: 'Template created successfully'
+    });
+  } catch (e) {
+    Logger.log('Error creating recipe task template: ' + e.toString());
+    return { success: false, error: e.toString() };
+  }
+}
+
+/**
+ * UPDATE RECIPE TASK TEMPLATE
+ */
+function updateRecipeTaskTemplate(templateId, updates) {
+  try {
+    var sheet = ensureRecipeTaskTemplatesSheet();
+    if (!sheet) {
+      return { success: false, error: 'Recipe Task Templates sheet not found' };
+    }
+    
+    var data = sheet.getDataRange().getValues();
+    var templateRow = -1;
+    
+    for (var i = 1; i < data.length; i++) {
+      if (data[i][0] && data[i][0].toString() === templateId) {
+        templateRow = i + 1;
+        break;
+      }
+    }
+    
+    if (templateRow === -1) {
+      return { success: false, error: 'Template not found: ' + templateId };
+    }
+    
+    // Update fields
+    if (updates.taskType !== undefined) sheet.getRange(templateRow, 3).setValue(updates.taskType);
+    if (updates.taskName !== undefined) sheet.getRange(templateRow, 4).setValue(updates.taskName);
+    if (updates.dayOffset !== undefined) sheet.getRange(templateRow, 5).setValue(updates.dayOffset);
+    if (updates.defaultAssignedTo !== undefined) sheet.getRange(templateRow, 6).setValue(updates.defaultAssignedTo);
+    if (updates.defaultMaterials !== undefined) sheet.getRange(templateRow, 7).setValue(JSON.stringify(updates.defaultMaterials));
+    if (updates.defaultNotes !== undefined) sheet.getRange(templateRow, 8).setValue(updates.defaultNotes);
+    if (updates.sortOrder !== undefined) sheet.getRange(templateRow, 9).setValue(updates.sortOrder);
+    if (updates.active !== undefined) sheet.getRange(templateRow, 10).setValue(updates.active);
+    
+    return { success: true, message: 'Template updated successfully' };
+  } catch (e) {
+    Logger.log('Error updating recipe task template: ' + e.toString());
+    return { success: false, error: e.toString() };
+  }
+}
+
+/**
+ * DELETE RECIPE TASK TEMPLATE
+ */
+function deleteRecipeTaskTemplate(templateId) {
+  try {
+    var sheet = ensureRecipeTaskTemplatesSheet();
+    if (!sheet) {
+      return { success: false, error: 'Recipe Task Templates sheet not found' };
+    }
+    
+    var data = sheet.getDataRange().getValues();
+    var templateRow = -1;
+    
+    for (var i = 1; i < data.length; i++) {
+      if (data[i][0] && data[i][0].toString() === templateId) {
+        templateRow = i + 1;
+        break;
+      }
+    }
+    
+    if (templateRow === -1) {
+      return { success: false, error: 'Template not found: ' + templateId };
+    }
+    
+    sheet.deleteRow(templateRow);
+    
+    return { success: true, message: 'Template deleted successfully' };
+  } catch (e) {
+    Logger.log('Error deleting recipe task template: ' + e.toString());
     return { success: false, error: e.toString() };
   }
 }
@@ -11410,7 +12549,9 @@ function assignBrewLabor(batchNumber, brewers, batchesBrewedToday) {
     
     // Update batch with brew labor
     batchSheet.getRange(batchRow, brewLaborCol).setValue(laborCalc.perBatchCost);
-    batchSheet.getRange(batchRow, brewersCol).setValue(brewers.join(', '));
+    // Format brewers as "Turn 1 / Turn 2" if provided, otherwise join with comma
+    var brewersStr = brewers.length === 2 ? brewers.join(' / ') : brewers.join(', ');
+    batchSheet.getRange(batchRow, brewersCol).setValue(brewersStr);
     
     // Also update the Labor $ column (G) and Labor Hrs (F)
     var hoursPerBatch = STANDARD_SHIFT_HOURS / Math.max(1, batchesBrewedToday);
@@ -11708,9 +12849,45 @@ function sendItWithActualLabor(batchNumber, packageBreakdown, currentVessel, pac
       }
     }
     
-    // Calculate FINAL total cost with ACTUAL labor
+    // Get task material costs
+    var taskMaterialCost = 0;
+    try {
+      var tasksResult = getBatchTasks(batchNumber);
+      if (tasksResult.success && tasksResult.tasks) {
+        var rmResult = getRawMaterialsInventory({});
+        var materialsLookup = {};
+        if (rmResult.success && rmResult.materials) {
+          rmResult.materials.forEach(function(m) {
+            materialsLookup[m.item] = m.avgCost || 0;
+          });
+        }
+        
+        tasksResult.tasks.forEach(function(task) {
+          if (task.status === 'Completed' && task.materials && task.materials.length > 0) {
+            task.materials.forEach(function(mat) {
+              var unitCost = materialsLookup[mat.item] || 0;
+              var qty = 0;
+              
+              if (mat.isPackaging) {
+                // For packaging, deduct actual + waste
+                qty = (mat.actualQty || 0) + (mat.wasteQty || 0);
+              } else {
+                // Regular materials - use actual quantity
+                qty = mat.actualQty || mat.quantity || 0;
+              }
+              
+              taskMaterialCost += qty * unitCost;
+            });
+          }
+        });
+      }
+    } catch (taskError) {
+      Logger.log('Warning: Could not calculate task material costs: ' + taskError.toString());
+    }
+    
+    // Calculate FINAL total cost with ACTUAL labor + task materials
     var totalLabor = brewLabor + cellarLabor + pkgLabor;
-    var totalCost = recipeCost + totalLabor + overhead;
+    var totalCost = recipeCost + totalLabor + overhead + taskMaterialCost;
     
     // Calculate efficiency and COGS/BBL
     var efficiency = expectedYield > 0 ? (actualYield / expectedYield * 100) : 0;
@@ -11725,12 +12902,15 @@ function sendItWithActualLabor(batchNumber, packageBreakdown, currentVessel, pac
     batchSheet.getRange(batchRow, 14).setValue(cogsPerBBL);          // N: Cost/BBL
     batchSheet.getRange(batchRow, 15).setValue(variance);            // O: Variance
     
-    // Append labor breakdown to notes
+    // Append labor and task material breakdown to notes
     var existingNotes = batchData[15] || '';
     var laborNote = ' | Labor: Brew $' + brewLabor.toFixed(0) + 
                     ' + Cellar $' + cellarLabor.toFixed(0) + 
                     ' + Pkg $' + pkgLabor.toFixed(0) + 
                     ' = $' + totalLabor.toFixed(0);
+    if (taskMaterialCost > 0) {
+      laborNote += ' | Task Materials: $' + taskMaterialCost.toFixed(2);
+    }
     batchSheet.getRange(batchRow, 16).setValue(existingNotes + laborNote);
     
     // Add to Finished Goods
@@ -11766,7 +12946,8 @@ function sendItWithActualLabor(batchNumber, packageBreakdown, currentVessel, pac
     }
     
     Logger.log('🚀 SEND IT! ' + batchNumber + ' complete. COGS/BBL: $' + cogsPerBBL.toFixed(2) + 
-               ' (Ingredients: $' + recipeCost.toFixed(2) + ', Labor: $' + totalLabor.toFixed(2) + ', OH: $' + overhead.toFixed(2) + ')');
+               ' (Ingredients: $' + recipeCost.toFixed(2) + ', Labor: $' + totalLabor.toFixed(2) + 
+               ', Task Materials: $' + taskMaterialCost.toFixed(2) + ', OH: $' + overhead.toFixed(2) + ')');
     
     return serializeForHtml({
       success: true,
@@ -11781,6 +12962,14 @@ function sendItWithActualLabor(batchNumber, packageBreakdown, currentVessel, pac
         cellar: cellarLabor,
         packaging: pkgLabor,
         total: totalLabor
+      },
+      taskMaterialCost: taskMaterialCost,
+      costBreakdown: {
+        ingredients: recipeCost,
+        labor: totalLabor,
+        taskMaterials: taskMaterialCost,
+        overhead: overhead,
+        total: totalCost
       },
       fgUpdated: fgResult.success,
       archived: archiveResult.success,
@@ -12485,11 +13674,17 @@ function logBrewLabor(batchNumber, employeeName, hours, workDate) {
     batchSheet.getRange(batchRow, laborCostCol).setValue(existingCost + laborCost);
     
     // Update brewer name if column exists
+    // Only update if it doesn't already contain this brewer (to preserve Turn 1 / Turn 2 format)
     if (brewerCol > 0) {
       var existingBrewers = batchSheet.getRange(batchRow, brewerCol).getValue() || '';
       if (!existingBrewers.toString().includes(employeeName)) {
-        var newBrewers = existingBrewers ? existingBrewers + ', ' + employeeName : employeeName;
-        batchSheet.getRange(batchRow, brewerCol).setValue(newBrewers);
+        // If format is "Turn 1 / Turn 2", preserve it; otherwise append
+        if (existingBrewers.toString().indexOf(' / ') !== -1) {
+          // Already has Turn format, don't modify
+        } else {
+          var newBrewers = existingBrewers ? existingBrewers + ', ' + employeeName : employeeName;
+          batchSheet.getRange(batchRow, brewerCol).setValue(newBrewers);
+        }
       }
     }
     
@@ -13896,6 +15091,155 @@ function updateFinishedGoodsItem(data) {
     
   } catch (e) {
     Logger.log('Error adding brew labor entry: ' + e.toString());
+    return { success: false, error: e.toString() };
+  }
+}
+// ══════════════════════════════════════════════════════════════════════════════
+// RED LEG BRM - EDIT MODAL BACKEND FUNCTIONS
+// PASTE THIS AT THE END OF YOUR Code.js FILE (before the final closing brace if any)
+// ══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Update a Finished Goods item from the BRM UI edit modal
+ * Called by saveEditFG() in BRM_UI.html
+ */
+function updateFinishedGoodsItem(data) {
+  try {
+    var ss = SpreadsheetApp.openById('1bbbvYjFRO5peYuMPNaxcl10X--Wg5RjjJvs_No4Ch16WjpfO80oP-tqJ');
+    var sheet = ss.getSheetByName('FG Inventory') || ss.getSheetByName('Finished Goods');
+    if (!sheet) return { success: false, error: 'Finished Goods sheet not found' };
+    
+    var dataRange = sheet.getDataRange();
+    var values = dataRange.getValues();
+    var headers = values[0];
+    
+    // Find column indices
+    var beerCol = -1, pkgCol = -1, qtyCol = -1, minCol = -1, costCol = -1, totalCol = -1, statusCol = -1;
+    for (var c = 0; c < headers.length; c++) {
+      var h = (headers[c] || '').toString().toLowerCase();
+      if (h.indexOf('beer') !== -1 || h === 'name') beerCol = c;
+      if (h.indexOf('package') !== -1 || h.indexOf('type') !== -1) pkgCol = c;
+      if (h.indexOf('qty') !== -1 || h.indexOf('on hand') !== -1 || h.indexOf('quantity') !== -1) qtyCol = c;
+      if (h.indexOf('min') !== -1 || h.indexOf('reorder') !== -1) minCol = c;
+      if (h.indexOf('cost') !== -1 && h.indexOf('total') === -1) costCol = c;
+      if (h.indexOf('total') !== -1 || h.indexOf('value') !== -1) totalCol = c;
+      if (h.indexOf('status') !== -1) statusCol = c;
+    }
+    
+    // Find the row
+    for (var i = 1; i < values.length; i++) {
+      var rowBeer = (values[i][beerCol] || '').toString().trim();
+      var rowPkg = (values[i][pkgCol] || '').toString().trim();
+      
+      if (rowBeer.toLowerCase() === data.beer.toLowerCase() && 
+          rowPkg.toLowerCase() === data.package.toLowerCase()) {
+        
+        var qty = parseFloat(data.qtyOnHand) || 0;
+        var minQty = parseFloat(data.minQty) || 0;
+        var unitCost = parseFloat(data.unitCost) || 0;
+        var totalValue = qty * unitCost;
+        
+        // Determine status
+        var status = '✅ OK';
+        if (qty <= 0) status = '🚨 OUT';
+        else if (qty <= minQty) status = '⚠️ LOW';
+        
+        // Update cells
+        var rowNum = i + 1;
+        if (qtyCol >= 0) sheet.getRange(rowNum, qtyCol + 1).setValue(qty);
+        if (minCol >= 0) sheet.getRange(rowNum, minCol + 1).setValue(minQty);
+        if (costCol >= 0) sheet.getRange(rowNum, costCol + 1).setValue(unitCost);
+        if (totalCol >= 0) sheet.getRange(rowNum, totalCol + 1).setValue(totalValue);
+        if (statusCol >= 0) sheet.getRange(rowNum, statusCol + 1).setValue(status);
+        
+        // Log the change
+        try {
+          logFGAdjustment(data.beer, data.package, values[i][qtyCol], qty, 'EDIT', 'UI edit');
+        } catch(logErr) {
+          // Logging is optional
+        }
+        
+        return { success: true, message: 'Finished good updated' };
+      }
+    }
+    return { success: false, error: 'Item not found: ' + data.beer + ' / ' + data.package };
+  } catch (e) {
+    return { success: false, error: e.toString() };
+  }
+}
+
+/**
+ * Update a Raw Material item from the BRM UI edit modal
+ * Called by saveEditRM() in BRM_UI.html
+ */
+function updateRawMaterialItem(data) {
+  try {
+    var ss = SpreadsheetApp.openById('1bbbvYjFRO5peYuMPNaxcl10X--Wg5RjjJvs_No4Ch16WjpfO80oP-tqJ');
+    var sheet = ss.getSheetByName('Raw Materials');
+    if (!sheet) return { success: false, error: 'Raw Materials sheet not found' };
+    
+    var dataRange = sheet.getDataRange();
+    var values = dataRange.getValues();
+    var headers = values[0];
+    
+    // Find column indices
+    var itemCol = -1, catCol = -1, qtyCol = -1, unitCol = -1, costCol = -1;
+    var totalCol = -1, reorderPtCol = -1, reorderQtyCol = -1, statusCol = -1, supplierCol = -1, notesCol = -1;
+    
+    for (var c = 0; c < headers.length; c++) {
+      var h = (headers[c] || '').toString().toLowerCase();
+      if (h === 'item' || h === 'name' || h === 'material') itemCol = c;
+      if (h.indexOf('category') !== -1 || h === 'type') catCol = c;
+      if (h.indexOf('qty') !== -1 || h.indexOf('on hand') !== -1 || h.indexOf('quantity') !== -1) qtyCol = c;
+      if (h === 'unit' || h === 'uom') unitCol = c;
+      if ((h.indexOf('cost') !== -1 || h.indexOf('price') !== -1) && h.indexOf('total') === -1) costCol = c;
+      if (h.indexOf('total') !== -1 || h.indexOf('value') !== -1) totalCol = c;
+      if (h.indexOf('reorder') !== -1 && h.indexOf('point') !== -1) reorderPtCol = c;
+      if (h.indexOf('reorder') !== -1 && h.indexOf('qty') !== -1) reorderQtyCol = c;
+      if (h.indexOf('status') !== -1) statusCol = c;
+      if (h.indexOf('supplier') !== -1 || h.indexOf('vendor') !== -1) supplierCol = c;
+      if (h.indexOf('note') !== -1) notesCol = c;
+    }
+    
+    // Find the row
+    for (var i = 1; i < values.length; i++) {
+      var itemName = (values[i][itemCol] || '').toString().trim();
+      
+      if (itemName.toLowerCase() === data.item.toLowerCase()) {
+        var qty = parseFloat(data.qtyOnHand) || 0;
+        var avgCost = parseFloat(data.avgCost) || 0;
+        var reorderPoint = parseFloat(data.reorderPoint) || 0;
+        var reorderQty = parseFloat(data.reorderQty) || 0;
+        var totalValue = qty * avgCost;
+        
+        // Determine status
+        var status = '✅ OK';
+        if (qty <= 0) status = '🚨 OUT';
+        else if (reorderPoint > 0 && qty <= reorderPoint) status = '⚠️ REORDER';
+        
+        // Update cells
+        var rowNum = i + 1;
+        if (qtyCol >= 0) sheet.getRange(rowNum, qtyCol + 1).setValue(qty);
+        if (costCol >= 0) sheet.getRange(rowNum, costCol + 1).setValue(avgCost);
+        if (totalCol >= 0) sheet.getRange(rowNum, totalCol + 1).setValue(Math.round(totalValue * 100) / 100);
+        if (reorderPtCol >= 0) sheet.getRange(rowNum, reorderPtCol + 1).setValue(reorderPoint);
+        if (reorderQtyCol >= 0) sheet.getRange(rowNum, reorderQtyCol + 1).setValue(reorderQty);
+        if (statusCol >= 0) sheet.getRange(rowNum, statusCol + 1).setValue(status);
+        if (supplierCol >= 0 && data.supplier) sheet.getRange(rowNum, supplierCol + 1).setValue(data.supplier);
+        if (notesCol >= 0 && data.notes !== undefined) sheet.getRange(rowNum, notesCol + 1).setValue(data.notes);
+        
+        // Log the change
+        try {
+          logMaterialAdjustment(data.item, values[i][qtyCol], qty, 'UI edit', 'EDIT');
+        } catch(logErr) {
+          // Logging is optional
+        }
+        
+        return { success: true, message: 'Raw material updated' };
+      }
+    }
+    return { success: false, error: 'Item not found: ' + data.item };
+  } catch (e) {
     return { success: false, error: e.toString() };
   }
 }
