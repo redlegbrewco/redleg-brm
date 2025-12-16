@@ -1882,8 +1882,21 @@
           <input type="number" id="editRMQty" step="0.01" min="0">
         </div>
         <div class="form-group">
-          <label>Unit</label>
-          <input type="text" id="editRMUnit" readonly style="background:#f3f4f6;">
+          <label>Unit of Measure (UOM)</label>
+          <select id="editRMUnit" style="width:100%;padding:10px;border:1px solid #d1d5db;border-radius:6px;font-size:14px;">
+            <option value="lb">lb</option>
+            <option value="oz">oz</option>
+            <option value="kg">kg</option>
+            <option value="g">g</option>
+            <option value="ea">ea (each)</option>
+            <option value="gal">gal</option>
+            <option value="ml">ml</option>
+            <option value="L">L</option>
+            <option value="case">case</option>
+            <option value="pack">pack</option>
+            <option value="roll">roll</option>
+            <option value="sheet">sheet</option>
+          </select>
         </div>
       </div>
       <div class="form-group">
@@ -4441,6 +4454,7 @@
       var data = {
         item: document.getElementById('editRMItem').value,
         qtyOnHand: parseFloat(document.getElementById('editRMQty').value) || 0,
+        unit: document.getElementById('editRMUnit').value || 'lb',
         avgCost: parseFloat(document.getElementById('editRMCost').value) || 0,
         reorderPoint: parseFloat(document.getElementById('editRMReorderPoint').value) || 0,
         reorderQty: parseFloat(document.getElementById('editRMReorderQty').value) || 0,
@@ -4660,10 +4674,292 @@ function saveEditFG() {
     }
     
     function showNewPurchaseModal() {
-      showToast('Add purchases in Purchase Log sheet', 'info');
-      google.script.run.withSuccessHandler(function(url) {
-        if (url) window.open(url, '_blank');
-      }).getSheetUrl('Purchase Log');
+      // Load vendors and materials for dropdowns
+      google.script.run
+        .withSuccessHandler(function(vendorsResult) {
+          var vendors = vendorsResult.vendors || [];
+          var vendorOptions = '<option value="">-- Select Vendor --</option>';
+          vendors.forEach(function(v) {
+            vendorOptions += '<option value="' + escapeHtml(v) + '">' + escapeHtml(v) + '</option>';
+          });
+          
+          google.script.run
+            .withSuccessHandler(function(materialsResult) {
+              var materials = materialsResult.materials || [];
+              buildPurchaseModal(vendorOptions, materials);
+            })
+            .withFailureHandler(function() {
+              buildPurchaseModal(vendorOptions, []);
+            })
+            .getRawMaterialsInventory({});
+        })
+        .withFailureHandler(function() {
+          buildPurchaseModal('<option value="">-- Select Vendor --</option>', []);
+        })
+        .getVendors();
+    }
+    
+    function buildPurchaseModal(vendorOptions, materials) {
+      var materialOptions = '<option value="">-- Select Material --</option>';
+      materials.forEach(function(m) {
+        materialOptions += '<option value="' + escapeHtml(m.item) + '" data-unit="' + escapeHtml(m.unit || 'lb') + '">' + escapeHtml(m.item) + ' (' + escapeHtml(m.category || '') + ')</option>';
+      });
+      
+      var modalHtml = '<div id="newPurchaseModal" style="display:flex;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.6);z-index:3000;justify-content:center;align-items:center;">' +
+        '<div style="background:white;border-radius:12px;max-width:800px;width:90%;max-height:90vh;overflow-y:auto;">' +
+          '<div style="background:linear-gradient(135deg,#8B0000,#a50000);color:white;padding:20px;border-radius:12px 12px 0 0;">' +
+            '<div style="display:flex;justify-content:space-between;align-items:center;">' +
+              '<h3 style="margin:0;">🛒 New Purchase</h3>' +
+              '<button onclick="closePurchaseModal()" style="background:rgba(255,255,255,0.2);border:none;color:white;width:32px;height:32px;border-radius:50%;cursor:pointer;">✕</button>' +
+            '</div>' +
+          '</div>' +
+          '<div style="padding:24px;">' +
+            '<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;">' +
+              '<div>' +
+                '<label style="display:block;font-weight:600;margin-bottom:6px;color:#374151;">Vendor</label>' +
+                '<select id="purchaseVendor" style="width:100%;padding:10px;border:1px solid #d1d5db;border-radius:6px;font-size:14px;">' + vendorOptions + '</select>' +
+                '<input type="text" id="purchaseVendorText" placeholder="Or enter vendor name" style="width:100%;padding:10px;border:1px solid #d1d5db;border-radius:6px;font-size:14px;margin-top:8px;display:none;">' +
+                '<button type="button" onclick="toggleVendorInput()" style="margin-top:4px;padding:4px 8px;background:#e9ecef;border:none;border-radius:4px;cursor:pointer;font-size:12px;">+ New Vendor</button>' +
+              '</div>' +
+              '<div>' +
+                '<label style="display:block;font-weight:600;margin-bottom:6px;color:#374151;">Purchase Date</label>' +
+                '<input type="date" id="purchaseDate" value="' + new Date().toISOString().split('T')[0] + '" style="width:100%;padding:10px;border:1px solid #d1d5db;border-radius:6px;font-size:14px;">' +
+              '</div>' +
+            '</div>' +
+            '<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;">' +
+              '<div>' +
+                '<label style="display:block;font-weight:600;margin-bottom:6px;color:#374151;">Invoice/PO Number</label>' +
+                '<input type="text" id="purchasePONumber" placeholder="PO-12345" style="width:100%;padding:10px;border:1px solid #d1d5db;border-radius:6px;font-size:14px;">' +
+              '</div>' +
+              '<div></div>' +
+            '</div>' +
+            '<div style="margin-bottom:16px;">' +
+              '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">' +
+                '<label style="font-weight:600;color:#374151;">Line Items</label>' +
+                '<button type="button" onclick="addPurchaseLineItem()" style="padding:6px 12px;background:#10B981;color:white;border:none;border-radius:4px;cursor:pointer;font-size:12px;font-weight:600;">+ Add Item</button>' +
+              '</div>' +
+              '<div id="purchaseLineItems" style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;padding:12px;min-height:100px;">' +
+                '<div style="padding:8px;color:#9ca3af;font-size:13px;text-align:center;">No items added. Click "+ Add Item" to add line items.</div>' +
+              '</div>' +
+            '</div>' +
+            '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:16px;background:#f0f9ff;padding:16px;border-radius:6px;border:1px solid #0ea5e9;">' +
+              '<div>' +
+                '<label style="display:block;font-size:12px;font-weight:600;color:#374151;margin-bottom:4px;">Subtotal</label>' +
+                '<div id="purchaseSubtotal" style="font-size:18px;font-weight:bold;color:#0c4a6e;">$0.00</div>' +
+              '</div>' +
+              '<div>' +
+                '<label style="display:block;font-size:12px;font-weight:600;color:#374151;margin-bottom:4px;">Shipping</label>' +
+                '<input type="number" id="purchaseShipping" step="0.01" min="0" value="0" onchange="calculatePurchaseTotal()" placeholder="0.00" style="width:100%;padding:8px;border:1px solid #0ea5e9;border-radius:4px;font-size:14px;">' +
+              '</div>' +
+              '<div>' +
+                '<label style="display:block;font-size:12px;font-weight:600;color:#374151;margin-bottom:4px;">Tax</label>' +
+                '<input type="number" id="purchaseTax" step="0.01" min="0" value="0" onchange="calculatePurchaseTotal()" placeholder="0.00" style="width:100%;padding:8px;border:1px solid #0ea5e9;border-radius:4px;font-size:14px;">' +
+              '</div>' +
+            '</div>' +
+            '<div style="background:#fef3c7;padding:16px;border-radius:6px;border:2px solid #f59e0b;margin-bottom:16px;">' +
+              '<div style="display:flex;justify-content:space-between;align-items:center;">' +
+                '<label style="font-size:16px;font-weight:bold;color:#92400e;">Total</label>' +
+                '<div id="purchaseTotal" style="font-size:24px;font-weight:bold;color:#92400e;">$0.00</div>' +
+              '</div>' +
+            '</div>' +
+            '<div style="margin-bottom:16px;">' +
+              '<label style="display:block;font-weight:600;margin-bottom:6px;color:#374151;">Notes</label>' +
+              '<textarea id="purchaseNotes" rows="2" placeholder="Purchase notes, delivery info, etc." style="width:100%;padding:10px;border:1px solid #d1d5db;border-radius:6px;font-size:14px;"></textarea>' +
+            '</div>' +
+            '<div style="display:flex;gap:12px;justify-content:flex-end;margin-top:24px;">' +
+              '<button onclick="closePurchaseModal()" style="padding:10px 20px;background:#e9ecef;border:none;border-radius:6px;cursor:pointer;">Cancel</button>' +
+              '<button onclick="savePurchase()" style="padding:10px 24px;background:#8B0000;color:white;border:none;border-radius:6px;cursor:pointer;font-weight:bold;">💾 Save Purchase</button>' +
+            '</div>' +
+          '</div>' +
+        '</div>' +
+      '</div>';
+      
+      var existing = document.getElementById('newPurchaseModal');
+      if (existing) existing.remove();
+      document.body.insertAdjacentHTML('beforeend', modalHtml);
+    }
+    
+    function toggleVendorInput() {
+      var select = document.getElementById('purchaseVendor');
+      var text = document.getElementById('purchaseVendorText');
+      if (text.style.display === 'none') {
+        text.style.display = 'block';
+        select.style.display = 'none';
+        text.focus();
+      } else {
+        text.style.display = 'none';
+        select.style.display = 'block';
+      }
+    }
+    
+    function closePurchaseModal() {
+      var modal = document.getElementById('newPurchaseModal');
+      if (modal) modal.remove();
+    }
+    
+    function addPurchaseLineItem() {
+      var container = document.getElementById('purchaseLineItems');
+      if (!container) return;
+      
+      // Remove empty state message
+      if (container.children.length === 1 && container.children[0].textContent.indexOf('No items') !== -1) {
+        container.innerHTML = '';
+      }
+      
+      var itemId = 'purchaseItem_' + Date.now();
+      var materialOptions = '<option value="">-- Select Material --</option>';
+      google.script.run
+        .withSuccessHandler(function(result) {
+          if (result.success && result.materials) {
+            result.materials.forEach(function(m) {
+              materialOptions += '<option value="' + escapeHtml(m.item) + '" data-unit="' + escapeHtml(m.unit || 'lb') + '">' + escapeHtml(m.item) + ' (' + escapeHtml(m.category || '') + ')</option>';
+            });
+            
+            var rowHtml = '<div id="' + itemId + '" style="display:grid;grid-template-columns:2fr 1fr 1fr 1fr auto;gap:8px;padding:12px;background:white;border:1px solid #e5e7eb;border-radius:4px;margin-bottom:8px;align-items:end;">' +
+              '<div>' +
+                '<label style="display:block;font-size:11px;font-weight:600;color:#6b7280;margin-bottom:4px;">Material</label>' +
+                '<select class="purchase-material" onchange="updatePurchaseItemUnit(this)" style="width:100%;padding:8px;border:1px solid #d1d5db;border-radius:4px;font-size:13px;">' + materialOptions + '</select>' +
+              '</div>' +
+              '<div>' +
+                '<label style="display:block;font-size:11px;font-weight:600;color:#6b7280;margin-bottom:4px;">Quantity</label>' +
+                '<input type="number" class="purchase-qty" step="0.01" min="0" onchange="calculatePurchaseItemTotal(this);calculatePurchaseTotal()" placeholder="0" style="width:100%;padding:8px;border:1px solid #d1d5db;border-radius:4px;font-size:13px;">' +
+              '</div>' +
+              '<div>' +
+                '<label style="display:block;font-size:11px;font-weight:600;color:#6b7280;margin-bottom:4px;">Unit</label>' +
+                '<input type="text" class="purchase-unit" value="" placeholder="lb" style="width:100%;padding:8px;border:1px solid #d1d5db;border-radius:4px;font-size:13px;">' +
+              '</div>' +
+              '<div>' +
+                '<label style="display:block;font-size:11px;font-weight:600;color:#6b7280;margin-bottom:4px;">Unit Cost</label>' +
+                '<input type="number" class="purchase-unit-cost" step="0.01" min="0" onchange="calculatePurchaseItemTotal(this);calculatePurchaseTotal()" placeholder="0.00" style="width:100%;padding:8px;border:1px solid #d1d5db;border-radius:4px;font-size:13px;">' +
+              '</div>' +
+              '<div>' +
+                '<label style="display:block;font-size:11px;font-weight:600;color:#6b7280;margin-bottom:4px;">Total</label>' +
+                '<input type="number" class="purchase-item-total" step="0.01" readonly style="width:100%;padding:8px;border:1px solid #d1d5db;border-radius:4px;font-size:13px;background:#f3f4f6;" value="0.00">' +
+              '</div>' +
+              '<div>' +
+                '<label style="display:block;font-size:11px;color:transparent;margin-bottom:4px;">&nbsp;</label>' +
+                '<button type="button" onclick="removePurchaseLineItem(\'' + itemId + '\')" style="padding:8px 12px;background:#ef4444;color:white;border:none;border-radius:4px;cursor:pointer;font-size:12px;">✕</button>' +
+              '</div>' +
+            '</div>';
+            
+            container.insertAdjacentHTML('beforeend', rowHtml);
+          }
+        })
+        .withFailureHandler(function() {
+          showToast('Error loading materials', 'error');
+        })
+        .getRawMaterialsInventory({});
+    }
+    
+    function updatePurchaseItemUnit(select) {
+      var row = select.closest('[id^="purchaseItem_"]');
+      if (!row) return;
+      
+      var option = select.options[select.selectedIndex];
+      var unit = option ? option.getAttribute('data-unit') : '';
+      var unitInput = row.querySelector('.purchase-unit');
+      if (unitInput && unit) {
+        unitInput.value = unit;
+      }
+    }
+    
+    function calculatePurchaseItemTotal(input) {
+      var row = input.closest('[id^="purchaseItem_"]');
+      if (!row) return;
+      
+      var qty = parseFloat(row.querySelector('.purchase-qty').value) || 0;
+      var unitCost = parseFloat(row.querySelector('.purchase-unit-cost').value) || 0;
+      var total = qty * unitCost;
+      
+      var totalInput = row.querySelector('.purchase-item-total');
+      if (totalInput) {
+        totalInput.value = total.toFixed(2);
+      }
+    }
+    
+    function removePurchaseLineItem(itemId) {
+      var row = document.getElementById(itemId);
+      if (row) {
+        row.remove();
+        calculatePurchaseTotal();
+        
+        var container = document.getElementById('purchaseLineItems');
+        if (container && container.children.length === 0) {
+          container.innerHTML = '<div style="padding:8px;color:#9ca3af;font-size:13px;text-align:center;">No items added. Click "+ Add Item" to add line items.</div>';
+        }
+      }
+    }
+    
+    function calculatePurchaseTotal() {
+      var subtotal = 0;
+      document.querySelectorAll('.purchase-item-total').forEach(function(input) {
+        subtotal += parseFloat(input.value) || 0;
+      });
+      
+      var shipping = parseFloat(document.getElementById('purchaseShipping').value) || 0;
+      var tax = parseFloat(document.getElementById('purchaseTax').value) || 0;
+      var total = subtotal + shipping + tax;
+      
+      document.getElementById('purchaseSubtotal').textContent = '$' + subtotal.toFixed(2);
+      document.getElementById('purchaseTotal').textContent = '$' + total.toFixed(2);
+    }
+    
+    function savePurchase() {
+      var vendor = document.getElementById('purchaseVendor').value || document.getElementById('purchaseVendorText').value;
+      if (!vendor) {
+        showToast('Please enter a vendor', 'error');
+        return;
+      }
+      
+      var lineItems = [];
+      document.querySelectorAll('[id^="purchaseItem_"]').forEach(function(row) {
+        var material = row.querySelector('.purchase-material').value;
+        var qty = parseFloat(row.querySelector('.purchase-qty').value) || 0;
+        var unit = row.querySelector('.purchase-unit').value || 'lb';
+        var unitCost = parseFloat(row.querySelector('.purchase-unit-cost').value) || 0;
+        
+        if (material && qty > 0) {
+          lineItems.push({
+            material: material,
+            quantity: qty,
+            unit: unit,
+            unitCost: unitCost,
+            total: qty * unitCost
+          });
+        }
+      });
+      
+      if (lineItems.length === 0) {
+        showToast('Please add at least one line item', 'error');
+        return;
+      }
+      
+      var purchaseData = {
+        vendor: vendor,
+        date: document.getElementById('purchaseDate').value,
+        poNumber: document.getElementById('purchasePONumber').value,
+        lineItems: lineItems,
+        subtotal: parseFloat(document.getElementById('purchaseSubtotal').textContent.replace('$', '')) || 0,
+        shipping: parseFloat(document.getElementById('purchaseShipping').value) || 0,
+        tax: parseFloat(document.getElementById('purchaseTax').value) || 0,
+        total: parseFloat(document.getElementById('purchaseTotal').textContent.replace('$', '')) || 0,
+        notes: document.getElementById('purchaseNotes').value
+      };
+      
+      google.script.run
+        .withSuccessHandler(function(result) {
+          if (result.success) {
+            showToast('Purchase saved! Materials updated.', 'success');
+            closePurchaseModal();
+            loadPurchases();
+          } else {
+            showToast('Error: ' + result.error, 'error');
+          }
+        })
+        .withFailureHandler(function(err) {
+          showToast('Error: ' + err, 'error');
+        })
+        .createPurchase(purchaseData);
     }
     
     function receivePO(poNumber) {
@@ -7566,6 +7862,9 @@ renderBatches = function(batches) {
       <button class="edit-recipe-tab" onclick="showEditRecipeTab('ingredients')" id="tabIngredients" style="flex:1; padding:14px; border:none; background:transparent; cursor:pointer; font-weight:500; color:#666; border-bottom:3px solid transparent; margin-bottom:-2px;">
         🌾 Ingredients
       </button>
+      <button class="edit-recipe-tab" onclick="showEditRecipeTab('templates')" id="tabTemplates" style="flex:1; padding:14px; border:none; background:transparent; cursor:pointer; font-weight:500; color:#666; border-bottom:3px solid transparent; margin-bottom:-2px;">
+        📋 Task Templates
+      </button>
       <button class="edit-recipe-tab" onclick="showEditRecipeTab('history')" id="tabHistory" style="flex:1; padding:14px; border:none; background:transparent; cursor:pointer; font-weight:500; color:#666; border-bottom:3px solid transparent; margin-bottom:-2px;">
         📜 Change History
       </button>
@@ -7687,6 +7986,22 @@ renderBatches = function(batches) {
         
       </div>
       
+      <!-- Task Templates Tab -->
+      <div id="editTemplatesTab" style="display:none;">
+        <div style="margin-bottom:20px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+            <h4 style="color:#1D3557; margin:0;">📋 Default Task Templates</h4>
+            <button onclick="addRecipeTaskTemplate()" style="background:#10B981; color:white; border:none; padding:8px 16px; border-radius:6px; font-size:13px; cursor:pointer; font-weight:600;">+ Add Template</button>
+          </div>
+          <div id="taskTemplatesContainer" style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;padding:16px;min-height:200px;">
+            <p style="color:#9ca3af; text-align:center; padding:40px;">Loading task templates...</p>
+          </div>
+          <div style="margin-top:16px;padding:12px;background:#fef3c7;border-radius:6px;border-left:4px solid #f59e0b;font-size:13px;color:#92400e;">
+            💡 <strong>Task Templates</strong> automatically create tasks when you start a new batch. Set day offsets (0 = brew day, 7 = day 7, etc.) and default materials/notes.
+          </div>
+        </div>
+      </div>
+      
       <!-- History Tab -->
       <div id="editHistoryTab" style="display:none;">
         <div id="changeHistoryContainer">
@@ -7781,6 +8096,7 @@ function showEditRecipeTab(tabName) {
   // Hide all tabs
   document.getElementById('editDetailsTab').style.display = 'none';
   document.getElementById('editIngredientsTab').style.display = 'none';
+  document.getElementById('editTemplatesTab').style.display = 'none';
   document.getElementById('editHistoryTab').style.display = 'none';
   document.getElementById('reasonSection').style.display = 'none';
   document.getElementById('saveRecipeBtn').style.display = 'inline-block';
@@ -7805,6 +8121,13 @@ function showEditRecipeTab(tabName) {
     document.getElementById('tabIngredients').style.fontWeight = '600';
     document.getElementById('tabIngredients').style.color = '#1D3557';
     document.getElementById('tabIngredients').style.borderBottom = '3px solid #E63946';
+  } else if (tabName === 'templates') {
+    document.getElementById('editTemplatesTab').style.display = 'block';
+    document.getElementById('saveRecipeBtn').style.display = 'none';
+    document.getElementById('tabTemplates').style.fontWeight = '600';
+    document.getElementById('tabTemplates').style.color = '#1D3557';
+    document.getElementById('tabTemplates').style.borderBottom = '3px solid #E63946';
+    loadRecipeTaskTemplates();
   } else if (tabName === 'history') {
     document.getElementById('editHistoryTab').style.display = 'block';
     document.getElementById('saveRecipeBtn').style.display = 'none';
@@ -7958,9 +8281,9 @@ function addIngredientRow(type) {
   
   const newRowHtml = `
     <div id="row_${rowId}" data-row-index="" data-type="${type}" data-new="true" style="display:flex; gap:10px; margin-bottom:8px; align-items:center; background:#ECFDF5; padding:10px; border-radius:6px; border:2px dashed #10B981;">
-      <input type="text" placeholder="${typeLabel} Name" style="flex:2; padding:8px; border:1px solid #d1d5db; border-radius:4px;" data-field="Ingredient Name" data-original="">
-      <input type="number" placeholder="Amount" step="0.01" style="flex:1; padding:8px; border:1px solid #d1d5db; border-radius:4px;" data-field="Amount" data-original="">
-      <input type="text" placeholder="UOM" style="width:80px; padding:8px; border:1px solid #d1d5db; border-radius:4px;" data-field="UOM" data-original="">
+      <input type="text" id="ingredient_name_${rowId}" placeholder="${typeLabel} Name" value="" style="flex:2; padding:8px; border:1px solid #d1d5db; border-radius:4px;" data-field="Ingredient Name" data-original="">
+      <input type="number" id="ingredient_amount_${rowId}" placeholder="Amount" step="0.01" value="" style="flex:1; padding:8px; border:1px solid #d1d5db; border-radius:4px;" data-field="Amount" data-original="">
+      <input type="text" id="ingredient_uom_${rowId}" placeholder="UOM" value="" style="width:80px; padding:8px; border:1px solid #d1d5db; border-radius:4px;" data-field="UOM" data-original="">
       <button onclick="removeNewIngredientRow('${rowId}')" style="background:#6B7280; color:white; border:none; padding:8px 12px; border-radius:4px; cursor:pointer;">✕</button>
     </div>
   `;
@@ -8007,6 +8330,313 @@ function removeNewIngredientRow(rowId) {
 /**
  * Load recipe change history
  */
+function loadRecipeTaskTemplates() {
+  if (!currentEditRecipe) return;
+  
+  google.script.run
+    .withSuccessHandler(function(result) {
+      var container = document.getElementById('taskTemplatesContainer');
+      if (!container) return;
+      
+      if (!result.success || !result.templates || result.templates.length === 0) {
+        container.innerHTML = '<p style="color:#9ca3af; text-align:center; padding:40px;">No task templates. Click "+ Add Template" to create default tasks for this recipe.</p>';
+        return;
+      }
+      
+      var html = '<div style="display:flex;flex-direction:column;gap:12px;">';
+      result.templates.forEach(function(template) {
+        var materials = template.defaultMaterials ? JSON.parse(template.defaultMaterials) : [];
+        var materialsText = materials.length > 0 ? materials.map(function(m) { return m.item + ' (' + m.qty + ' ' + m.unit + ')'; }).join(', ') : 'None';
+        
+        html += '<div style="background:white;border:1px solid #e5e7eb;border-radius:6px;padding:16px;">' +
+          '<div style="display:flex;justify-content:space-between;align-items:start;margin-bottom:12px;">' +
+            '<div style="flex:1;">' +
+              '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">' +
+                '<span style="font-weight:600;color:#1D3557;">' + escapeHtml(template.taskName || template.taskType) + '</span>' +
+                '<span style="background:#e0e7ff;color:#4f46e5;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600;">' + escapeHtml(template.taskType) + '</span>' +
+              '</div>' +
+              '<div style="font-size:12px;color:#6b7280;margin-bottom:4px;">Day Offset: <strong>' + (template.dayOffset || 0) + '</strong> days after brew day</div>' +
+              '<div style="font-size:12px;color:#6b7280;margin-bottom:4px;">Assigned To: <strong>' + (template.defaultAssignedTo || 'Unassigned') + '</strong></div>' +
+              '<div style="font-size:12px;color:#6b7280;margin-bottom:4px;">Materials: <strong>' + materialsText + '</strong></div>' +
+              (template.defaultNotes ? '<div style="font-size:12px;color:#6b7280;margin-top:8px;padding:8px;background:#f9fafb;border-radius:4px;">' + escapeHtml(template.defaultNotes) + '</div>' : '') +
+            '</div>' +
+            '<div style="display:flex;gap:6px;">' +
+              '<button onclick="editRecipeTaskTemplate(\'' + (template.templateId || '').replace(/'/g, "\\'") + '\')" style="padding:6px 12px;background:#6366f1;color:white;border:none;border-radius:4px;cursor:pointer;font-size:12px;">✏️ Edit</button>' +
+              '<button onclick="deleteRecipeTaskTemplate(\'' + (template.templateId || '').replace(/'/g, "\\'") + '\')" style="padding:6px 12px;background:#ef4444;color:white;border:none;border-radius:4px;cursor:pointer;font-size:12px;">🗑️ Delete</button>' +
+            '</div>' +
+          '</div>' +
+        '</div>';
+      });
+      html += '</div>';
+      container.innerHTML = html;
+    })
+    .withFailureHandler(function(err) {
+      document.getElementById('taskTemplatesContainer').innerHTML = '<p style="color:#dc2626; text-align:center; padding:40px;">Error loading templates: ' + err + '</p>';
+    })
+    .getRecipeTaskTemplates(currentEditRecipe);
+}
+
+function addRecipeTaskTemplate() {
+  if (!currentEditRecipe) {
+    showToast('No recipe selected', 'error');
+    return;
+  }
+  openTaskTemplateModal(null);
+}
+
+function editRecipeTaskTemplate(templateId) {
+  if (!currentEditRecipe || !templateId) return;
+  
+  google.script.run
+    .withSuccessHandler(function(result) {
+      if (result.success && result.templates) {
+        var template = result.templates.find(function(t) { return t.templateId === templateId; });
+        if (template) {
+          openTaskTemplateModal(template);
+        }
+      }
+    })
+    .getRecipeTaskTemplates(currentEditRecipe);
+}
+
+function deleteRecipeTaskTemplate(templateId) {
+  if (!currentEditRecipe || !templateId) {
+    showToast('Invalid template', 'error');
+    return;
+  }
+  
+  if (!confirm('Delete this task template? It will not affect existing batches.')) return;
+  
+  google.script.run
+    .withSuccessHandler(function(result) {
+      if (result.success) {
+        showToast('Template deleted', 'success');
+        loadRecipeTaskTemplates();
+      } else {
+        showToast('Error: ' + result.error, 'error');
+      }
+    })
+    .withFailureHandler(function(err) {
+      showToast('Error: ' + err, 'error');
+    })
+    .deleteRecipeTaskTemplate(templateId);
+}
+
+function openTaskTemplateModal(template) {
+  // Get task types and staff for dropdowns
+  var taskTypes = ['Turn 1 Brew', 'Turn 2 Brew', 'Transfer to FV', 'Yeast Pitch', 'Dry Hop', 'Fining/Additions', 'Gravity Reading', 'pH Reading', 'Transfer to BT/SV', 'Filtering', 'Carbonation', 'Packaging', 'Custom'];
+  
+  google.script.run
+    .withSuccessHandler(function(staffResult) {
+      var staff = staffResult.staff || [];
+      var staffOptions = '<option value="">-- Unassigned --</option>';
+      staff.forEach(function(s) {
+        staffOptions += '<option value="' + escapeHtml(s) + '">' + escapeHtml(s) + '</option>';
+      });
+      
+      var materialsOptions = '<option value="">-- Select Material --</option>';
+      google.script.run
+        .withSuccessHandler(function(materialsResult) {
+          if (materialsResult.success && materialsResult.materials) {
+            materialsResult.materials.forEach(function(m) {
+              materialsOptions += '<option value="' + escapeHtml(m.item) + '" data-unit="' + escapeHtml(m.unit || 'lb') + '">' + escapeHtml(m.item) + ' (' + escapeHtml(m.category || '') + ')</option>';
+            });
+          }
+          buildTaskTemplateModal(template, taskTypes, staffOptions, materialsOptions);
+        })
+        .getRawMaterialsInventory({});
+    })
+    .getBreweryStaff();
+}
+
+function buildTaskTemplateModal(template, taskTypes, staffOptions, materialsOptions) {
+  var taskTypeOptions = taskTypes.map(function(t) {
+    return '<option value="' + escapeHtml(t) + '"' + (template && template.taskType === t ? ' selected' : '') + '>' + escapeHtml(t) + '</option>';
+  }).join('');
+  
+  var materialsHtml = '';
+  if (template && template.defaultMaterials) {
+    try {
+      var materials = JSON.parse(template.defaultMaterials);
+      materials.forEach(function(m, idx) {
+        materialsHtml += '<div class="template-material-row" style="display:grid;grid-template-columns:2fr 1fr 1fr auto;gap:8px;padding:8px;background:white;border:1px solid #e5e7eb;border-radius:4px;margin-bottom:8px;">' +
+          '<select class="template-material" style="padding:6px;border:1px solid #d1d5db;border-radius:4px;font-size:12px;">' + materialsOptions + '</select>' +
+          '<input type="number" class="template-material-qty" step="0.01" value="' + (m.qty || '') + '" placeholder="0" style="padding:6px;border:1px solid #d1d5db;border-radius:4px;font-size:12px;">' +
+          '<input type="text" class="template-material-unit" value="' + escapeHtml(m.unit || 'lb') + '" placeholder="lb" style="padding:6px;border:1px solid #d1d5db;border-radius:4px;font-size:12px;">' +
+          '<button onclick="removeTemplateMaterialRow(this)" style="padding:6px 10px;background:#ef4444;color:white;border:none;border-radius:4px;cursor:pointer;font-size:11px;">✕</button>' +
+        '</div>';
+      });
+    } catch (e) {
+      // Invalid JSON, start fresh
+    }
+  }
+  
+  if (!materialsHtml) {
+    materialsHtml = '<div style="padding:8px;color:#9ca3af;font-size:12px;text-align:center;border:1px dashed #d1d5db;border-radius:4px;">No materials. Click "+ Add Material" to add.</div>';
+  }
+  
+  var modalHtml = '<div id="taskTemplateModal" style="display:flex;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.6);z-index:3000;justify-content:center;align-items:center;">' +
+    '<div style="background:white;border-radius:12px;max-width:600px;width:90%;max-height:90vh;overflow-y:auto;">' +
+      '<div style="background:linear-gradient(135deg,#6366f1,#4f46e5);color:white;padding:20px;border-radius:12px 12px 0 0;">' +
+        '<div style="display:flex;justify-content:space-between;align-items:center;">' +
+          '<h3 style="margin:0;">' + (template ? 'Edit' : 'Add') + ' Task Template</h3>' +
+          '<button onclick="closeTaskTemplateModal()" style="background:rgba(255,255,255,0.2);border:none;color:white;width:32px;height:32px;border-radius:50%;cursor:pointer;">✕</button>' +
+        '</div>' +
+      '</div>' +
+      '<div style="padding:24px;">' +
+        '<div style="margin-bottom:16px;">' +
+          '<label style="display:block;font-weight:600;margin-bottom:6px;color:#374151;">Task Type *</label>' +
+          '<select id="templateTaskType" style="width:100%;padding:10px;border:1px solid #d1d5db;border-radius:6px;font-size:14px;">' + taskTypeOptions + '</select>' +
+        '</div>' +
+        '<div style="margin-bottom:16px;">' +
+          '<label style="display:block;font-weight:600;margin-bottom:6px;color:#374151;">Task Name *</label>' +
+          '<input type="text" id="templateTaskName" value="' + (template ? escapeHtml(template.taskName || '') : '') + '" placeholder="Enter task name" style="width:100%;padding:10px;border:1px solid #d1d5db;border-radius:6px;font-size:14px;">' +
+        '</div>' +
+        '<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;">' +
+          '<div>' +
+            '<label style="display:block;font-weight:600;margin-bottom:6px;color:#374151;">Day Offset</label>' +
+            '<input type="number" id="templateDayOffset" value="' + (template ? (template.dayOffset || 0) : 0) + '" min="0" placeholder="0" style="width:100%;padding:10px;border:1px solid #d1d5db;border-radius:6px;font-size:14px;">' +
+            '<small style="color:#6b7280;font-size:11px;">Days after brew day (0 = brew day)</small>' +
+          '</div>' +
+          '<div>' +
+            '<label style="display:block;font-weight:600;margin-bottom:6px;color:#374151;">Default Assigned To</label>' +
+            '<select id="templateAssignedTo" style="width:100%;padding:10px;border:1px solid #d1d5db;border-radius:6px;font-size:14px;">' + staffOptions + '</select>' +
+          '</div>' +
+        '</div>' +
+        '<div style="margin-bottom:16px;">' +
+          '<label style="display:block;font-weight:600;margin-bottom:6px;color:#374151;">Default Notes</label>' +
+          '<textarea id="templateNotes" rows="3" placeholder="Task instructions, notes..." style="width:100%;padding:10px;border:1px solid #d1d5db;border-radius:6px;font-size:14px;">' + (template ? escapeHtml(template.defaultNotes || '') : '') + '</textarea>' +
+        '</div>' +
+        '<div style="margin-bottom:16px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;padding:16px;">' +
+          '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">' +
+            '<label style="font-weight:600;color:#374151;">Default Materials</label>' +
+            '<button type="button" onclick="addTemplateMaterialRow()" style="padding:6px 12px;background:#6366f1;color:white;border:none;border-radius:4px;cursor:pointer;font-size:12px;font-weight:600;">+ Add Material</button>' +
+          '</div>' +
+          '<div id="templateMaterialsList">' + materialsHtml + '</div>' +
+        '</div>' +
+        '<div style="display:flex;gap:12px;justify-content:flex-end;margin-top:24px;">' +
+          '<button onclick="closeTaskTemplateModal()" style="padding:10px 20px;background:#e9ecef;border:none;border-radius:6px;cursor:pointer;">Cancel</button>' +
+          '<button onclick="saveTaskTemplate(\'' + (template ? (template.templateId || '').replace(/'/g, "\\'") : '') + '\')" style="padding:10px 24px;background:#6366f1;color:white;border:none;border-radius:6px;cursor:pointer;font-weight:bold;">Save</button>' +
+        '</div>' +
+      '</div>' +
+    '</div>' +
+  '</div>';
+  
+  var existing = document.getElementById('taskTemplateModal');
+  if (existing) existing.remove();
+  document.body.insertAdjacentHTML('beforeend', modalHtml);
+  
+  // Store materials options for adding new rows
+  window.templateMaterialsOptions = materialsOptions;
+}
+
+function closeTaskTemplateModal() {
+  var modal = document.getElementById('taskTemplateModal');
+  if (modal) modal.remove();
+}
+
+function addTemplateMaterialRow() {
+  var container = document.getElementById('templateMaterialsList');
+  if (!container) return;
+  
+  if (container.children.length === 1 && container.children[0].textContent.indexOf('No materials') !== -1) {
+    container.innerHTML = '';
+  }
+  
+  var rowHtml = '<div class="template-material-row" style="display:grid;grid-template-columns:2fr 1fr 1fr auto;gap:8px;padding:8px;background:white;border:1px solid #e5e7eb;border-radius:4px;margin-bottom:8px;">' +
+    '<select class="template-material" onchange="updateTemplateMaterialUnit(this)" style="padding:6px;border:1px solid #d1d5db;border-radius:4px;font-size:12px;">' + (window.templateMaterialsOptions || '<option>Loading...</option>') + '</select>' +
+    '<input type="number" class="template-material-qty" step="0.01" placeholder="0" style="padding:6px;border:1px solid #d1d5db;border-radius:4px;font-size:12px;">' +
+    '<input type="text" class="template-material-unit" value="lb" placeholder="lb" style="padding:6px;border:1px solid #d1d5db;border-radius:4px;font-size:12px;">' +
+    '<button onclick="removeTemplateMaterialRow(this)" style="padding:6px 10px;background:#ef4444;color:white;border:none;border-radius:4px;cursor:pointer;font-size:11px;">✕</button>' +
+  '</div>';
+  
+  container.insertAdjacentHTML('beforeend', rowHtml);
+}
+
+function updateTemplateMaterialUnit(select) {
+  var row = select.closest('.template-material-row');
+  if (!row) return;
+  
+  var option = select.options[select.selectedIndex];
+  var unit = option ? option.getAttribute('data-unit') : '';
+  var unitInput = row.querySelector('.template-material-unit');
+  if (unitInput && unit) {
+    unitInput.value = unit;
+  }
+}
+
+function removeTemplateMaterialRow(button) {
+  var row = button.closest('.template-material-row');
+  if (row) {
+    row.remove();
+    
+    var container = document.getElementById('templateMaterialsList');
+    if (container && container.children.length === 0) {
+      container.innerHTML = '<div style="padding:8px;color:#9ca3af;font-size:12px;text-align:center;border:1px dashed #d1d5db;border-radius:4px;">No materials. Click "+ Add Material" to add.</div>';
+    }
+  }
+}
+
+function saveTaskTemplate(templateId) {
+  if (!currentEditRecipe) {
+    showToast('No recipe selected', 'error');
+    return;
+  }
+  
+  var taskType = document.getElementById('templateTaskType').value;
+  var taskName = document.getElementById('templateTaskName').value.trim();
+  var dayOffset = parseInt(document.getElementById('templateDayOffset').value) || 0;
+  var assignedTo = document.getElementById('templateAssignedTo').value;
+  var notes = document.getElementById('templateNotes').value.trim();
+  
+  if (!taskType || !taskName) {
+    showToast('Task Type and Task Name are required', 'error');
+    return;
+  }
+  
+  // Collect materials
+  var materials = [];
+  document.querySelectorAll('.template-material-row').forEach(function(row) {
+    var material = row.querySelector('.template-material').value;
+    var qty = parseFloat(row.querySelector('.template-material-qty').value) || 0;
+    var unit = row.querySelector('.template-material-unit').value.trim() || 'lb';
+    
+    if (material && qty > 0) {
+      materials.push({
+        item: material,
+        qty: qty,
+        unit: unit
+      });
+    }
+  });
+  
+  var templateData = {
+    taskType: taskType,
+    taskName: taskName,
+    dayOffset: dayOffset,
+    defaultAssignedTo: assignedTo || '',
+    defaultMaterials: materials.length > 0 ? JSON.stringify(materials) : '',
+    defaultNotes: notes
+  };
+  
+  var func = templateId ? 'updateRecipeTaskTemplate' : 'addRecipeTaskTemplate';
+  var args = templateId ? [templateId, templateData] : [currentEditRecipe, templateData];
+  
+  google.script.run
+    .withSuccessHandler(function(result) {
+      if (result.success) {
+        showToast('Task template ' + (templateId ? 'updated' : 'created') + '!', 'success');
+        closeTaskTemplateModal();
+        loadRecipeTaskTemplates();
+      } else {
+        showToast('Error: ' + result.error, 'error');
+      }
+    })
+    .withFailureHandler(function(err) {
+      showToast('Error: ' + err, 'error');
+    })[func].apply(null, args);
+}
+
 function loadRecipeHistory(recipeName) {
   google.script.run
     .withSuccessHandler(function(result) {
@@ -8089,10 +8719,24 @@ function saveRecipeChanges() {
       });
     } else if (isNew) {
       // Add new ingredient
-      const inputs = row.querySelectorAll('input');
-      const name = inputs[0].value.trim();
-      const amount = inputs[1].value;
-      const uom = inputs[2].value.trim();
+      const nameInput = row.querySelector('input[data-field="Ingredient Name"]');
+      const amountInput = row.querySelector('input[data-field="Amount"]');
+      const uomInput = row.querySelector('input[data-field="UOM"]');
+      
+      const name = nameInput ? nameInput.value.trim() : '';
+      const amount = amountInput ? amountInput.value : '';
+      const uom = uomInput ? uomInput.value.trim() : '';
+      
+      // Skip if name is empty or matches placeholder text exactly
+      if (!name || name.trim() === '' || 
+          name.toLowerCase() === 'ingredient name' || 
+          name.toLowerCase() === 'other name' ||
+          name.toLowerCase() === 'grain/malt name' ||
+          name.toLowerCase() === 'hop name' ||
+          name.toLowerCase() === 'yeast name') {
+        // Skip empty or placeholder-only entries
+        return;
+      }
       
       if (name && amount) {
         ingredientUpdates.push({
@@ -8100,8 +8744,8 @@ function saveRecipeChanges() {
           data: {
             'Ingredient Name': name,
             'Ingredient Type': type === 'grain' ? 'Grain' : type === 'hop' ? 'Hop' : type === 'yeast' ? 'Yeast' : 'Other',
-            'Amount': parseFloat(amount),
-            'UOM': uom
+            'Amount': parseFloat(amount) || 0,
+            'UOM': uom || 'lb'
           }
         });
       }

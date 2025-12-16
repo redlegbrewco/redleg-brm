@@ -1931,7 +1931,8 @@ function confirmBrewStartEnhanced_Old(brewerData) {
     // Deplete raw materials
     var allIngredients = (brewerData.grains || []).concat(brewerData.hops || []).concat(brewerData.other || []);
     allIngredients.forEach(function(item) {
-      depleteRawMaterial(item.ingredient, item.actualAmount || item.scaledAmount, batchNumber);
+      var itemUOM = (item.uom || 'lb').toString().trim();
+      depleteRawMaterial(item.ingredient, item.actualAmount || item.scaledAmount, batchNumber, null, 'Recipe', itemUOM);
     });
     
     // Update equipment status
@@ -1961,7 +1962,70 @@ function generateBatchNumber(recipeName) {
   return prefix + '-' + yy + mm + dd + '-' + random;
 }
 
-function depleteRawMaterial(itemName, qty, batchNumber) {
+/**
+ * Convert quantity from one unit to another
+ * @param {number} qty - Quantity to convert
+ * @param {string} fromUnit - Source unit (lb, oz, kg, g, gal, ml, L, etc.)
+ * @param {string} toUnit - Target unit
+ * @returns {number} Converted quantity, or original qty if conversion not possible
+ */
+function convertUnit(qty, fromUnit, toUnit) {
+  if (!fromUnit || !toUnit || fromUnit.toLowerCase() === toUnit.toLowerCase()) {
+    return qty; // No conversion needed
+  }
+  
+  var from = fromUnit.toLowerCase().trim();
+  var to = toUnit.toLowerCase().trim();
+  
+  // Weight conversions
+  if ((from === 'lb' || from === 'lbs') && (to === 'oz' || to === 'ozs')) {
+    return qty * 16; // 1 lb = 16 oz
+  }
+  if ((from === 'oz' || from === 'ozs') && (to === 'lb' || to === 'lbs')) {
+    return qty / 16; // 1 oz = 1/16 lb
+  }
+  if ((from === 'kg' || from === 'kilogram' || from === 'kilograms') && (to === 'g' || to === 'gram' || to === 'grams')) {
+    return qty * 1000; // 1 kg = 1000 g
+  }
+  if ((from === 'g' || from === 'gram' || from === 'grams') && (to === 'kg' || to === 'kilogram' || to === 'kilograms')) {
+    return qty / 1000; // 1 g = 1/1000 kg
+  }
+  
+  // Volume conversions
+  if ((from === 'gal' || from === 'gallon' || from === 'gallons') && (to === 'ml' || to === 'milliliter' || from === 'milliliters')) {
+    return qty * 3785.41; // 1 gal = 3785.41 ml
+  }
+  if ((from === 'ml' || from === 'milliliter' || from === 'milliliters') && (to === 'gal' || to === 'gallon' || to === 'gallons')) {
+    return qty / 3785.41; // 1 ml = 1/3785.41 gal
+  }
+  if ((from === 'gal' || from === 'gallon' || from === 'gallons') && (to === 'l' || to === 'liter' || to === 'liters')) {
+    return qty * 3.78541; // 1 gal = 3.78541 L
+  }
+  if ((from === 'l' || from === 'liter' || from === 'liters') && (to === 'gal' || to === 'gallon' || to === 'gallons')) {
+    return qty / 3.78541; // 1 L = 1/3.78541 gal
+  }
+  if ((from === 'l' || from === 'liter' || from === 'liters') && (to === 'ml' || to === 'milliliter' || to === 'milliliters')) {
+    return qty * 1000; // 1 L = 1000 ml
+  }
+  if ((from === 'ml' || from === 'milliliter' || from === 'milliliters') && (to === 'l' || to === 'liter' || to === 'liters')) {
+    return qty / 1000; // 1 ml = 1/1000 L
+  }
+  
+  // If no conversion found, return original (assume same unit or incompatible)
+  Logger.log('Warning: Unit conversion not available: ' + fromUnit + ' → ' + toUnit + '. Using original quantity.');
+  return qty;
+}
+
+/**
+ * Deplete raw material from inventory
+ * @param {string} itemName - Material name
+ * @param {number} qty - Quantity to deplete (in source UOM)
+ * @param {string} batchNumber - Batch number for logging
+ * @param {string} taskId - Optional task ID for logging
+ * @param {string} depletionType - Type: "Recipe", "Task", "Packaging", "Cellar"
+ * @param {string} sourceUOM - Optional source UOM (if different from Raw Material UOM)
+ */
+function depleteRawMaterial(itemName, qty, batchNumber, taskId, depletionType, sourceUOM) {
   try {
     var ss = getBrmSpreadsheet();
     var sheet = ss.getSheetByName(RAW_MATERIAL_CONFIG.sheetName);
@@ -1973,7 +2037,16 @@ function depleteRawMaterial(itemName, qty, batchNumber) {
     for (var i = RAW_MATERIAL_CONFIG.dataStartRow - 1; i < data.length; i++) {
       if (data[i][cols.item - 1] && data[i][cols.item - 1].toString().toLowerCase() === itemName.toLowerCase()) {
         var currentQty = parseFloat(data[i][cols.qtyOnHand - 1]) || 0;
-        var newQty = Math.max(0, currentQty - qty);
+        var rmUnit = (data[i][cols.unit - 1] || 'lb').toString().trim();
+        
+        // Convert quantity to match Raw Material UOM if source UOM provided
+        var qtyToDeduct = qty;
+        if (sourceUOM && sourceUOM !== rmUnit) {
+          qtyToDeduct = convertUnit(qty, sourceUOM, rmUnit);
+          Logger.log('Unit conversion: ' + qty + ' ' + sourceUOM + ' → ' + qtyToDeduct.toFixed(4) + ' ' + rmUnit + ' for ' + itemName);
+        }
+        
+        var newQty = Math.max(0, currentQty - qtyToDeduct);
         var cost = parseFloat(data[i][cols.avgCost - 1]) || 0;
         var reorder = parseFloat(data[i][cols.reorderPoint - 1]) || 0;
         
@@ -1985,12 +2058,72 @@ function depleteRawMaterial(itemName, qty, batchNumber) {
         sheet.getRange(i + 1, cols.totalValue).setValue(newQty * cost);
         sheet.getRange(i + 1, cols.status).setValue(status);
         
-        logMaterialAdjustment(itemName, currentQty, newQty, 'Batch: ' + batchNumber);
+        // Enhanced logging with depletion type and task ID
+        var logNote = 'Batch: ' + batchNumber;
+        if (taskId) logNote += ', Task: ' + taskId;
+        if (depletionType) logNote += ', Type: ' + depletionType;
+        
+        logMaterialAdjustment(itemName, currentQty, newQty, logNote);
         break;
       }
     }
   } catch (e) {
     Logger.log('Error depleting material: ' + e.toString());
+  }
+}
+
+/**
+ * Check if materials have already been depleted for a specific batch/task/type
+ * @param {string} batchNumber - Batch number
+ * @param {string} taskId - Optional task ID
+ * @param {string} depletionType - "Recipe", "Task", "Packaging", "Cellar"
+ * @returns {boolean} True if already depleted
+ */
+function hasBeenDepleted(batchNumber, taskId, depletionType) {
+  try {
+    var ss = getBrmSpreadsheet();
+    var materialLog = ss.getSheetByName(SHEETS.MATERIAL_LOG);
+    if (!materialLog) return false;
+    
+    var data = materialLog.getDataRange().getValues();
+    var batchCol = -1, notesCol = -1;
+    
+    // Find columns
+    if (data.length > 0) {
+      var headers = data[0];
+      for (var c = 0; c < headers.length; c++) {
+        var h = (headers[c] || '').toString().toLowerCase();
+        if (h.indexOf('batch') !== -1) batchCol = c;
+        if (h.indexOf('note') !== -1 || h.indexOf('description') !== -1) notesCol = c;
+      }
+    }
+    
+    // Check Material Log for existing depletion
+    for (var i = 1; i < data.length; i++) {
+      var rowBatch = (data[i][batchCol] || '').toString();
+      var rowNotes = (data[i][notesCol] || '').toString();
+      
+      if (rowBatch === batchNumber) {
+        // Check if this matches the depletion type
+        if (depletionType === 'Recipe' && rowNotes.indexOf('Batch: ' + batchNumber) !== -1 && rowNotes.indexOf('Type: Recipe') !== -1) {
+          return true;
+        }
+        if (depletionType === 'Task' && taskId && rowNotes.indexOf('Task: ' + taskId) !== -1) {
+          return true;
+        }
+        if (depletionType === 'Packaging' && rowNotes.indexOf('Type: Packaging') !== -1) {
+          return true;
+        }
+        if (depletionType === 'Cellar' && rowNotes.indexOf('Type: Cellar') !== -1) {
+          return true;
+        }
+      }
+    }
+    
+    return false;
+  } catch (e) {
+    Logger.log('Error checking depletion status: ' + e.toString());
+    return false; // If error, allow depletion (fail open)
   }
 }
 
@@ -2350,6 +2483,148 @@ function receivePurchaseOrder(poNumber) {
     return { success: true, message: 'Received ' + itemsReceived.length + ' items' };
   } catch (e) {
     return { success: false, error: e.toString() };
+  }
+}
+
+/**
+ * Create a new purchase with line items
+ * Updates Raw Materials inventory and logs to Material Log
+ */
+function createPurchase(purchaseData) {
+  try {
+    var ss = getBrmSpreadsheet();
+    var purchaseSheet = ss.getSheetByName(SHEETS.PURCHASE_LOG);
+    if (!purchaseSheet) return { success: false, error: 'Purchase Log sheet not found' };
+    
+    var user = getCurrentUser();
+    var purchaseDate = purchaseData.date ? new Date(purchaseData.date) : new Date();
+    var poNumber = purchaseData.poNumber || generatePONumber();
+    
+    // Get header row (row 4, 0-indexed = 3)
+    var data = purchaseSheet.getDataRange().getValues();
+    var headerRow = 3; // Row 4 (0-indexed)
+    var dataStartRow = 4; // Row 5 (0-indexed)
+    
+    // Process each line item
+    var lineItems = purchaseData.lineItems || [];
+    if (lineItems.length === 0) {
+      return { success: false, error: 'No line items provided' };
+    }
+    
+    var totalCost = 0;
+    var itemsProcessed = [];
+    
+    for (var i = 0; i < lineItems.length; i++) {
+      var item = lineItems[i];
+      var material = item.material;
+      var qty = parseFloat(item.quantity) || 0;
+      var unit = item.unit || 'lb';
+      var unitCost = parseFloat(item.unitCost) || 0;
+      var itemTotal = qty * unitCost;
+      totalCost += itemTotal;
+      
+      // Determine category from Raw Materials if available
+      var category = 'Other';
+      var rmResult = getRawMaterialsInventory({ search: material });
+      if (rmResult.success && rmResult.materials.length > 0) {
+        category = rmResult.materials[0].category || 'Other';
+      }
+      
+      // Append row to Purchase Log
+      // Columns: Date, PO Number, Supplier, Item, Category, Qty, Unit, Cost/Unit, Total Cost, Invoice#, Status
+      purchaseSheet.appendRow([
+        purchaseDate,
+        poNumber,
+        purchaseData.vendor || '',
+        material,
+        category,
+        qty,
+        unit,
+        unitCost,
+        itemTotal,
+        purchaseData.poNumber || '', // Invoice # (same as PO if not separate)
+        'Received' // Status - immediately received
+      ]);
+      
+      // Update Raw Materials inventory
+      addToRawMaterialInventory(material, qty, unitCost);
+      
+      itemsProcessed.push({
+        material: material,
+        quantity: qty,
+        unit: unit,
+        cost: itemTotal
+      });
+      
+      Logger.log('Purchase line item: ' + qty + ' ' + unit + ' of ' + material + ' @ $' + unitCost + ' = $' + itemTotal);
+    }
+    
+    // Add shipping and tax if provided
+    var shipping = parseFloat(purchaseData.shipping) || 0;
+    var tax = parseFloat(purchaseData.tax) || 0;
+    
+    if (shipping > 0 || tax > 0) {
+      // Add a line item for shipping/tax if needed
+      var grandTotal = totalCost + shipping + tax;
+      Logger.log('Purchase total: $' + totalCost + ' + Shipping: $' + shipping + ' + Tax: $' + tax + ' = $' + grandTotal);
+    }
+    
+    // Log to Material Log
+    try {
+      logMaterialAdjustment('PURCHASE', 0, totalCost, 'Purchase PO: ' + poNumber + ' from ' + (purchaseData.vendor || 'Unknown'), 'PURCHASE');
+    } catch (logErr) {
+      Logger.log('Warning: Could not log to Material Log: ' + logErr.toString());
+    }
+    
+    return serializeForHtml({
+      success: true,
+      message: 'Purchase created: ' + itemsProcessed.length + ' items',
+      poNumber: poNumber,
+      totalCost: totalCost + shipping + tax,
+      itemsProcessed: itemsProcessed
+    });
+    
+  } catch (e) {
+    Logger.log('Error creating purchase: ' + e.toString());
+    return { success: false, error: e.toString() };
+  }
+}
+
+/**
+ * Generate a unique PO number
+ */
+function generatePONumber() {
+  var today = new Date();
+  var dateStr = Utilities.formatDate(today, Session.getScriptTimeZone(), 'yyyyMMdd');
+  var timestamp = Date.now().toString().slice(-6);
+  return 'PO-' + dateStr + '-' + timestamp;
+}
+
+/**
+ * Get list of vendors from Purchase Log
+ */
+function getVendors() {
+  try {
+    var ss = getBrmSpreadsheet();
+    var sheet = ss.getSheetByName(SHEETS.PURCHASE_LOG);
+    if (!sheet) return serializeForHtml({ success: true, vendors: [] });
+    
+    var data = sheet.getDataRange().getValues();
+    var vendors = new Set();
+    
+    // Start from row 5 (0-indexed = 4), column C (Supplier)
+    for (var i = 4; i < data.length; i++) {
+      var vendor = (data[i][2] || '').toString().trim();
+      if (vendor && vendor.length > 0) {
+        vendors.add(vendor);
+      }
+    }
+    
+    var vendorArray = Array.from(vendors).sort();
+    return serializeForHtml({ success: true, vendors: vendorArray });
+  } catch (e) {
+    Logger.log('Error getting vendors: ' + e.toString());
+    return serializeForHtml({ success: false, error: e.toString(), vendors: [] });
   }
 }
 
@@ -8154,7 +8429,8 @@ function finalizeBrew(batchNumber, vessel, actualIngredients) {
     // Process grains
     if (actualIngredients.grains) {
       actualIngredients.grains.forEach(function(item) {
-        var result = depleteRawMaterial(item.ingredient, item.actualAmount, batchNumber);
+        var itemUOM = (item.uom || 'lb').toString().trim();
+        var result = depleteRawMaterial(item.ingredient, item.actualAmount, batchNumber, null, 'Recipe', itemUOM);
         var cost = item.actualAmount * (item.avgCost || 0);
         totalIngredientCost += cost;
         allIngredients.push({
@@ -8170,7 +8446,8 @@ function finalizeBrew(batchNumber, vessel, actualIngredients) {
     // Process hops
     if (actualIngredients.hops) {
       actualIngredients.hops.forEach(function(item) {
-        var result = depleteRawMaterial(item.ingredient, item.actualAmount, batchNumber);
+        var itemUOM = (item.uom || 'lb').toString().trim();
+        var result = depleteRawMaterial(item.ingredient, item.actualAmount, batchNumber, null, 'Recipe', itemUOM);
         var cost = item.actualAmount * (item.avgCost || 0);
         totalIngredientCost += cost;
         allIngredients.push({
@@ -8186,7 +8463,8 @@ function finalizeBrew(batchNumber, vessel, actualIngredients) {
     // Process other
     if (actualIngredients.other) {
       actualIngredients.other.forEach(function(item) {
-        var result = depleteRawMaterial(item.ingredient, item.actualAmount, batchNumber);
+        var itemUOM = (item.uom || 'lb').toString().trim();
+        var result = depleteRawMaterial(item.ingredient, item.actualAmount, batchNumber, null, 'Recipe', itemUOM);
         var cost = item.actualAmount * (item.avgCost || 0);
         totalIngredientCost += cost;
         allIngredients.push({
@@ -8310,63 +8588,70 @@ function addGravityReading(batchNumber, gravity, temperature, notes) {
 /**
  * Get package type components configuration
  * Returns what materials/components are needed for each package type
+ * Includes beer-specific flag for labels and collars
  */
-function getPackageTypeComponents(packageType) {
+function getPackageTypeComponents(packageType, beerName) {
+  beerName = beerName || '';
+  
   // Component definitions for each package type
   var packageComponents = {
     '1/2 BBL Keg': [
-      { item: '1/2 BBL Keg Shell', qtyPerUnit: 1, unit: 'each' },
-      { item: 'Keg Cap', qtyPerUnit: 1, unit: 'each' },
-      { item: 'Keg Collar', qtyPerUnit: 1, unit: 'each' },
-      { item: 'Product', qtyPerUnit: 15.5, unit: 'gal' }
+      { item: '1/2 BBL Keg Shell', qtyPerUnit: 1, unit: 'each', beerSpecific: false },
+      { item: 'Keg Cap (Red)', qtyPerUnit: 1, unit: 'each', beerSpecific: false },
+      { item: (beerName ? beerName + ' Collar' : 'Keg Collar'), qtyPerUnit: 1, unit: 'each', beerSpecific: true },
+      { item: 'Product', qtyPerUnit: 15.5, unit: 'gal', beerSpecific: false }
     ],
     '1/6 BBL Keg': [
-      { item: '1/6 BBL Keg Shell', qtyPerUnit: 1, unit: 'each' },
-      { item: 'Keg Cap', qtyPerUnit: 1, unit: 'each' },
-      { item: 'Keg Collar', qtyPerUnit: 1, unit: 'each' },
-      { item: 'Product', qtyPerUnit: 5.17, unit: 'gal' }
+      { item: '1/6 BBL Keg Shell', qtyPerUnit: 1, unit: 'each', beerSpecific: false },
+      { item: 'Keg Cap (Red)', qtyPerUnit: 1, unit: 'each', beerSpecific: false },
+      { item: (beerName ? beerName + ' Collar' : 'Keg Collar'), qtyPerUnit: 1, unit: 'each', beerSpecific: true },
+      { item: 'Product', qtyPerUnit: 5.17, unit: 'gal', beerSpecific: false }
     ],
     '1/4 BBL Keg': [
-      { item: '1/4 BBL Keg Shell', qtyPerUnit: 1, unit: 'each' },
-      { item: 'Keg Cap', qtyPerUnit: 1, unit: 'each' },
-      { item: 'Keg Collar', qtyPerUnit: 1, unit: 'each' },
-      { item: 'Product', qtyPerUnit: 7.75, unit: 'gal' }
+      { item: '1/4 BBL Keg Shell', qtyPerUnit: 1, unit: 'each', beerSpecific: false },
+      { item: 'Keg Cap (Red)', qtyPerUnit: 1, unit: 'each', beerSpecific: false },
+      { item: (beerName ? beerName + ' Collar' : 'Keg Collar'), qtyPerUnit: 1, unit: 'each', beerSpecific: true },
+      { item: 'Product', qtyPerUnit: 7.75, unit: 'gal', beerSpecific: false }
     ],
     '12oz Case (4×6)': [
-      { item: '12oz Cans', qtyPerUnit: 24, unit: 'each' },
-      { item: 'Can Ends', qtyPerUnit: 24, unit: 'each' },
-      { item: '4-pack Carriers', qtyPerUnit: 6, unit: 'each' },
-      { item: 'Case Trays', qtyPerUnit: 1, unit: 'each' },
-      { item: 'Product', qtyPerUnit: 2.25, unit: 'gal' }
+      { item: '12oz Can', qtyPerUnit: 24, unit: 'each', beerSpecific: false },
+      { item: 'Can Lid', qtyPerUnit: 24, unit: 'each', beerSpecific: false },
+      { item: (beerName ? beerName + ' 12oz Label' : 'Can Label'), qtyPerUnit: 24, unit: 'each', beerSpecific: true },
+      { item: 'Six Pack Applicator (Red)', qtyPerUnit: 4, unit: 'each', beerSpecific: false },
+      { item: 'Case Pack (Tray)', qtyPerUnit: 1, unit: 'each', beerSpecific: false },
+      { item: 'Product', qtyPerUnit: 2.25, unit: 'gal', beerSpecific: false }
     ],
     '16oz Case (4×6)': [
-      { item: '16oz Cans', qtyPerUnit: 24, unit: 'each' },
-      { item: 'Can Ends', qtyPerUnit: 24, unit: 'each' },
-      { item: '4-pack Carriers', qtyPerUnit: 6, unit: 'each' },
-      { item: 'Case Trays', qtyPerUnit: 1, unit: 'each' },
-      { item: 'Product', qtyPerUnit: 3, unit: 'gal' }
+      { item: '16oz Can', qtyPerUnit: 24, unit: 'each', beerSpecific: false },
+      { item: 'Can Lid', qtyPerUnit: 24, unit: 'each', beerSpecific: false },
+      { item: (beerName ? beerName + ' 16oz Label' : 'Can Label'), qtyPerUnit: 24, unit: 'each', beerSpecific: true },
+      { item: 'Six Pack Applicator (Red)', qtyPerUnit: 4, unit: 'each', beerSpecific: false },
+      { item: 'Case Pack (Tray)', qtyPerUnit: 1, unit: 'each', beerSpecific: false },
+      { item: 'Product', qtyPerUnit: 3, unit: 'gal', beerSpecific: false }
     ],
     '12oz 6-pack': [
-      { item: '12oz Cans', qtyPerUnit: 6, unit: 'each' },
-      { item: 'Can Ends', qtyPerUnit: 6, unit: 'each' },
-      { item: '6-pack Carriers', qtyPerUnit: 1, unit: 'each' },
-      { item: 'Product', qtyPerUnit: 0.5625, unit: 'gal' }
+      { item: '12oz Can', qtyPerUnit: 6, unit: 'each', beerSpecific: false },
+      { item: 'Can Lid', qtyPerUnit: 6, unit: 'each', beerSpecific: false },
+      { item: (beerName ? beerName + ' 12oz Label' : 'Can Label'), qtyPerUnit: 6, unit: 'each', beerSpecific: true },
+      { item: '6-pack Carrier', qtyPerUnit: 1, unit: 'each', beerSpecific: false },
+      { item: 'Product', qtyPerUnit: 0.5625, unit: 'gal', beerSpecific: false }
     ],
     '16oz 4-pack': [
-      { item: '16oz Cans', qtyPerUnit: 4, unit: 'each' },
-      { item: 'Can Ends', qtyPerUnit: 4, unit: 'each' },
-      { item: '4-pack Carriers', qtyPerUnit: 1, unit: 'each' },
-      { item: 'Product', qtyPerUnit: 0.5, unit: 'gal' }
+      { item: '16oz Can', qtyPerUnit: 4, unit: 'each', beerSpecific: false },
+      { item: 'Can Lid', qtyPerUnit: 4, unit: 'each', beerSpecific: false },
+      { item: (beerName ? beerName + ' 16oz Label' : 'Can Label'), qtyPerUnit: 4, unit: 'each', beerSpecific: true },
+      { item: '4-pack Carrier', qtyPerUnit: 1, unit: 'each', beerSpecific: false },
+      { item: 'Product', qtyPerUnit: 0.5, unit: 'gal', beerSpecific: false }
     ],
     'Growler': [
-      { item: 'Growler', qtyPerUnit: 1, unit: 'each' },
-      { item: 'Growler Cap', qtyPerUnit: 1, unit: 'each' },
-      { item: 'Product', qtyPerUnit: 0.5, unit: 'gal' }
+      { item: 'Growler', qtyPerUnit: 1, unit: 'each', beerSpecific: false },
+      { item: 'Growler Cap', qtyPerUnit: 1, unit: 'each', beerSpecific: false },
+      { item: 'Product', qtyPerUnit: 0.5, unit: 'gal', beerSpecific: false }
     ],
     'Crowler': [
-      { item: 'Crowler Can', qtyPerUnit: 1, unit: 'each' },
-      { item: 'Can End', qtyPerUnit: 1, unit: 'each' },
-      { item: 'Product', qtyPerUnit: 0.25, unit: 'gal' }
+      { item: 'Crowler Can', qtyPerUnit: 1, unit: 'each', beerSpecific: false },
+      { item: 'Can End', qtyPerUnit: 1, unit: 'each', beerSpecific: false },
+      { item: 'Product', qtyPerUnit: 0.25, unit: 'gal', beerSpecific: false }
     ]
   };
   
@@ -8374,6 +8659,101 @@ function getPackageTypeComponents(packageType) {
     success: true,
     components: packageComponents[packageType] || []
   });
+}
+
+/**
+ * Calculate packaging materials needed and deduct from Raw Materials
+ * Called from sendItWithActualLabor when packaging is complete
+ */
+function deductPackagingMaterials(batchNumber, packageBreakdown, beerName) {
+  try {
+    var totalPackagingCost = 0;
+    var materialsUsed = [];
+    var rmResult = getRawMaterialsInventory({});
+    var materialsLookup = {};
+    
+    if (rmResult.success && rmResult.materials) {
+      rmResult.materials.forEach(function(m) {
+        materialsLookup[m.item.toLowerCase()] = m.avgCost || 0;
+      });
+    }
+    
+    // Process each package type
+    for (var pkgType in packageBreakdown) {
+      var qty = parseFloat(packageBreakdown[pkgType]) || 0;
+      if (qty <= 0) continue;
+      
+      // Get components for this package type
+      var componentsResult = getPackageTypeComponents(pkgType, beerName);
+      if (!componentsResult.success || !componentsResult.components) continue;
+      
+      componentsResult.components.forEach(function(comp) {
+        // Skip "Product" - that's the beer itself, not a material
+        if (comp.item.toLowerCase() === 'product') return;
+        
+        var totalQty = comp.qtyPerUnit * qty;
+        var materialName = comp.item;
+        
+        // Try to find the material in Raw Materials (case-insensitive)
+        var foundMaterial = null;
+        for (var matName in materialsLookup) {
+          if (matName === materialName.toLowerCase() || 
+              materialName.toLowerCase().indexOf(matName) !== -1 ||
+              matName.indexOf(materialName.toLowerCase()) !== -1) {
+            // Find the actual material object
+            rmResult.materials.forEach(function(m) {
+              if (m.item.toLowerCase() === matName) {
+                foundMaterial = m;
+              }
+            });
+            break;
+          }
+        }
+        
+        // If not found by exact match, try partial match
+        if (!foundMaterial) {
+          rmResult.materials.forEach(function(m) {
+            var mName = m.item.toLowerCase();
+            var cName = materialName.toLowerCase();
+            if (mName.indexOf(cName) !== -1 || cName.indexOf(mName) !== -1) {
+              foundMaterial = m;
+              materialName = m.item; // Use the actual material name from inventory
+            }
+          });
+        }
+        
+        if (foundMaterial) {
+          var unitCost = foundMaterial.avgCost || 0;
+          var totalCost = totalQty * unitCost;
+          totalPackagingCost += totalCost;
+          
+          // Deduct from Raw Materials (with Packaging type)
+          depleteRawMaterial(materialName, totalQty, batchNumber, null, 'Packaging');
+          
+          materialsUsed.push({
+            item: materialName,
+            quantity: totalQty,
+            unit: comp.unit,
+            cost: totalCost
+          });
+          
+          Logger.log('Packaging: Deducted ' + totalQty + ' ' + comp.unit + ' of ' + materialName + ' (Cost: $' + totalCost.toFixed(2) + ')');
+        } else {
+          Logger.log('Warning: Packaging material not found in inventory: ' + materialName);
+        }
+      });
+    }
+    
+    return {
+      success: true,
+      totalCost: totalPackagingCost,
+      materialsUsed: materialsUsed,
+      message: 'Deducted ' + materialsUsed.length + ' packaging materials'
+    };
+  } catch (e) {
+    Logger.log('Error deducting packaging materials: ' + e.toString());
+    return { success: false, error: e.toString(), totalCost: 0 };
+  }
 }
 
 /**
@@ -8460,7 +8840,7 @@ function addSecondaryAddition(batchNumber, item, amount, uom, notes) {
     }
     
     // Deplete from Raw Materials
-    var depleteResult = depleteRawMaterial(item, amount, batchNumber);
+    var depleteResult = depleteRawMaterial(item, amount, batchNumber, null, 'Cellar');
     
     // Add entry to Batch Details
     addBatchEntry(batchNumber, 'Addition', {
@@ -9561,7 +9941,8 @@ function ensureBatchTasksSheet() {
         'Notes',             // M - Task notes/instructions
         'Materials JSON',    // N - JSON array of materials
         'Created Date',      // O - When created
-        'Created By'         // P - Who created
+        'Created By',        // P - Who created
+        'Materials Depleted At'  // Q - Timestamp when materials were depleted
       ];
       
       sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
@@ -9588,6 +9969,7 @@ function ensureBatchTasksSheet() {
       sheet.setColumnWidth(14, 400); // Materials JSON
       sheet.setColumnWidth(15, 100); // Created Date
       sheet.setColumnWidth(16, 120); // Created By
+      sheet.setColumnWidth(17, 150); // Materials Depleted At
       
       Logger.log('Created Batch Tasks sheet');
     }
@@ -9855,15 +10237,32 @@ function completeBatchTask(taskId, completionData) {
       sheet.getRange(taskRow, 12).setValue(completionData.lossReason);
     }
     
+    // Check if materials already depleted (check timestamp column)
+    var materialsDepletedAt = data[taskRow - 1][16]; // Column Q (0-indexed = 16)
+    var alreadyDepleted = materialsDepletedAt && materialsDepletedAt !== '';
+    
     // Deplete materials if not already depleted
-    if (task.materials && task.materials.length > 0 && 
+    if (!alreadyDepleted && task.materials && task.materials.length > 0 && 
         (!task.materialsDepletedBy || task.materialsDepletedBy === 'task')) {
-      for (var m = 0; m < task.materials.length; m++) {
-        var mat = task.materials[m];
-        if (mat.actualQty && mat.actualQty > 0) {
-          depleteRawMaterial(mat.item, mat.actualQty, task.batchNumber);
+      
+      // Check Material Log to be extra safe
+      if (!hasBeenDepleted(task.batchNumber, taskId, 'Task')) {
+        for (var m = 0; m < task.materials.length; m++) {
+          var mat = task.materials[m];
+          if (mat.actualQty && mat.actualQty > 0) {
+            var matUOM = (mat.unit || mat.uom || 'lb').toString().trim();
+            depleteRawMaterial(mat.item, mat.actualQty, task.batchNumber, taskId, 'Task', matUOM);
+          }
         }
+        
+        // Set depletion timestamp
+        sheet.getRange(taskRow, 17).setValue(now); // Column Q
+        Logger.log('Task materials depleted: ' + taskId + ' for batch ' + task.batchNumber);
+      } else {
+        Logger.log('Task materials already depleted (found in Material Log): ' + taskId);
       }
+    } else if (alreadyDepleted) {
+      Logger.log('Task materials already depleted (timestamp exists): ' + taskId);
     }
     
     // Log to Batch Details
@@ -10322,9 +10721,10 @@ function finalizeBrewWithActuals(batchNumber, vessel, brewer, actualIngredients,
       if (actualIngredients[category] && actualIngredients[category].length > 0) {
         actualIngredients[category].forEach(function(item) {
           var amt = parseFloat(item.actualAmount) || parseFloat(item.amount) || 0;
+          var itemUOM = (item.uom || 'lb').toString().trim();
           if (amt > 0 && item.ingredient) {
-            // Deplete from Raw Materials
-            depleteRawMaterial(item.ingredient, amt, batchNumber);
+            // Deplete from Raw Materials (with unit conversion)
+            depleteRawMaterial(item.ingredient, amt, batchNumber, null, 'Recipe', itemUOM);
             
             // Calculate cost
             var unitCost = parseFloat(item.avgCost) || parseFloat(item.unitCost) || 0;
@@ -10477,7 +10877,7 @@ function addCellarAddition(batchNumber, ingredient, amount, uom, notes) {
     var totalCost = amount * unitCost;
     
     // Deplete from Raw Materials
-    depleteRawMaterial(ingredient, amount, batchNumber);
+    depleteRawMaterial(ingredient, amount, batchNumber, null, 'Cellar');
     
     // Log to Batch Details
     addBatchEntry(batchNumber, 'Addition', {
@@ -12885,9 +13285,56 @@ function sendItWithActualLabor(batchNumber, packageBreakdown, currentVessel, pac
       Logger.log('Warning: Could not calculate task material costs: ' + taskError.toString());
     }
     
-    // Calculate FINAL total cost with ACTUAL labor + task materials
+    // Check if packaging materials already depleted
+    var packagingMaterialsDepletedCol = -1;
+    for (var h = 0; h < headers.length; h++) {
+      if ((headers[h] || '').toString().toLowerCase().indexOf('packagingmaterialsdepleted') !== -1) {
+        packagingMaterialsDepletedCol = h;
+        break;
+      }
+    }
+    
+    var packagingAlreadyDepleted = false;
+    if (packagingMaterialsDepletedCol !== -1) {
+      var flagValue = batchData[packagingMaterialsDepletedCol];
+      packagingAlreadyDepleted = (flagValue === true || flagValue === 'TRUE' || flagValue === 'Yes' || flagValue === 'Y');
+    }
+    
+    // Also check Material Log
+    if (!packagingAlreadyDepleted && hasBeenDepleted(batchNumber, null, 'Packaging')) {
+      packagingAlreadyDepleted = true;
+      Logger.log('Packaging materials already depleted (found in Material Log) for batch: ' + batchNumber);
+    }
+    
+    // Deduct packaging materials and calculate cost
+    var packagingMaterialCost = 0;
+    if (!packagingAlreadyDepleted && packageBreakdown) {
+      try {
+        var packagingResult = deductPackagingMaterials(batchNumber, packageBreakdown, beerName);
+        if (packagingResult.success) {
+          packagingMaterialCost = packagingResult.totalCost || 0;
+          Logger.log('Packaging materials cost: $' + packagingMaterialCost.toFixed(2));
+          
+          // Set packagingMaterialsDepleted flag
+          if (packagingMaterialsDepletedCol === -1) {
+            // Add column if missing
+            var lastCol = batchSheet.getLastColumn();
+            batchSheet.getRange(1, lastCol + 1).setValue('Packaging Materials Depleted');
+            packagingMaterialsDepletedCol = lastCol;
+          }
+          batchSheet.getRange(batchRow, packagingMaterialsDepletedCol + 1).setValue('Yes');
+          Logger.log('Set packagingMaterialsDepleted flag for batch: ' + batchNumber);
+        }
+      } catch (pkgError) {
+        Logger.log('Warning: Could not deduct packaging materials: ' + pkgError.toString());
+      }
+    } else if (packagingAlreadyDepleted) {
+      Logger.log('Packaging materials already depleted for batch: ' + batchNumber + ' - skipping');
+    }
+    
+    // Calculate FINAL total cost with ACTUAL labor + task materials + packaging materials
     var totalLabor = brewLabor + cellarLabor + pkgLabor;
-    var totalCost = recipeCost + totalLabor + overhead + taskMaterialCost;
+    var totalCost = recipeCost + totalLabor + overhead + taskMaterialCost + packagingMaterialCost;
     
     // Calculate efficiency and COGS/BBL
     var efficiency = expectedYield > 0 ? (actualYield / expectedYield * 100) : 0;
@@ -12902,7 +13349,7 @@ function sendItWithActualLabor(batchNumber, packageBreakdown, currentVessel, pac
     batchSheet.getRange(batchRow, 14).setValue(cogsPerBBL);          // N: Cost/BBL
     batchSheet.getRange(batchRow, 15).setValue(variance);            // O: Variance
     
-    // Append labor and task material breakdown to notes
+    // Append labor, task materials, and packaging materials breakdown to notes
     var existingNotes = batchData[15] || '';
     var laborNote = ' | Labor: Brew $' + brewLabor.toFixed(0) + 
                     ' + Cellar $' + cellarLabor.toFixed(0) + 
@@ -12910,6 +13357,9 @@ function sendItWithActualLabor(batchNumber, packageBreakdown, currentVessel, pac
                     ' = $' + totalLabor.toFixed(0);
     if (taskMaterialCost > 0) {
       laborNote += ' | Task Materials: $' + taskMaterialCost.toFixed(2);
+    }
+    if (packagingMaterialCost > 0) {
+      laborNote += ' | Packaging Materials: $' + packagingMaterialCost.toFixed(2);
     }
     batchSheet.getRange(batchRow, 16).setValue(existingNotes + laborNote);
     
@@ -12947,7 +13397,8 @@ function sendItWithActualLabor(batchNumber, packageBreakdown, currentVessel, pac
     
     Logger.log('🚀 SEND IT! ' + batchNumber + ' complete. COGS/BBL: $' + cogsPerBBL.toFixed(2) + 
                ' (Ingredients: $' + recipeCost.toFixed(2) + ', Labor: $' + totalLabor.toFixed(2) + 
-               ', Task Materials: $' + taskMaterialCost.toFixed(2) + ', OH: $' + overhead.toFixed(2) + ')');
+               ', Task Materials: $' + taskMaterialCost.toFixed(2) + 
+               ', Packaging: $' + packagingMaterialCost.toFixed(2) + ', OH: $' + overhead.toFixed(2) + ')');
     
     return serializeForHtml({
       success: true,
@@ -12968,9 +13419,11 @@ function sendItWithActualLabor(batchNumber, packageBreakdown, currentVessel, pac
         ingredients: recipeCost,
         labor: totalLabor,
         taskMaterials: taskMaterialCost,
+        packagingMaterials: packagingMaterialCost,
         overhead: overhead,
         total: totalCost
       },
+      packagingMaterialsCost: packagingMaterialCost,
       fgUpdated: fgResult.success,
       archived: archiveResult.success,
       archiveUrl: archiveResult.url || '',
@@ -13241,54 +13694,134 @@ function updateBatchIngredientActuals(batchNumber, ingredientActuals) {
 
 /**
  * Consume ingredients from Raw Materials inventory
+ * Checks ingredientsDepleted flag to prevent double depletion
  */
 function consumeIngredientsForBatch(batchNumber, recipeName, batchSize) {
-  // Get recipe ingredients
-  var recipeResult = getRecipeIngredients(recipeName);
-  
-  if (!recipeResult.success) {
-    Logger.log('Could not get recipe ingredients for consumption');
-    return;
-  }
-  
-  var ss = getBrmSpreadsheet();
-  var rmSheet = ss.getSheetByName(SHEETS.RAW_MATERIALS);
-  
-  if (!rmSheet) return;
-  
-  var rmData = rmSheet.getDataRange().getValues();
-  var headers = rmData[0];
-  var qtyCol = headers.indexOf('Qty On Hand') + 1 || 4;  // D column
-  
-  // Scale factor for batch size
-  var recipeBatchSize = recipeResult.batchSize || 60;
-  var scaleFactor = batchSize / recipeBatchSize;
-  
-  // Combine all ingredients
-  var allIngredients = [].concat(
-    recipeResult.grains || [],
-    recipeResult.hops || [],
-    recipeResult.other || []
-  );
-  
-  allIngredients.forEach(function(ing) {
-    var amountNeeded = (ing.amount || 0) * scaleFactor;
-    var ingName = (ing.ingredient || ing.name || '').toLowerCase().trim();
+  try {
+    var ss = getBrmSpreadsheet();
+    var batchSheet = ss.getSheetByName(SHEETS.BATCH_LOG);
     
-    // Find in raw materials and deduct
-    for (var i = 1; i < rmData.length; i++) {
-      var rmName = (rmData[i][0] || '').toLowerCase().trim();
+    // Check if ingredients already depleted
+    if (batchSheet) {
+      var batchData = batchSheet.getDataRange().getValues();
+      var headers = batchData[0];
+      var ingredientsDepletedCol = -1;
       
-      if (rmName === ingName || rmName.indexOf(ingName) !== -1 || ingName.indexOf(rmName) !== -1) {
-        var currentQty = parseFloat(rmData[i][qtyCol - 1]) || 0;
-        var newQty = Math.max(0, currentQty - amountNeeded);
-        rmSheet.getRange(i + 1, qtyCol).setValue(newQty);
-        
-        Logger.log('Consumed ' + amountNeeded.toFixed(2) + ' ' + ing.ingredient + ' (was: ' + currentQty + ', now: ' + newQty + ')');
-        break;
+      // Find ingredientsDepleted column (or add it if missing)
+      for (var h = 0; h < headers.length; h++) {
+        if ((headers[h] || '').toString().toLowerCase().indexOf('ingredientsdepleted') !== -1) {
+          ingredientsDepletedCol = h;
+          break;
+        }
+      }
+      
+      // Find batch row
+      for (var i = 1; i < batchData.length; i++) {
+        if (batchData[i][0] && batchData[i][0].toString() === batchNumber) {
+          if (ingredientsDepletedCol !== -1) {
+            var alreadyDepleted = batchData[i][ingredientsDepletedCol];
+            if (alreadyDepleted === true || alreadyDepleted === 'TRUE' || alreadyDepleted === 'Yes' || alreadyDepleted === 'Y') {
+              Logger.log('Ingredients already depleted for batch: ' + batchNumber);
+              return; // Skip depletion
+            }
+          }
+          
+          // Also check Material Log
+          if (hasBeenDepleted(batchNumber, null, 'Recipe')) {
+            Logger.log('Ingredients already depleted (found in Material Log) for batch: ' + batchNumber);
+            // Set flag even if not in column yet
+            if (ingredientsDepletedCol === -1) {
+              // Add column if missing
+              var lastCol = batchSheet.getLastColumn();
+              batchSheet.getRange(1, lastCol + 1).setValue('Ingredients Depleted');
+              ingredientsDepletedCol = lastCol;
+            }
+            batchSheet.getRange(i + 1, ingredientsDepletedCol + 1).setValue('Yes');
+            return;
+          }
+          break;
+        }
       }
     }
-  });
+    
+    // Get recipe ingredients
+    var recipeResult = getRecipeIngredients(recipeName);
+    
+    if (!recipeResult.success) {
+      Logger.log('Could not get recipe ingredients for consumption');
+      return;
+    }
+    
+    var rmSheet = ss.getSheetByName(SHEETS.RAW_MATERIALS);
+    if (!rmSheet) return;
+    
+    var rmData = rmSheet.getDataRange().getValues();
+    var headers = rmData[0];
+    var qtyCol = headers.indexOf('Qty On Hand') + 1 || 4;  // D column
+    
+    // Scale factor for batch size
+    var recipeBatchSize = recipeResult.batchSize || 60;
+    var scaleFactor = batchSize / recipeBatchSize;
+    
+    // Combine all ingredients
+    var allIngredients = [].concat(
+      recipeResult.grains || [],
+      recipeResult.hops || [],
+      recipeResult.other || []
+    );
+    
+    allIngredients.forEach(function(ing) {
+      var amountNeeded = (ing.amount || 0) * scaleFactor;
+      var ingName = (ing.ingredient || ing.name || '').toLowerCase().trim();
+      var recipeUOM = (ing.uom || 'lb').toString().trim();
+      
+      // Find in raw materials and deduct
+      for (var i = RAW_MATERIAL_CONFIG.dataStartRow - 1; i < rmData.length; i++) {
+        var rmName = (rmData[i][RAW_MATERIAL_CONFIG.columns.item - 1] || '').toString().toLowerCase().trim();
+        
+        if (rmName === ingName || rmName.indexOf(ingName) !== -1 || ingName.indexOf(rmName) !== -1) {
+          var rmUnit = (rmData[i][RAW_MATERIAL_CONFIG.columns.unit - 1] || 'lb').toString().trim();
+          var currentQty = parseFloat(rmData[i][RAW_MATERIAL_CONFIG.columns.qtyOnHand - 1]) || 0;
+          
+          // Convert recipe UOM to Raw Material UOM
+          var amountToDeduct = amountNeeded;
+          if (recipeUOM !== rmUnit) {
+            amountToDeduct = convertUnit(amountNeeded, recipeUOM, rmUnit);
+            Logger.log('Unit conversion for ' + ing.ingredient + ': ' + amountNeeded + ' ' + recipeUOM + ' → ' + amountToDeduct.toFixed(4) + ' ' + rmUnit);
+          }
+          
+          var newQty = Math.max(0, currentQty - amountToDeduct);
+          rmSheet.getRange(i + 1, RAW_MATERIAL_CONFIG.columns.qtyOnHand).setValue(newQty);
+          
+          // Log to Material Log with Recipe type
+          logMaterialAdjustment(ing.ingredient || ing.name, currentQty, newQty, 'Batch: ' + batchNumber + ', Type: Recipe');
+          
+          Logger.log('Consumed ' + amountToDeduct.toFixed(4) + ' ' + rmUnit + ' (' + amountNeeded + ' ' + recipeUOM + ') of ' + ing.ingredient + ' (was: ' + currentQty + ', now: ' + newQty + ')');
+          break;
+        }
+      }
+    });
+    
+    // Set ingredientsDepleted flag
+    if (batchSheet) {
+      var batchData = batchSheet.getDataRange().getValues();
+      for (var i = 1; i < batchData.length; i++) {
+        if (batchData[i][0] && batchData[i][0].toString() === batchNumber) {
+          if (ingredientsDepletedCol === -1) {
+            // Add column if missing
+            var lastCol = batchSheet.getLastColumn();
+            batchSheet.getRange(1, lastCol + 1).setValue('Ingredients Depleted');
+            ingredientsDepletedCol = lastCol;
+          }
+          batchSheet.getRange(i + 1, ingredientsDepletedCol + 1).setValue('Yes');
+          Logger.log('Set ingredientsDepleted flag for batch: ' + batchNumber);
+          break;
+        }
+      }
+    }
+  } catch (e) {
+    Logger.log('Error in consumeIngredientsForBatch: ' + e.toString());
+  }
 }
 // ═══════════════════════════════════════════════════════════════════════════════
 // RED LEG BREWING - LABOR TRACKING SYSTEM
@@ -15174,71 +15707,104 @@ function updateFinishedGoodsItem(data) {
  */
 function updateRawMaterialItem(data) {
   try {
-    var ss = SpreadsheetApp.openById('1bbbvYjFRO5peYuMPNaxcl10X--Wg5RjjJvs_No4Ch16WjpfO80oP-tqJ');
-    var sheet = ss.getSheetByName('Raw Materials');
-    if (!sheet) return { success: false, error: 'Raw Materials sheet not found' };
+    Logger.log('updateRawMaterialItem called with item: ' + data.item);
+    // Use getActiveSpreadsheet() since this runs from the bound spreadsheet
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    if (!ss) {
+      Logger.log('getActiveSpreadsheet() failed, trying getBrmSpreadsheet()');
+      ss = getBrmSpreadsheet();
+    }
+    
+    // Use the same sheet name and structure as other Raw Materials functions
+    var sheet = ss.getSheetByName(RAW_MATERIAL_CONFIG.sheetName);
+    if (!sheet) {
+      // Fallback to common name
+      sheet = ss.getSheetByName('Raw Materials');
+      if (!sheet) return { success: false, error: 'Raw Materials sheet not found' };
+    }
+    Logger.log('Found Raw Materials sheet: ' + sheet.getName());
     
     var dataRange = sheet.getDataRange();
     var values = dataRange.getValues();
-    var headers = values[0];
     
-    // Find column indices
-    var itemCol = -1, catCol = -1, qtyCol = -1, unitCol = -1, costCol = -1;
-    var totalCol = -1, reorderPtCol = -1, reorderQtyCol = -1, statusCol = -1, supplierCol = -1, notesCol = -1;
+    // Use RAW_MATERIAL_CONFIG structure (header at row 4, data starts at row 5)
+    var cols = RAW_MATERIAL_CONFIG.columns;
+    var dataStartRow = RAW_MATERIAL_CONFIG.dataStartRow - 1; // Convert to 0-indexed
     
-    for (var c = 0; c < headers.length; c++) {
-      var h = (headers[c] || '').toString().toLowerCase();
-      if (h === 'item' || h === 'name' || h === 'material') itemCol = c;
-      if (h.indexOf('category') !== -1 || h === 'type') catCol = c;
-      if (h.indexOf('qty') !== -1 || h.indexOf('on hand') !== -1 || h.indexOf('quantity') !== -1) qtyCol = c;
-      if (h === 'unit' || h === 'uom') unitCol = c;
-      if ((h.indexOf('cost') !== -1 || h.indexOf('price') !== -1) && h.indexOf('total') === -1) costCol = c;
-      if (h.indexOf('total') !== -1 || h.indexOf('value') !== -1) totalCol = c;
-      if (h.indexOf('reorder') !== -1 && h.indexOf('point') !== -1) reorderPtCol = c;
-      if (h.indexOf('reorder') !== -1 && h.indexOf('qty') !== -1) reorderQtyCol = c;
-      if (h.indexOf('status') !== -1) statusCol = c;
-      if (h.indexOf('supplier') !== -1 || h.indexOf('vendor') !== -1) supplierCol = c;
-      if (h.indexOf('note') !== -1) notesCol = c;
+    Logger.log('Searching for item: "' + data.item + '" (trimmed: "' + data.item.trim() + '")');
+    Logger.log('Item column: ' + (cols.item - 1) + ' (1-indexed: ' + cols.item + ')');
+    Logger.log('Data starts at row index: ' + dataStartRow + ' (sheet row: ' + (dataStartRow + 1) + ')');
+    
+    // Log first few items for debugging
+    var sampleItems = [];
+    for (var s = dataStartRow; s < Math.min(dataStartRow + 5, values.length); s++) {
+      var sampleItem = (values[s][cols.item - 1] || '').toString().trim();
+      sampleItems.push(sampleItem);
     }
+    Logger.log('Sample items from sheet: ' + sampleItems.join(', '));
     
-    // Find the row
-    for (var i = 1; i < values.length; i++) {
-      var itemName = (values[i][itemCol] || '').toString().trim();
+    // Find the row - start from dataStartRow, not row 1
+    var searchItem = (data.item || '').toString().trim().toLowerCase();
+    var foundRow = -1;
+    
+    for (var i = dataStartRow; i < values.length; i++) {
+      var itemName = (values[i][cols.item - 1] || '').toString().trim();
+      var itemNameLower = itemName.toLowerCase();
       
-      if (itemName.toLowerCase() === data.item.toLowerCase()) {
-        var qty = parseFloat(data.qtyOnHand) || 0;
-        var avgCost = parseFloat(data.avgCost) || 0;
-        var reorderPoint = parseFloat(data.reorderPoint) || 0;
-        var reorderQty = parseFloat(data.reorderQty) || 0;
-        var totalValue = qty * avgCost;
-        
-        // Determine status
-        var status = '✅ OK';
-        if (qty <= 0) status = '🚨 OUT';
-        else if (reorderPoint > 0 && qty <= reorderPoint) status = '⚠️ REORDER';
-        
-        // Update cells
-        var rowNum = i + 1;
-        if (qtyCol >= 0) sheet.getRange(rowNum, qtyCol + 1).setValue(qty);
-        if (costCol >= 0) sheet.getRange(rowNum, costCol + 1).setValue(avgCost);
-        if (totalCol >= 0) sheet.getRange(rowNum, totalCol + 1).setValue(Math.round(totalValue * 100) / 100);
-        if (reorderPtCol >= 0) sheet.getRange(rowNum, reorderPtCol + 1).setValue(reorderPoint);
-        if (reorderQtyCol >= 0) sheet.getRange(rowNum, reorderQtyCol + 1).setValue(reorderQty);
-        if (statusCol >= 0) sheet.getRange(rowNum, statusCol + 1).setValue(status);
-        if (supplierCol >= 0 && data.supplier) sheet.getRange(rowNum, supplierCol + 1).setValue(data.supplier);
-        if (notesCol >= 0 && data.notes !== undefined) sheet.getRange(rowNum, notesCol + 1).setValue(data.notes);
-        
-        // Log the change
-        try {
-          logMaterialAdjustment(data.item, values[i][qtyCol], qty, 'UI edit', 'EDIT');
-        } catch(logErr) {
-          // Logging is optional
-        }
-        
-        return { success: true, message: 'Raw material updated' };
+      Logger.log('Comparing: "' + itemName + '" (lower: "' + itemNameLower + '") with "' + searchItem + '"');
+      
+      if (itemNameLower === searchItem) {
+        foundRow = i;
+        Logger.log('Found item at row index: ' + i + ' (sheet row: ' + (i + 1) + ')');
+        break;
       }
     }
-    return { success: false, error: 'Item not found: ' + data.item };
+    
+    if (foundRow === -1) {
+      Logger.log('Item not found. Searched ' + (values.length - dataStartRow) + ' rows');
+      return { success: false, error: 'Item not found: ' + data.item + '. Check logs for details.' };
+    }
+    
+    // Found the item, now update it
+    var i = foundRow;
+    var qty = parseFloat(data.qtyOnHand) || 0;
+    var avgCost = parseFloat(data.avgCost) || 0;
+    var reorderPoint = parseFloat(data.reorderPoint) || 0;
+    var reorderQty = parseFloat(data.reorderQty) || 0;
+    var totalValue = qty * avgCost;
+    
+    // Get current values for logging
+    var currentQty = parseFloat(values[i][cols.qtyOnHand - 1]) || 0;
+    
+    // Determine status
+    var status = '✅ OK';
+    if (qty <= 0) status = '🚨 OUT';
+    else if (reorderPoint > 0 && qty <= reorderPoint) status = '⚠️ REORDER';
+    
+    // Update cells using RAW_MATERIAL_CONFIG column numbers (1-indexed)
+    var rowNum = i + 1;
+    Logger.log('Updating row ' + rowNum);
+    
+    sheet.getRange(rowNum, cols.qtyOnHand).setValue(qty);
+    if (data.unit) sheet.getRange(rowNum, cols.unit).setValue(data.unit);
+    sheet.getRange(rowNum, cols.avgCost).setValue(avgCost);
+    sheet.getRange(rowNum, cols.totalValue).setValue(Math.round(totalValue * 100) / 100);
+    sheet.getRange(rowNum, cols.reorderPoint).setValue(reorderPoint);
+    sheet.getRange(rowNum, cols.reorderQty).setValue(reorderQty);
+    sheet.getRange(rowNum, cols.status).setValue(status);
+    if (data.supplier && cols.supplier) sheet.getRange(rowNum, cols.supplier).setValue(data.supplier);
+    if (data.notes !== undefined && cols.notes) sheet.getRange(rowNum, cols.notes).setValue(data.notes);
+    
+    Logger.log('Updated: Qty=' + qty + ', Unit=' + (data.unit || 'unchanged') + ', Cost=' + avgCost);
+    
+    // Log the change
+    try {
+      logMaterialAdjustment(data.item, currentQty, qty, 'UI edit', 'EDIT');
+    } catch(logErr) {
+      Logger.log('Warning: Could not log material adjustment: ' + logErr.toString());
+    }
+    
+    return { success: true, message: 'Raw material updated' };
   } catch (e) {
     return { success: false, error: e.toString() };
   }
