@@ -135,6 +135,24 @@ function getBrmSpreadsheet() {
 }
 
 /**
+ * Wrap a synchronous function in a standardized { success, data|error } response.
+ * Intended for simple server-side helpers; core public APIs already implement
+ * detailed success/error objects themselves.
+ *
+ * @param {Function} fn - Function to execute (no args)
+ * @returns {{success: boolean, data?: *, error?: string}}
+ */
+function safeExecute(fn) {
+  try {
+    var result = fn();
+    return { success: true, data: result };
+  } catch (e) {
+    Logger.log('Error in safeExecute: ' + e.toString());
+    return { success: false, error: e.toString() };
+  }
+}
+
+/**
  * BRM User Email-to-Name Mapping
  * Used for "Execute as Me" deployment - returns actual logged-in user
  */
