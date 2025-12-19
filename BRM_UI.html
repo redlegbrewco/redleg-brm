@@ -8342,18 +8342,56 @@ function loadRecipeTaskTemplates() {
   
   google.script.run
     .withSuccessHandler(function(result) {
+      console.log('getRecipeTaskTemplates result:', result);
       var container = document.getElementById('taskTemplatesContainer');
-      if (!container) return;
+      if (!container) {
+        console.error('taskTemplatesContainer not found');
+        return;
+      }
       
-      if (!result.success || !result.templates || result.templates.length === 0) {
+      // Null check - CRITICAL
+      if (!result) {
+        console.error('getRecipeTaskTemplates returned null');
+        container.innerHTML = '<p style="color:#dc2626; text-align:center; padding:40px;">Error: No response from server</p>';
+        showToast('Error loading templates', 'error');
+        return;
+      }
+      
+      // Check success property
+      if (!result.success) {
+        console.error('getRecipeTaskTemplates failed:', result.error);
+        container.innerHTML = '<p style="color:#dc2626; text-align:center; padding:40px;">Error: ' + (result.error || 'Unknown error') + '</p>';
+        showToast('Error loading templates: ' + (result.error || 'Unknown error'), 'error');
+        return;
+      }
+      
+      if (!result.templates || result.templates.length === 0) {
         container.innerHTML = '<p style="color:#9ca3af; text-align:center; padding:40px;">No task templates. Click "+ Add Template" to create default tasks for this recipe.</p>';
         return;
       }
       
       var html = '<div style="display:flex;flex-direction:column;gap:12px;">';
       result.templates.forEach(function(template) {
-        var materials = template.defaultMaterials ? JSON.parse(template.defaultMaterials) : [];
-        var materialsText = materials.length > 0 ? materials.map(function(m) { return m.item + ' (' + m.qty + ' ' + m.unit + ')'; }).join(', ') : 'None';
+        // defaultMaterials is already an array (parsed in backend), not a JSON string
+        var materials = [];
+        if (template.defaultMaterials) {
+          if (Array.isArray(template.defaultMaterials)) {
+            materials = template.defaultMaterials;
+          } else if (typeof template.defaultMaterials === 'string') {
+            // Fallback: if it's still a string, parse it
+            try {
+              materials = JSON.parse(template.defaultMaterials);
+            } catch (e) {
+              console.error('Error parsing materials: ' + e.toString());
+              materials = [];
+            }
+          }
+        }
+        var materialsText = materials.length > 0 ? materials.map(function(m) { 
+          var qty = m.quantity || m.qty || 0;
+          var unit = m.unit || m.uom || '';
+          return (m.item || m.ingredient || 'Unknown') + ' (' + qty + ' ' + unit + ')'; 
+        }).join(', ') : 'None';
         
         html += '<div style="background:white;border:1px solid #e5e7eb;border-radius:6px;padding:16px;">' +
           '<div style="display:flex;justify-content:space-between;align-items:start;margin-bottom:12px;">' +
@@ -8396,12 +8434,25 @@ function editRecipeTaskTemplate(templateId) {
   
   google.script.run
     .withSuccessHandler(function(result) {
+      if (!result) {
+        console.error('getRecipeTaskTemplates returned null in editRecipeTaskTemplate');
+        showToast('Error loading template', 'error');
+        return;
+      }
       if (result.success && result.templates) {
         var template = result.templates.find(function(t) { return t.templateId === templateId; });
         if (template) {
           openTaskTemplateModal(template);
+        } else {
+          showToast('Template not found', 'error');
         }
+      } else {
+        showToast('Error loading template: ' + (result.error || 'Unknown error'), 'error');
       }
+    })
+    .withFailureHandler(function(err) {
+      console.error('Error in editRecipeTaskTemplate:', err);
+      showToast('Error loading template', 'error');
     })
     .getRecipeTaskTemplates(currentEditRecipe);
 }

@@ -130,6 +130,29 @@ function serializeForHtml(obj) {
   return JSON.parse(JSON.stringify(obj));
 }
 
+/**
+ * Safe version of serializeForHtml that never returns null
+ * Falls back to original object if serialization fails
+ */
+function safeSerializeForHtml(obj) {
+  try {
+    if (!obj) {
+      Logger.log('Warning: safeSerializeForHtml called with null/undefined');
+      return { success: false, error: 'Invalid object', templates: [] };
+    }
+    var serialized = JSON.parse(JSON.stringify(obj));
+    if (!serialized) {
+      Logger.log('Warning: serializeForHtml returned null, using original object');
+      return obj;
+    }
+    return serialized;
+  } catch (e) {
+    Logger.log('Error in safeSerializeForHtml: ' + e.toString());
+    // Return original object if serialization fails
+    return obj || { success: false, error: 'Serialization failed', templates: [] };
+  }
+}
+
 function getBrmSpreadsheet() {
   return SpreadsheetApp.openById(BRM_SPREADSHEET_ID);
 }
@@ -8378,7 +8401,7 @@ function startBrew(brewerData) {
     
     // Create tasks from recipe templates
     try {
-      var tasksResult = createTasksFromTemplates(batchNumber, brewerData.recipeName, new Date());
+      var tasksResult = createTasksFromTemplates(batchNumber, brewerData.recipeName, new Date(), batchSize);
       if (tasksResult.success && tasksResult.tasksCreated > 0) {
         Logger.log('Created ' + tasksResult.tasksCreated + ' tasks from templates');
       }
@@ -10392,16 +10415,33 @@ function ensureRecipeTaskTemplatesSheet() {
  * GET RECIPE TASK TEMPLATES
  */
 function getRecipeTaskTemplates(recipeName) {
+  Logger.log('=== getRecipeTaskTemplates START ===');
+  Logger.log('recipeName: ' + recipeName + ' (type: ' + typeof recipeName + ')');
+  
   try {
+    if (!recipeName || typeof recipeName !== 'string') {
+      Logger.log('Warning: Invalid recipeName in getRecipeTaskTemplates: ' + recipeName);
+      var emptyResult = { success: true, templates: [] };
+      Logger.log('Returning empty result (invalid recipeName)');
+      return safeSerializeForHtml(emptyResult);
+    }
+    
     var sheet = ensureRecipeTaskTemplatesSheet();
     if (!sheet) {
-      return serializeForHtml({ success: true, templates: [] });
+      Logger.log('Warning: Recipe Task Templates sheet not found');
+      var emptyResult = { success: true, templates: [] };
+      Logger.log('Returning empty result (no sheet)');
+      return safeSerializeForHtml(emptyResult);
     }
     
     var data = sheet.getDataRange().getValues();
-    if (data.length <= 1) {
-      return serializeForHtml({ success: true, templates: [] });
+    if (!data || data.length <= 1) {
+      Logger.log('No data or only headers found, returning empty templates');
+      var emptyResult = { success: true, templates: [] };
+      return safeSerializeForHtml(emptyResult);
     }
+    
+    Logger.log('Found ' + data.length + ' rows in sheet');
     
     var templates = [];
     for (var i = 1; i < data.length; i++) {
@@ -10410,20 +10450,35 @@ function getRecipeTaskTemplates(recipeName) {
         var materialsJson = data[i][6] || '[]';
         var materials = [];
         try {
-          materials = JSON.parse(materialsJson);
-          // Ensure backward compatibility: add default fields if missing
-          materials = materials.map(function(mat) {
-            return {
-              item: mat.item || mat.ingredient || '',
-              quantity: mat.quantity || mat.amount || 0,
-              unit: mat.unit || mat.uom || 'lb',
-              uom: mat.uom || mat.unit || 'lb',
-              source: mat.source || 'manual',  // NEW: default to "manual" for backward compatibility
-              recipeCategory: mat.recipeCategory || null,  // NEW: category if source=recipe
-              recipeIngredientName: mat.recipeIngredientName || null  // NEW: ingredient name if source=recipe
-            };
-          });
+          // Check if materialsJson is valid and not empty
+          if (materialsJson && materialsJson.toString().trim()) {
+            var parsed = JSON.parse(materialsJson.toString().trim());
+            // Ensure parsed result is an array
+            if (Array.isArray(parsed)) {
+              // Ensure backward compatibility: add default fields if missing
+              materials = parsed.map(function(mat) {
+                if (!mat || typeof mat !== 'object') {
+                  return null; // Skip invalid entries
+                }
+                return {
+                  item: mat.item || mat.ingredient || '',
+                  quantity: mat.quantity || mat.amount || 0,
+                  unit: mat.unit || mat.uom || 'lb',
+                  uom: mat.uom || mat.unit || 'lb',
+                  source: mat.source || 'manual',  // NEW: default to "manual" for backward compatibility
+                  recipeCategory: mat.recipeCategory || null,  // NEW: category if source=recipe
+                  recipeIngredientName: mat.recipeIngredientName || null  // NEW: ingredient name if source=recipe
+                };
+              }).filter(function(mat) { return mat !== null; }); // Remove null entries
+            } else {
+              Logger.log('Warning: Materials JSON is not an array for template ' + data[i][0]);
+              materials = [];
+            }
+          } else {
+            materials = [];
+          }
         } catch (e) {
+          Logger.log('Error parsing materials JSON for template ' + data[i][0] + ': ' + e.toString() + ' | JSON: ' + materialsJson);
           materials = [];
         }
         
@@ -10449,26 +10504,60 @@ function getRecipeTaskTemplates(recipeName) {
       return (a.sortOrder || 0) - (b.sortOrder || 0);
     });
     
-    return serializeForHtml({
+    Logger.log('About to return, templates count: ' + templates.length);
+    var result = {
       success: true,
       templates: templates
-    });
+    };
+    Logger.log('Result object created, templates: ' + templates.length);
+    
+    try {
+      var serialized = safeSerializeForHtml(result);
+      Logger.log('Serialized successfully, returning result');
+      return serialized;
+    } catch (serializeError) {
+      Logger.log('Error serializing templates: ' + serializeError.toString());
+      // Fallback: return without serialization
+      Logger.log('Returning result without serialization');
+      return result;
+    }
   } catch (e) {
-    Logger.log('Error getting recipe task templates: ' + e.toString());
-    return { success: false, error: e.toString() };
+    Logger.log('ERROR in getRecipeTaskTemplates: ' + e.toString());
+    Logger.log('Stack trace: ' + e.stack);
+    var errorResult = { success: false, error: e.toString(), templates: [] };
+    try {
+      return safeSerializeForHtml(errorResult);
+    } catch (serializeError) {
+      Logger.log('Error serializing error result: ' + serializeError.toString());
+      return errorResult;
+    }
   }
 }
 
 /**
  * CREATE TASKS FROM TEMPLATES
  * Called when Start Brew is clicked
+ * Now handles recipe-linked materials by looking up ingredients and scaling to batch size
  */
-function createTasksFromTemplates(batchNumber, recipeName, brewDate) {
+function createTasksFromTemplates(batchNumber, recipeName, brewDate, actualBatchSize) {
   try {
     var templatesResult = getRecipeTaskTemplates(recipeName);
     if (!templatesResult.success || !templatesResult.templates || templatesResult.templates.length === 0) {
       return { success: true, message: 'No task templates for this recipe', tasksCreated: 0 };
     }
+    
+    // Get recipe to find base batch size for scaling
+    var recipesResult = getAllRecipesEnhanced();
+    var recipe = null;
+    if (recipesResult.success && recipesResult.recipes) {
+      recipe = recipesResult.recipes.find(function(r) {
+        return r.recipeName === recipeName;
+      });
+    }
+    
+    var recipeBaseBatchSize = recipe ? (recipe.batchSize || 60) : 60;
+    var batchSize = actualBatchSize || recipeBaseBatchSize;
+    var scaleFactor = batchSize / recipeBaseBatchSize;
     
     var brewDateObj = brewDate instanceof Date ? brewDate : new Date(brewDate);
     var tasksCreated = 0;
@@ -10477,6 +10566,49 @@ function createTasksFromTemplates(batchNumber, recipeName, brewDate) {
       var dueDate = new Date(brewDateObj);
       dueDate.setDate(dueDate.getDate() + (template.dayOffset || 0));
       
+      // Process materials: if source is "recipe", look up and scale
+      var processedMaterials = [];
+      if (template.defaultMaterials && Array.isArray(template.defaultMaterials) && template.defaultMaterials.length > 0) {
+        template.defaultMaterials.forEach(function(mat) {
+          if (!mat || typeof mat !== 'object') {
+            Logger.log('Warning: Invalid material in template ' + template.templateId + ', skipping');
+            return; // Skip invalid materials
+          }
+          if (mat.source === 'recipe' && mat.recipeIngredientName && mat.recipeCategory) {
+            // Look up ingredient from recipe
+            var recipeIngredient = getRecipeIngredient(recipeName, mat.recipeIngredientName, mat.recipeCategory);
+            
+            if (recipeIngredient) {
+              // Scale quantity to batch size
+              var scaledQty = (recipeIngredient.quantity || 0) * scaleFactor;
+              
+              // Create task material from recipe ingredient
+              processedMaterials.push({
+                item: recipeIngredient.name,
+                quantity: Math.round(scaledQty * 100) / 100,  // Round to 2 decimals
+                unit: recipeIngredient.unit || 'lb',
+                uom: recipeIngredient.unit || 'lb',
+                source: 'recipe',
+                recipeCategory: mat.recipeCategory,
+                recipeIngredientName: mat.recipeIngredientName,
+                originalRecipeQty: recipeIngredient.quantity,
+                scaledFromBatchSize: recipeBaseBatchSize
+              });
+              
+              Logger.log('Task material from recipe: ' + recipeIngredient.name + ' - ' + 
+                         recipeIngredient.quantity + ' → ' + scaledQty.toFixed(2) + ' (scale: ' + scaleFactor.toFixed(2) + ')');
+            } else {
+              Logger.log('Warning: Recipe ingredient not found: ' + mat.recipeIngredientName + ' in ' + recipeName);
+              // Fall back to template material if recipe lookup fails
+              processedMaterials.push(mat);
+            }
+          } else {
+            // Use template material as-is (manual entry)
+            processedMaterials.push(mat);
+          }
+        });
+      }
+      
       var taskData = {
         taskType: template.taskType,
         taskName: template.taskName || template.taskType,
@@ -10484,7 +10616,7 @@ function createTasksFromTemplates(batchNumber, recipeName, brewDate) {
         dueDate: dueDate.toISOString().split('T')[0],
         status: 'Planned',
         notes: template.defaultNotes || '',
-        materials: template.defaultMaterials || []
+        materials: processedMaterials
       };
       
       var result = createBatchTask(batchNumber, taskData);
@@ -10711,6 +10843,106 @@ function getRecipeIngredientsForDropdown(recipeName, category) {
   } catch (e) {
     Logger.log('Error getting recipe ingredients for dropdown: ' + e.toString());
     return { success: false, error: e.toString(), ingredients: [] };
+  }
+}
+
+/**
+ * GET RECIPE INGREDIENT (Specific Lookup)
+ * Looks up a specific ingredient from a recipe by name and category
+ * Used when creating tasks from templates with recipe-linked materials
+ * 
+ * @param {string} recipeName - Name of the recipe
+ * @param {string} ingredientName - Name of the ingredient to find
+ * @param {string} category - Category: "grains", "hops", "yeast", "other"
+ * @returns {Object|null} {name, quantity, unit, costPerUnit} or null if not found
+ */
+function getRecipeIngredient(recipeName, ingredientName, category) {
+  try {
+    var ingredients = getRecipeIngredientsByCategory(recipeName, category);
+    
+    if (!ingredients || ingredients.length === 0) {
+      return null;
+    }
+    
+    var ingNameLower = (ingredientName || '').toLowerCase().trim();
+    
+    // Find exact match first
+    var match = ingredients.find(function(ing) {
+      return (ing.name || '').toLowerCase().trim() === ingNameLower;
+    });
+    
+    // If no exact match, try fuzzy match
+    if (!match) {
+      match = ingredients.find(function(ing) {
+        var name = (ing.name || '').toLowerCase().trim();
+        return name.indexOf(ingNameLower) !== -1 || ingNameLower.indexOf(name) !== -1;
+      });
+    }
+    
+    return match || null;
+  } catch (e) {
+    Logger.log('Error getting recipe ingredient: ' + e.toString());
+    return null;
+  }
+}
+
+/**
+ * GET RECIPE INGREDIENTS (All Categories)
+ * Returns all ingredients from a recipe in the format expected by consumeIngredientsForBatch
+ * 
+ * @param {string} recipeName - Name of the recipe
+ * @returns {Object} {success: boolean, grains: Array, hops: Array, other: Array, batchSize: number}
+ */
+function getRecipeIngredients(recipeName) {
+  try {
+    var recipesResult = getAllRecipesEnhanced();
+    if (!recipesResult.success || !recipesResult.recipes) {
+      return { success: false, error: 'Could not load recipes' };
+    }
+    
+    var recipe = recipesResult.recipes.find(function(r) {
+      return r.recipeName === recipeName;
+    });
+    
+    if (!recipe) {
+      return { success: false, error: 'Recipe not found: ' + recipeName };
+    }
+    
+    // Convert to format expected by consumeIngredientsForBatch
+    var grains = (recipe.grains || []).map(function(ing) {
+      return {
+        ingredient: ing.ingredient || ing.name || '',
+        amount: ing.amount || ing.quantity || 0,
+        uom: ing.uom || ing.unit || 'lb'
+      };
+    });
+    
+    var hops = (recipe.hops || []).map(function(ing) {
+      return {
+        ingredient: ing.ingredient || ing.name || '',
+        amount: ing.amount || ing.quantity || 0,
+        uom: ing.uom || ing.unit || 'lb'
+      };
+    });
+    
+    var other = (recipe.other || []).map(function(ing) {
+      return {
+        ingredient: ing.ingredient || ing.name || '',
+        amount: ing.amount || ing.quantity || 0,
+        uom: ing.uom || ing.unit || 'lb'
+      };
+    });
+    
+    return {
+      success: true,
+      grains: grains,
+      hops: hops,
+      other: other,
+      batchSize: recipe.batchSize || 60
+    };
+  } catch (e) {
+    Logger.log('Error getting recipe ingredients: ' + e.toString());
+    return { success: false, error: e.toString() };
   }
 }
 
@@ -13907,6 +14139,28 @@ function consumeIngredientsForBatch(batchNumber, recipeName, batchSize) {
       return;
     }
     
+    // Get task templates to check which ingredients are linked to tasks
+    var taskLinkedIngredients = {};
+    try {
+      var templatesResult = getRecipeTaskTemplates(recipeName);
+      if (templatesResult.success && templatesResult.templates) {
+        templatesResult.templates.forEach(function(template) {
+          if (template.defaultMaterials && template.defaultMaterials.length > 0) {
+            template.defaultMaterials.forEach(function(mat) {
+              if (mat.source === 'recipe' && mat.recipeIngredientName && mat.recipeCategory) {
+                // Mark this ingredient as task-linked (skip depletion at Start Brew)
+                var key = (mat.recipeIngredientName || '').toLowerCase().trim() + '|' + (mat.recipeCategory || '').toLowerCase();
+                taskLinkedIngredients[key] = true;
+                Logger.log('Ingredient linked to task (will skip at Start Brew): ' + mat.recipeIngredientName + ' (' + mat.recipeCategory + ')');
+              }
+            });
+          }
+        });
+      }
+    } catch (templateError) {
+      Logger.log('Warning: Could not check task templates for linked ingredients: ' + templateError.toString());
+    }
+    
     var rmSheet = ss.getSheetByName(SHEETS.RAW_MATERIALS);
     if (!rmSheet) return;
     
@@ -13925,9 +14179,36 @@ function consumeIngredientsForBatch(batchNumber, recipeName, batchSize) {
       recipeResult.other || []
     );
     
+    var skippedCount = 0;
+    var depletedCount = 0;
+    
     allIngredients.forEach(function(ing) {
-      var amountNeeded = (ing.amount || 0) * scaleFactor;
+      // Check if this ingredient is linked to a task template
       var ingName = (ing.ingredient || ing.name || '').toLowerCase().trim();
+      var ingCategory = '';
+      
+      // Determine category
+      if (recipeResult.grains && recipeResult.grains.indexOf(ing) !== -1) {
+        ingCategory = 'grains';
+      } else if (recipeResult.hops && recipeResult.hops.indexOf(ing) !== -1) {
+        ingCategory = 'hops';
+      } else if (recipeResult.other && recipeResult.other.indexOf(ing) !== -1) {
+        ingCategory = 'other';
+      }
+      
+      var key = ingName + '|' + ingCategory;
+      
+      if (taskLinkedIngredients[key]) {
+        // Skip depletion - task will handle it when completed
+        skippedCount++;
+        Logger.log('Skipping ingredient depletion (linked to task): ' + ing.ingredient + ' - will deplete when task is completed');
+        return; // Skip this ingredient
+      }
+      
+      // Proceed with normal depletion (brew day ingredients)
+      depletedCount++;
+      var amountNeeded = (ing.amount || 0) * scaleFactor;
+      // ingName already declared above
       var recipeUOM = (ing.uom || 'lb').toString().trim();
       
       // Find in raw materials and deduct
@@ -13956,6 +14237,10 @@ function consumeIngredientsForBatch(batchNumber, recipeName, batchSize) {
         }
       }
     });
+    
+    // Log summary
+    Logger.log('Ingredient depletion summary for batch ' + batchNumber + ': ' + 
+               depletedCount + ' depleted (brew day), ' + skippedCount + ' skipped (task-linked)');
     
     // Set ingredientsDepleted flag
     if (batchSheet) {
