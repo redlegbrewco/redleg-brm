@@ -10411,6 +10411,18 @@ function getRecipeTaskTemplates(recipeName) {
         var materials = [];
         try {
           materials = JSON.parse(materialsJson);
+          // Ensure backward compatibility: add default fields if missing
+          materials = materials.map(function(mat) {
+            return {
+              item: mat.item || mat.ingredient || '',
+              quantity: mat.quantity || mat.amount || 0,
+              unit: mat.unit || mat.uom || 'lb',
+              uom: mat.uom || mat.unit || 'lb',
+              source: mat.source || 'manual',  // NEW: default to "manual" for backward compatibility
+              recipeCategory: mat.recipeCategory || null,  // NEW: category if source=recipe
+              recipeIngredientName: mat.recipeIngredientName || null  // NEW: ingredient name if source=recipe
+            };
+          });
         } catch (e) {
           materials = [];
         }
@@ -10508,6 +10520,19 @@ function addRecipeTaskTemplate(recipeName, templateData) {
     var user = getCurrentUser();
     var now = new Date();
     
+    // Process materials to ensure new fields are set with defaults
+    var processedMaterials = (templateData.defaultMaterials || []).map(function(mat) {
+      return {
+        item: mat.item || mat.ingredient || '',
+        quantity: mat.quantity || mat.amount || 0,
+        unit: mat.unit || mat.uom || 'lb',
+        uom: mat.uom || mat.unit || 'lb',
+        source: mat.source || 'manual',  // NEW: default to "manual" if not provided
+        recipeCategory: mat.recipeCategory || null,  // NEW: category if source=recipe
+        recipeIngredientName: mat.recipeIngredientName || null  // NEW: ingredient name if source=recipe
+      };
+    });
+    
     var row = [
       templateId,                                    // A: Template ID
       recipeName,                                    // B: Recipe Name
@@ -10515,7 +10540,7 @@ function addRecipeTaskTemplate(recipeName, templateData) {
       templateData.taskName || templateData.taskType || '', // D: Task Name
       templateData.dayOffset || 0,                   // E: Day Offset
       templateData.defaultAssignedTo || '',           // F: Default Assigned To
-      JSON.stringify(templateData.defaultMaterials || []), // G: Default Materials
+      JSON.stringify(processedMaterials),            // G: Default Materials (with new fields)
       templateData.defaultNotes || '',               // H: Default Notes
       templateData.sortOrder || 0,                   // I: Sort Order
       true,                                          // J: Active
@@ -10565,7 +10590,21 @@ function updateRecipeTaskTemplate(templateId, updates) {
     if (updates.taskName !== undefined) sheet.getRange(templateRow, 4).setValue(updates.taskName);
     if (updates.dayOffset !== undefined) sheet.getRange(templateRow, 5).setValue(updates.dayOffset);
     if (updates.defaultAssignedTo !== undefined) sheet.getRange(templateRow, 6).setValue(updates.defaultAssignedTo);
-    if (updates.defaultMaterials !== undefined) sheet.getRange(templateRow, 7).setValue(JSON.stringify(updates.defaultMaterials));
+    if (updates.defaultMaterials !== undefined) {
+      // Process materials to ensure new fields are set with defaults
+      var processedMaterials = (updates.defaultMaterials || []).map(function(mat) {
+        return {
+          item: mat.item || mat.ingredient || '',
+          quantity: mat.quantity || mat.amount || 0,
+          unit: mat.unit || mat.uom || 'lb',
+          uom: mat.uom || mat.unit || 'lb',
+          source: mat.source || 'manual',  // NEW: default to "manual" if not provided
+          recipeCategory: mat.recipeCategory || null,  // NEW: category if source=recipe
+          recipeIngredientName: mat.recipeIngredientName || null  // NEW: ingredient name if source=recipe
+        };
+      });
+      sheet.getRange(templateRow, 7).setValue(JSON.stringify(processedMaterials));
+    }
     if (updates.defaultNotes !== undefined) sheet.getRange(templateRow, 8).setValue(updates.defaultNotes);
     if (updates.sortOrder !== undefined) sheet.getRange(templateRow, 9).setValue(updates.sortOrder);
     if (updates.active !== undefined) sheet.getRange(templateRow, 10).setValue(updates.active);
@@ -10574,6 +10613,104 @@ function updateRecipeTaskTemplate(templateId, updates) {
   } catch (e) {
     Logger.log('Error updating recipe task template: ' + e.toString());
     return { success: false, error: e.toString() };
+  }
+}
+
+/**
+ * GET RECIPE INGREDIENTS BY CATEGORY
+ * Returns ingredients from a recipe filtered by category
+ * Used for linking task template materials to recipe ingredients
+ * 
+ * @param {string} recipeName - Name of the recipe
+ * @param {string} category - Category: "grains", "hops", "yeast", "other"
+ * @returns {Array} Array of {name, quantity, unit, costPerUnit}
+ */
+function getRecipeIngredientsByCategory(recipeName, category) {
+  try {
+    var recipesResult = getAllRecipesEnhanced();
+    if (!recipesResult.success || !recipesResult.recipes) {
+      return [];
+    }
+    
+    var recipe = recipesResult.recipes.find(function(r) {
+      return r.recipeName === recipeName;
+    });
+    
+    if (!recipe) {
+      Logger.log('Recipe not found: ' + recipeName);
+      return [];
+    }
+    
+    var ingredients = [];
+    var categoryLower = (category || '').toLowerCase();
+    
+    // Map category to recipe property
+    if (categoryLower === 'grains' || categoryLower === 'grain') {
+      ingredients = (recipe.grains || []).map(function(ing) {
+        return {
+          name: ing.ingredient || '',
+          quantity: ing.amount || 0,
+          unit: ing.uom || 'lb',
+          costPerUnit: 0  // Will be calculated from Raw Materials if needed
+        };
+      });
+    } else if (categoryLower === 'hops' || categoryLower === 'hop') {
+      ingredients = (recipe.hops || []).map(function(ing) {
+        return {
+          name: ing.ingredient || '',
+          quantity: ing.amount || 0,
+          unit: ing.uom || 'lb',
+          costPerUnit: 0  // Will be calculated from Raw Materials if needed
+        };
+      });
+    } else if (categoryLower === 'yeast') {
+      // Yeast is typically stored in recipe metadata, not in ingredients
+      if (recipe.yeast) {
+        ingredients = [{
+          name: recipe.yeast,
+          quantity: 1,  // Yeast is typically per batch
+          unit: 'pitch',
+          costPerUnit: 0
+        }];
+      }
+    } else if (categoryLower === 'other') {
+      ingredients = (recipe.other || []).map(function(ing) {
+        return {
+          name: ing.ingredient || '',
+          quantity: ing.amount || 0,
+          unit: ing.uom || 'lb',
+          costPerUnit: 0  // Will be calculated from Raw Materials if needed
+        };
+      });
+    }
+    
+    return ingredients;
+  } catch (e) {
+    Logger.log('Error getting recipe ingredients by category: ' + e.toString());
+    return [];
+  }
+}
+
+/**
+ * GET RECIPE INGREDIENTS FOR DROPDOWN (UI Helper)
+ * Returns ingredients from a recipe filtered by category for UI dropdowns
+ * Used in Task Template modal when linking materials to recipe ingredients
+ * 
+ * @param {string} recipeName - Name of the recipe
+ * @param {string} category - Category: "grains", "hops", "yeast", "other"
+ * @returns {Object} {success: boolean, ingredients: Array}
+ */
+function getRecipeIngredientsForDropdown(recipeName, category) {
+  try {
+    var ingredients = getRecipeIngredientsByCategory(recipeName, category);
+    
+    return serializeForHtml({
+      success: true,
+      ingredients: ingredients
+    });
+  } catch (e) {
+    Logger.log('Error getting recipe ingredients for dropdown: ' + e.toString());
+    return { success: false, error: e.toString(), ingredients: [] };
   }
 }
 
