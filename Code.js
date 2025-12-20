@@ -14048,3 +14048,697 @@ function updateRawMaterialItem(data) {
     return { success: false, error: e.toString() };
   }
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// PHASE 2A: BREWER'S SHEET CONSOLIDATION - DATA STRUCTURE UPDATES
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Ensure Recipe Ingredients sheet has "Turn" column - Phase 2A
+ * Adds column if it doesn't exist
+ * @returns {Object} Result with success status
+ */
+function ensureRecipeIngredientsTurnColumn() {
+  try {
+    var ss = getBrmSpreadsheet();
+    var sheet = ss.getSheetByName(SHEETS.RECIPE_INGREDIENTS);
+    
+    if (!sheet) {
+      return { success: false, error: 'Recipe Ingredients sheet not found' };
+    }
+    
+    // Get header row (usually row 1)
+    var headerRow = 1;
+    var headerData = sheet.getRange(headerRow, 1, 1, sheet.getLastColumn()).getValues()[0];
+    
+    // Check if "Turn" column exists
+    var turnColIndex = -1;
+    for (var i = 0; i < headerData.length; i++) {
+      if (headerData[i] && headerData[i].toString().toLowerCase().trim() === 'turn') {
+        turnColIndex = i + 1; // 1-indexed
+        break;
+      }
+    }
+    
+    if (turnColIndex === -1) {
+      // Add "Turn" column after UOM (usually column E = 5, so Turn = column F = 6)
+      // But check what the last column is and add after it
+      var lastCol = sheet.getLastColumn();
+      var targetCol = lastCol + 1;
+      
+      // Insert column
+      sheet.insertColumnAfter(lastCol);
+      
+      // Add header
+      sheet.getRange(headerRow, targetCol).setValue('Turn');
+      
+      Logger.log('Added "Turn" column to Recipe Ingredients at column ' + targetCol);
+      
+      return { 
+        success: true, 
+        message: 'Added "Turn" column to Recipe Ingredients',
+        columnIndex: targetCol
+      };
+    } else {
+      return { 
+        success: true, 
+        message: '"Turn" column already exists',
+        columnIndex: turnColIndex
+      };
+    }
+    
+  } catch (e) {
+    Logger.log('Error ensuring Recipe Ingredients Turn column: ' + e.toString());
+    return { success: false, error: e.toString() };
+  }
+}
+
+/**
+ * Ensure Batch Log has Turn 1/Turn 2 columns - Phase 2A
+ * Adds columns to row 9 (header row) if they don't exist
+ * @returns {Object} Result with success status
+ */
+function ensureBatchLogTurnColumns() {
+  try {
+    var ss = getBrmSpreadsheet();
+    var batchSheet = ss.getSheetByName(SHEETS.BATCH_LOG);
+    
+    if (!batchSheet) {
+      return { success: false, error: 'Batch Log sheet not found' };
+    }
+    
+    // Batch Log structure: Row 9 is the header row
+    var headerRow = 9;
+    var lastCol = batchSheet.getLastColumn();
+    
+    // Get header row data
+    var headerData = batchSheet.getRange(headerRow, 1, 1, Math.max(lastCol, 45)).getValues()[0];
+    
+    // Required Turn columns (after existing workflow columns which end at AL = 38)
+    var requiredColumns = [
+      { name: 'Turn 1 Complete Date', colIndex: 39 },      // AM
+      { name: 'Turn 1 Complete By', colIndex: 40 },        // AN
+      { name: 'Turn 1 Labor Hours', colIndex: 41 },        // AO
+      { name: 'Turn 2 Complete Date', colIndex: 42 },      // AP
+      { name: 'Turn 2 Complete By', colIndex: 43 },        // AQ
+      { name: 'Turn 2 Labor Hours', colIndex: 44 }         // AR
+    ];
+    
+    var columnsAdded = [];
+    
+    // Ensure we have enough columns
+    if (lastCol < 44) {
+      for (var c = lastCol + 1; c <= 44; c++) {
+        batchSheet.insertColumnAfter(c - 1);
+      }
+      lastCol = 44;
+    }
+    
+    // Check each required column
+    requiredColumns.forEach(function(col) {
+      var colIndex = col.colIndex - 1; // Convert to 0-based index
+      var existingHeader = headerData[colIndex];
+      var headerExists = false;
+      
+      if (existingHeader && existingHeader.toString().trim() === col.name) {
+        headerExists = true;
+      } else {
+        // Check if header exists anywhere in Row 9
+        for (var i = 0; i < headerData.length; i++) {
+          if (headerData[i] && headerData[i].toString().trim() === col.name) {
+            headerExists = true;
+            break;
+          }
+        }
+      }
+      
+      if (!headerExists) {
+        // Add column header to Row 9
+        batchSheet.getRange(headerRow, col.colIndex).setValue(col.name);
+        columnsAdded.push(col.name);
+        Logger.log('Added header "' + col.name + '" to Row 9, Column ' + col.colIndex);
+      }
+    });
+    
+    if (columnsAdded.length > 0) {
+      Logger.log('Added Batch Log Turn columns: ' + columnsAdded.join(', '));
+      return { 
+        success: true, 
+        message: 'Added ' + columnsAdded.length + ' Turn columns to Row 9',
+        columnsAdded: columnsAdded
+      };
+    } else {
+      return { 
+        success: true, 
+        message: 'All required Turn columns already exist in Row 9',
+        columnsAdded: []
+      };
+    }
+    
+  } catch (e) {
+    Logger.log('Error ensuring Batch Log Turn columns: ' + e.toString());
+    return { success: false, error: e.toString() };
+  }
+}
+
+/**
+ * Ensure Batch Tasks sheet has timer fields - Phase 2A
+ * Adds columns if they don't exist
+ * @returns {Object} Result with success status
+ */
+function ensureBatchTasksTimerColumns() {
+  try {
+    var ss = getBrmSpreadsheet();
+    var sheet = ss.getSheetByName('Batch Tasks');
+    
+    if (!sheet) {
+      // Batch Tasks sheet might not exist - that's okay, we'll note it
+      return { 
+        success: true, 
+        message: 'Batch Tasks sheet not found - will be created when needed',
+        sheetExists: false
+      };
+    }
+    
+    // Get header row (usually row 1)
+    var headerRow = 1;
+    var headerData = sheet.getRange(headerRow, 1, 1, sheet.getLastColumn()).getValues()[0];
+    
+    // Required timer columns
+    var requiredColumns = [
+      { name: 'Timer Start', colIndex: null },  // Will find next available column
+      { name: 'Timer End', colIndex: null },
+      { name: 'Actual Labor Hours', colIndex: null }
+    ];
+    
+    var lastCol = sheet.getLastColumn();
+    var columnsAdded = [];
+    var nextCol = lastCol + 1;
+    
+    // Check each required column
+    requiredColumns.forEach(function(col) {
+      var headerExists = false;
+      
+      // Check if header exists
+      for (var i = 0; i < headerData.length; i++) {
+        if (headerData[i] && headerData[i].toString().trim() === col.name) {
+          headerExists = true;
+          break;
+        }
+      }
+      
+      if (!headerExists) {
+        // Add column
+        if (nextCol > lastCol) {
+          sheet.insertColumnAfter(lastCol);
+          lastCol++;
+        }
+        
+        sheet.getRange(headerRow, nextCol).setValue(col.name);
+        columnsAdded.push(col.name);
+        col.colIndex = nextCol;
+        nextCol++;
+        Logger.log('Added header "' + col.name + '" to Batch Tasks, Column ' + col.colIndex);
+      }
+    });
+    
+    if (columnsAdded.length > 0) {
+      Logger.log('Added Batch Tasks timer columns: ' + columnsAdded.join(', '));
+      return { 
+        success: true, 
+        message: 'Added ' + columnsAdded.length + ' timer columns',
+        columnsAdded: columnsAdded,
+        sheetExists: true
+      };
+    } else {
+      return { 
+        success: true, 
+        message: 'All required timer columns already exist',
+        columnsAdded: [],
+        sheetExists: true
+      };
+    }
+    
+  } catch (e) {
+    Logger.log('Error ensuring Batch Tasks timer columns: ' + e.toString());
+    return { success: false, error: e.toString() };
+  }
+}
+
+/**
+ * Verify Equipment sheet structure - Phase 2A
+ * Checks that required columns exist: Name, Type, Size, Status, Current Batch
+ * @returns {Object} Result with verification status
+ */
+function verifyEquipmentSheetStructure() {
+  try {
+    var ss = getBrmSpreadsheet();
+    var sheet = ss.getSheetByName(SHEETS.EQUIPMENT);
+    
+    if (!sheet) {
+      return { success: false, error: 'Equipment Scheduling sheet not found' };
+    }
+    
+    // Get header row (usually row 1)
+    var headerRow = 1;
+    var headerData = sheet.getRange(headerRow, 1, 1, sheet.getLastColumn()).getValues()[0];
+    
+    // Required columns (flexible matching)
+    var requiredColumns = [
+      { name: 'Name', aliases: ['equipment name', 'vessel name', 'name'] },
+      { name: 'Type', aliases: ['equipment type', 'vessel type', 'type'] },
+      { name: 'Size', aliases: ['capacity', 'size (bbl)', 'bbl', 'size'] },
+      { name: 'Status', aliases: ['status', 'availability', 'available'] },
+      { name: 'Current Batch', aliases: ['current batch', 'batch', 'batch number', 'current beer'] }
+    ];
+    
+    var foundColumns = [];
+    var missingColumns = [];
+    
+    requiredColumns.forEach(function(reqCol) {
+      var found = false;
+      var foundIndex = -1;
+      
+      for (var i = 0; i < headerData.length; i++) {
+        var header = (headerData[i] || '').toString().toLowerCase().trim();
+        if (header === reqCol.name.toLowerCase() || reqCol.aliases.some(function(alias) {
+          return header.indexOf(alias.toLowerCase()) !== -1;
+        })) {
+          found = true;
+          foundIndex = i + 1; // 1-indexed
+          break;
+        }
+      }
+      
+      if (found) {
+        foundColumns.push({ name: reqCol.name, columnIndex: foundIndex });
+      } else {
+        missingColumns.push(reqCol.name);
+      }
+    });
+    
+    return serializeForHtml({
+      success: missingColumns.length === 0,
+      foundColumns: foundColumns,
+      missingColumns: missingColumns,
+      message: missingColumns.length === 0 
+        ? 'All required columns found' 
+        : 'Missing columns: ' + missingColumns.join(', ')
+    });
+    
+  } catch (e) {
+    Logger.log('Error verifying Equipment sheet structure: ' + e.toString());
+    return { success: false, error: e.toString() };
+  }
+}
+
+/**
+ * Get recipe ingredients by turn - Phase 2A
+ * Returns ingredients for Turn 1, Turn 2, or both
+ * @param {string} recipeName - Recipe name
+ * @param {number} turnNumber - 1, 2, or null for both
+ * @returns {Object} Ingredients grouped by turn
+ */
+function getRecipeIngredientsByTurn(recipeName, turnNumber) {
+  try {
+    var ss = getBrmSpreadsheet();
+    var ingredientsSheet = ss.getSheetByName(SHEETS.RECIPE_INGREDIENTS);
+    
+    if (!ingredientsSheet) {
+      return { success: false, error: 'Recipe Ingredients sheet not found' };
+    }
+    
+    var data = ingredientsSheet.getDataRange().getValues();
+    var headers = data[0] || [];
+    
+    // Find column indices
+    var recipeCol = 0; // Usually A
+    var categoryCol = 1; // Usually B
+    var ingredientCol = 2; // Usually C
+    var amountCol = 3; // Usually D
+    var uomCol = 4; // Usually E
+    var turnCol = -1; // Will find if exists
+    
+    // Find Turn column
+    for (var h = 0; h < headers.length; h++) {
+      var header = (headers[h] || '').toString().toLowerCase().trim();
+      if (header === 'turn') {
+        turnCol = h;
+        break;
+      }
+    }
+    
+    var turn1Ingredients = { grains: [], hops: [], other: [] };
+    var turn2Ingredients = { grains: [], hops: [], other: [] };
+    var bothTurnsIngredients = { grains: [], hops: [], other: [] };
+    
+    // Process ingredients
+    for (var i = 1; i < data.length; i++) {
+      var row = data[i];
+      var rowRecipe = (row[recipeCol] || '').toString().trim();
+      
+      if (rowRecipe !== recipeName) continue;
+      
+      var category = (row[categoryCol] || '').toString();
+      var ingredient = (row[ingredientCol] || '').toString();
+      var amount = parseFloat(row[amountCol]) || 0;
+      var uom = (row[uomCol] || 'lb').toString();
+      var turn = turnCol >= 0 ? (row[turnCol] || '').toString().trim() : '';
+      
+      if (!ingredient) continue;
+      
+      var item = {
+        ingredient: ingredient,
+        amount: amount,
+        uom: uom,
+        category: category
+      };
+      
+      // Categorize by turn
+      var targetCategory = category.toLowerCase();
+      var targetArray;
+      
+      if (targetCategory === 'grain' || targetCategory === 'grains') {
+        targetArray = 'grains';
+      } else if (targetCategory === 'hops' || targetCategory === 'hop') {
+        targetArray = 'hops';
+      } else {
+        targetArray = 'other';
+      }
+      
+      // Assign to turn based on Turn column value
+      if (turn === '1') {
+        turn1Ingredients[targetArray].push(item);
+      } else if (turn === '2') {
+        turn2Ingredients[targetArray].push(item);
+      } else {
+        // Blank or empty = applies to both turns (split 50/50)
+        // For now, add to bothTurnsIngredients - UI will handle splitting
+        bothTurnsIngredients[targetArray].push(item);
+      }
+    }
+    
+    // If turnNumber specified, return only that turn
+    if (turnNumber === 1) {
+      return serializeForHtml({
+        success: true,
+        recipeName: recipeName,
+        turn: 1,
+        ingredients: turn1Ingredients,
+        bothTurns: bothTurnsIngredients // Ingredients that apply to both
+      });
+    } else if (turnNumber === 2) {
+      return serializeForHtml({
+        success: true,
+        recipeName: recipeName,
+        turn: 2,
+        ingredients: turn2Ingredients,
+        bothTurns: bothTurnsIngredients // Ingredients that apply to both
+      });
+    } else {
+      // Return all
+      return serializeForHtml({
+        success: true,
+        recipeName: recipeName,
+        turn1: turn1Ingredients,
+        turn2: turn2Ingredients,
+        bothTurns: bothTurnsIngredients
+      });
+    }
+    
+  } catch (e) {
+    Logger.log('Error getting recipe ingredients by turn: ' + e.toString());
+    return { success: false, error: e.toString() };
+  }
+}
+
+/**
+ * Complete a turn (Turn 1 or Turn 2) - Phase 2A
+ * Depletes turn-specific materials, logs labor, updates vessel status
+ * @param {string} batchNumber - Batch number
+ * @param {number} turnNumber - 1 or 2
+ * @param {string} brewerId - Brewer name/ID
+ * @param {number} laborHours - Labor hours worked
+ * @param {string} vesselName - Target vessel (FV or LT)
+ * @param {Object} actualIngredients - Actual ingredients used {grains: [], hops: [], other: []}
+ * @returns {Object} Result with success status
+ */
+function completeTurn(batchNumber, turnNumber, brewerId, laborHours, vesselName, actualIngredients) {
+  try {
+    var ss = getBrmSpreadsheet();
+    var batchSheet = ss.getSheetByName(SHEETS.BATCH_LOG);
+    
+    if (!batchSheet) {
+      return { success: false, error: 'Batch Log sheet not found' };
+    }
+    
+    // Validate turn number
+    if (turnNumber !== 1 && turnNumber !== 2) {
+      return { success: false, error: 'Turn number must be 1 or 2' };
+    }
+    
+    // 1. Find batch
+    var data = batchSheet.getDataRange().getValues();
+    var batchRow = -1;
+    var batch = null;
+    
+    for (var i = 0; i < data.length; i++) {
+      if (data[i][0] && data[i][0].toString() === batchNumber) {
+        batchRow = i + 1;
+        batch = {
+          batchNumber: data[i][0],
+          beerName: data[i][2],
+          batchSize: parseFloat(data[i][3]) || 60
+        };
+        break;
+      }
+    }
+    
+    if (batchRow === -1 || !batch) {
+      return { success: false, error: 'Batch not found: ' + batchNumber };
+    }
+    
+    // 2. Check if turn already completed
+    var turnCompleteDateCol = turnNumber === 1 ? 39 : 42; // AM or AP
+    var turnCompleteDate = batchRow > 0 && data[batchRow - 1].length > (turnCompleteDateCol - 1) 
+      ? data[batchRow - 1][turnCompleteDateCol - 1] 
+      : '';
+    
+    if (turnCompleteDate && turnCompleteDate !== '') {
+      return { success: false, error: 'Turn ' + turnNumber + ' already completed on ' + formatDate(turnCompleteDate) };
+    }
+    
+    // 3. Get recipe to determine base batch size for scaling
+    var recipeSheet = ss.getSheetByName(SHEETS.RECIPES);
+    var recipeBaseSize = batch.batchSize; // Default to batch size
+    if (recipeSheet) {
+      var recipeData = recipeSheet.getDataRange().getValues();
+      for (var r = 1; r < recipeData.length; r++) {
+        if (recipeData[r][0] && recipeData[r][0].toString() === batch.beerName) {
+          recipeBaseSize = parseFloat(recipeData[r][2]) || batch.batchSize; // Column C = Batch Size
+          break;
+        }
+      }
+    }
+    
+    var scaleFactor = batch.batchSize / recipeBaseSize;
+    
+    // 4. Deplete turn-specific materials
+    var depletedItems = [];
+    var totalDepletedCost = 0;
+    
+    // Process actual ingredients (use provided actuals, or scale from recipe if not provided)
+    var ingredientsToDeplete = actualIngredients || { grains: [], hops: [], other: [] };
+    
+    // If actualIngredients not provided, get from recipe and scale
+    if (!actualIngredients || 
+        (ingredientsToDeplete.grains.length === 0 && 
+         ingredientsToDeplete.hops.length === 0 && 
+         ingredientsToDeplete.other.length === 0)) {
+      var recipeResult = getRecipeIngredientsByTurn(batch.beerName, turnNumber);
+      if (recipeResult.success) {
+        // Combine turn-specific and both-turns ingredients
+        var turnIngredients = recipeResult.ingredients || { grains: [], hops: [], other: [] };
+        var bothTurns = recipeResult.bothTurns || { grains: [], hops: [], other: [] };
+        
+        // For both-turns ingredients, split 50/50 if Turn 1, or use full amount if Turn 2
+        var splitFactor = turnNumber === 1 ? 0.5 : 1.0;
+        
+        ['grains', 'hops', 'other'].forEach(function(cat) {
+          turnIngredients[cat].forEach(function(ing) {
+            ingredientsToDeplete[cat].push({
+              ingredient: ing.ingredient,
+              amount: ing.amount * scaleFactor,
+              uom: ing.uom
+            });
+          });
+          
+          bothTurns[cat].forEach(function(ing) {
+            ingredientsToDeplete[cat].push({
+              ingredient: ing.ingredient,
+              amount: ing.amount * scaleFactor * splitFactor,
+              uom: ing.uom
+            });
+          });
+        });
+      }
+    }
+    
+    // Deplete each ingredient
+    ['grains', 'hops', 'other'].forEach(function(category) {
+      if (ingredientsToDeplete[category]) {
+        ingredientsToDeplete[category].forEach(function(ing) {
+          var amount = parseFloat(ing.amount) || 0;
+          if (amount > 0) {
+            // Get cost before depleting
+            var rmResult = getRawMaterialsInventory({});
+            var itemCost = 0;
+            if (rmResult.success && rmResult.materials) {
+              var material = rmResult.materials.find(function(m) {
+                return m.item.toLowerCase() === ing.ingredient.toLowerCase();
+              });
+              if (material) {
+                itemCost = (material.avgCost || 0) * amount;
+              }
+            }
+            
+            // Deplete from Raw Materials
+            depleteRawMaterial(ing.ingredient, amount, batchNumber);
+            
+            depletedItems.push({
+              ingredient: ing.ingredient,
+              amount: amount,
+              uom: ing.uom,
+              cost: itemCost
+            });
+            
+            totalDepletedCost += itemCost;
+          }
+        });
+      }
+    });
+    
+    // 5. Log labor (if Batch Tasks sheet exists, or log to Batch Details)
+    var now = new Date();
+    var user = getCurrentUser();
+    var userEmail = user.email || 'System';
+    
+    // Log to Batch Details
+    addBatchEntry(batchNumber, 'Brew Labor', {
+      description: 'Turn ' + turnNumber + ' - ' + brewerId,
+      value: laborHours,
+      units: 'hours',
+      notes: 'Brewer: ' + brewerId + ', Materials cost: $' + totalDepletedCost.toFixed(2)
+    });
+    
+    // 6. Update vessel status (only on Turn 1, or if vessel changes on Turn 2)
+    if (turnNumber === 1 && vesselName) {
+      updateEquipmentStatus(vesselName, 'In Use', batch.beerName, batchNumber);
+      
+      // Update Batch Log Current Vessel (AC = 29)
+      batchSheet.getRange(batchRow, 29).setValue(vesselName);
+      
+      // Update FV/LT Vessel (AF = 32) if Turn 1
+      if (data[batchRow - 1].length > 31) {
+        batchSheet.getRange(batchRow, 32).setValue(vesselName);
+      }
+    }
+    
+    // 7. Update Batch Log Turn columns
+    if (turnNumber === 1) {
+      // AM (39): Turn 1 Complete Date
+      batchSheet.getRange(batchRow, 39).setValue(now);
+      // AN (40): Turn 1 Complete By
+      batchSheet.getRange(batchRow, 40).setValue(userEmail);
+      // AO (41): Turn 1 Labor Hours
+      batchSheet.getRange(batchRow, 41).setValue(laborHours);
+    } else {
+      // AP (42): Turn 2 Complete Date
+      batchSheet.getRange(batchRow, 42).setValue(now);
+      // AQ (43): Turn 2 Complete By
+      batchSheet.getRange(batchRow, 43).setValue(userEmail);
+      // AR (44): Turn 2 Labor Hours
+      batchSheet.getRange(batchRow, 44).setValue(laborHours);
+    }
+    
+    // 8. Update batch status after Turn 2 completes
+    if (turnNumber === 2) {
+      batchSheet.getRange(batchRow, 11).setValue('Fermenting'); // K: Status
+    }
+    
+    Logger.log('Turn ' + turnNumber + ' complete: ' + batchNumber + ', Depleted ' + depletedItems.length + ' items, ' + laborHours + ' hrs');
+    
+    return serializeForHtml({
+      success: true,
+      batchNumber: batchNumber,
+      turn: turnNumber,
+      brewer: brewerId,
+      laborHours: laborHours,
+      vessel: vesselName,
+      depletedItems: depletedItems,
+      totalDepletedCost: totalDepletedCost,
+      message: 'Turn ' + turnNumber + ' complete. Depleted ' + depletedItems.length + ' ingredients.'
+    });
+    
+  } catch (e) {
+    Logger.log('Error completing turn: ' + e.toString());
+    return { success: false, error: e.toString() };
+  }
+}
+
+/**
+ * Initialize Phase 2A setup - Run this once to set up all Phase 2A infrastructure
+ * Creates/updates sheets and adds columns as needed
+ */
+function initializePhase2ASetup() {
+  try {
+    var results = {
+      recipeIngredientsTurn: null,
+      batchLogTurnColumns: null,
+      batchTasksTimer: null,
+      equipmentStructure: null,
+      errors: []
+    };
+    
+    // Ensure Recipe Ingredients has Turn column
+    try {
+      results.recipeIngredientsTurn = ensureRecipeIngredientsTurnColumn();
+    } catch (e) {
+      results.errors.push('Recipe Ingredients Turn: ' + e.toString());
+    }
+    
+    // Ensure Batch Log has Turn columns
+    try {
+      results.batchLogTurnColumns = ensureBatchLogTurnColumns();
+    } catch (e) {
+      results.errors.push('Batch Log Turn Columns: ' + e.toString());
+    }
+    
+    // Ensure Batch Tasks has timer columns
+    try {
+      results.batchTasksTimer = ensureBatchTasksTimerColumns();
+    } catch (e) {
+      results.errors.push('Batch Tasks Timer: ' + e.toString());
+    }
+    
+    // Verify Equipment sheet structure
+    try {
+      results.equipmentStructure = verifyEquipmentSheetStructure();
+    } catch (e) {
+      results.errors.push('Equipment Structure: ' + e.toString());
+    }
+    
+    var success = results.errors.length === 0;
+    
+    return serializeForHtml({
+      success: success,
+      results: results,
+      message: success ? 'Phase 2A setup complete' : 'Phase 2A setup completed with errors',
+      errors: results.errors
+    });
+    
+  } catch (e) {
+    Logger.log('Error in Phase 2A initialization: ' + e.toString());
+    return { success: false, error: e.toString() };
+  }
+}
