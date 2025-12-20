@@ -49,12 +49,6 @@ var SHEETS = {
   FG_LOG: 'FG Log',
   MATERIAL_LOG: 'Material Log',
   BATCH_INGREDIENTS: 'Batch Ingredients',
-  BATCH_DETAILS: 'Batch Details',
-  
-  // Task Management
-  BATCH_TASKS: 'Batch Tasks',
-  TASK_MATERIALS: 'Task Materials',
-  RECIPE_TASK_TEMPLATES: 'Recipe Task Templates',
   
   // Exports
   QB_JOURNAL_EXPORT: 'QB Journal Export',
@@ -134,88 +128,9 @@ function getBrmSpreadsheet() {
   return SpreadsheetApp.openById(BRM_SPREADSHEET_ID);
 }
 
-/**
- * Wrap a synchronous function in a standardized { success, data|error } response.
- * Intended for simple server-side helpers; core public APIs already implement
- * detailed success/error objects themselves.
- *
- * @param {Function} fn - Function to execute (no args)
- * @returns {{success: boolean, data?: *, error?: string}}
- */
-function safeExecute(fn) {
-  try {
-    var result = fn();
-    return { success: true, data: result };
-  } catch (e) {
-    Logger.log('Error in safeExecute: ' + e.toString());
-    return { success: false, error: e.toString() };
-  }
-}
-
-/**
- * BRM User Email-to-Name Mapping
- * Used for "Execute as Me" deployment - returns actual logged-in user
- */
-var BRM_USER_MAP = {
-  'todd@redlegbrewing.com': { name: 'Todd Baldwin', role: 'Owner' },
-  'steve@redlegbrewing.com': { name: 'Steve DeWeese', role: 'COO' },
-  'richard@redlegbrewing.com': { name: 'Richard Mar', role: 'Head Brewer' }
-};
-
-/**
- * Get current user info with email, name, and role
- * Uses Session.getActiveUser().getEmail() which returns the logged-in user
- * even when script executes as owner ("Execute as Me" deployment)
- * @returns {Object} { email: string, name: string, role: string }
- */
 function getCurrentUser() {
-  var email = Session.getActiveUser().getEmail() || '';
-  var userInfo = BRM_USER_MAP[email.toLowerCase()];
-  
-  if (userInfo) {
-    return {
-      email: email,
-      name: userInfo.name,
-      role: userInfo.role
-    };
-  }
-  
-  // Fallback: use email prefix as name if not in map
-  return {
-    email: email,
-    name: email.split('@')[0] || 'User',
-    role: 'User'
-  };
-}
-
-/**
- * Get current user info for UI display
- * Returns both name and role separately for display and filtering
- * @returns {Object} { success: boolean, user: { email, name, role } }
- */
-function getCurrentUserInfo() {
-  try {
-    var user = getCurrentUser();
-    return serializeForHtml({
-      success: true,
-      user: {
-        email: user.email,
-        name: user.name,
-        role: user.role
-      }
-    });
-  } catch (e) {
-    Logger.log('Error getting current user info: ' + e.toString());
-    return {
-      success: false,
-      error: e.toString(),
-      user: {
-        email: '',
-        name: 'Unknown User',
-        role: 'User'
-      }
-    };
-  }
+  var email = Session.getActiveUser().getEmail();
+  return { email: email, name: email.split('@')[0] };
 }
 
 function formatCurrency(value) {
@@ -1341,64 +1256,6 @@ function getBrewers() {
   });
 }
 
-/**
- * Get brewery staff names from Labor Config sheet
- * Reads Salaried (rows 10-11) and Hourly (rows 16-18) from column A
- * Returns array of name strings for dropdowns
- */
-function getBreweryStaff() {
-  try {
-    var ss = getBrmSpreadsheet();
-    var sheet = ss.getSheetByName(SHEETS.LABOR_CONFIG);
-    
-    if (!sheet) {
-      Logger.log('Labor Config sheet not found');
-      return serializeForHtml({
-        success: true,
-        staff: ['Richard Mar', 'Alex Velasco'] // Fallback
-      });
-    }
-    
-    var staff = [];
-    
-    // Salaried Brewing Staff: rows 10-11 (0-indexed: 9-10)
-    for (var row = 10; row <= 11; row++) {
-      var name = sheet.getRange(row, 1).getValue(); // Column A
-      if (name && name.toString().trim() !== '' && name.toString().trim() !== 'Name') {
-        staff.push(name.toString().trim());
-      }
-    }
-    
-    // Hourly Brewing Staff: rows 16-18 (0-indexed: 15-17)
-    for (var row = 16; row <= 18; row++) {
-      var name = sheet.getRange(row, 1).getValue(); // Column A
-      if (name && name.toString().trim() !== '' && name.toString().trim() !== 'Name') {
-        staff.push(name.toString().trim());
-      }
-    }
-    
-    // Remove duplicates and sort
-    staff = staff.filter(function(name, index) {
-      return staff.indexOf(name) === index;
-    });
-    staff.sort();
-    
-    Logger.log('Found ' + staff.length + ' brewery staff members');
-    
-    return serializeForHtml({
-      success: true,
-      staff: staff
-    });
-    
-  } catch (e) {
-    Logger.log('Error getting brewery staff: ' + e.toString());
-    return serializeForHtml({
-      success: true,
-      staff: ['Richard Mar', 'Alex Velasco'] // Fallback
-    });
-  }
-}
-
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // SECTION 8: RECIPE FUNCTIONS
@@ -1624,7 +1481,7 @@ function addNewRecipe(data) {
 /**
  * Generate Brewer's Sheet for a recipe - supports "Brew This" button
  */
-function getBrewerSheet(recipeName, targetBatchSize, batchNumber) {
+function getBrewerSheet(recipeName, targetBatchSize) {
   try {
     var ss = getBrmSpreadsheet();
     var result = getAllRecipesEnhanced();
@@ -1636,147 +1493,6 @@ function getBrewerSheet(recipeName, targetBatchSize, batchNumber) {
     }
     
     var scaleFactor = (targetBatchSize || recipe.batchSize) / recipe.batchSize;
-    
-    // Fetch workflow data if batch exists
-    var workflowData = {
-      turn1Brewer: null,
-      turn2Brewer: null,
-      recipeChanges: [],
-      fvAssignment: null,
-      yeastDetails: recipe.yeast || '',
-      dryHopSchedule: [],
-      cleaningTasks: [],
-      batchExists: false
-    };
-    
-    // If no batchNumber provided, try to find most recent active batch for this recipe
-    if (!batchNumber) {
-      try {
-        var batchesResult = getBatchesData({ beer: recipeName });
-        if (batchesResult.success && batchesResult.batches && batchesResult.batches.length > 0) {
-          // Find most recent active batch (not packaged)
-          var activeBatches = batchesResult.batches.filter(function(b) {
-            return b.status && b.status.toLowerCase() !== 'packaged' && b.status.toLowerCase() !== 'complete';
-          });
-          if (activeBatches.length > 0) {
-            // Sort by brew date descending and take the most recent
-            activeBatches.sort(function(a, b) {
-              var dateA = a.brewDate ? new Date(a.brewDate) : new Date(0);
-              var dateB = b.brewDate ? new Date(b.brewDate) : new Date(0);
-              return dateB - dateA;
-            });
-            batchNumber = activeBatches[0].batchNumber;
-          }
-        }
-      } catch (e) {
-        Logger.log('Error finding existing batch: ' + e.toString());
-      }
-    }
-    
-    if (batchNumber) {
-      // Get batch data
-      var batchResult = getBatchSheet(batchNumber);
-      if (batchResult.success && batchResult.batch) {
-        workflowData.batchExists = true;
-        workflowData.batchNumber = batchNumber;
-        workflowData.fvAssignment = batchResult.batch.currentVessel || null;
-        workflowData.yeastDetails = batchResult.batch.yeast || recipe.yeast || '';
-        
-        // Get tasks for this batch
-        try {
-          var tasksResult = getBatchTasks(batchNumber);
-          if (tasksResult.success && tasksResult.tasks) {
-            workflowData.tasks = tasksResult.tasks;
-          } else {
-            workflowData.tasks = [];
-          }
-        } catch (e) {
-          Logger.log('Error getting batch tasks: ' + e.toString());
-          workflowData.tasks = [];
-        }
-        
-        // Get brewers from Batch Log (check for Brewers column)
-        var batchSheet = ss.getSheetByName(SHEETS.BATCH_LOG);
-        if (batchSheet) {
-          var batchData = batchSheet.getDataRange().getValues();
-          var headers = batchData[0] || [];
-          var brewersCol = -1;
-          for (var h = 0; h < headers.length; h++) {
-            var header = (headers[h] || '').toString().toLowerCase();
-            if (header.indexOf('brewer') !== -1) {
-              brewersCol = h;
-              break;
-            }
-          }
-          
-          // Find batch row and get brewers
-          for (var i = 1; i < batchData.length; i++) {
-            if (batchData[i][0] && batchData[i][0].toString() === batchNumber) {
-              if (brewersCol >= 0) {
-                var brewersStr = (batchData[i][brewersCol] || '').toString();
-                if (brewersStr) {
-                  var brewers = brewersStr.split(',').map(function(b) { return b.trim(); });
-                  workflowData.turn1Brewer = brewers[0] || null;
-                  workflowData.turn2Brewer = brewers[1] || null;
-                }
-              }
-              break;
-            }
-          }
-        }
-        
-        // Get Batch Details entries
-        if (batchResult.cellarEntries && batchResult.cellarEntries.length > 0) {
-          batchResult.cellarEntries.forEach(function(entry) {
-            var desc = (entry.description || '').toLowerCase();
-            var type = (entry.type || '').toLowerCase();
-            
-            // Dry hop additions
-            if (type === 'addition' && (desc.indexOf('hop') !== -1 || desc.indexOf('dry') !== -1)) {
-              workflowData.dryHopSchedule.push({
-                date: entry.date,
-                time: entry.time,
-                ingredient: entry.description,
-                amount: entry.value,
-                units: entry.units,
-                notes: entry.notes
-              });
-            }
-            
-            // Cleaning tasks (from notes or specific entries)
-            if (type === 'note' && (desc.indexOf('clean') !== -1 || desc.indexOf('sanitize') !== -1 || entry.notes.toLowerCase().indexOf('clean') !== -1)) {
-              workflowData.cleaningTasks.push({
-                date: entry.date,
-                time: entry.time,
-                description: entry.description,
-                notes: entry.notes
-              });
-            }
-          });
-        }
-      }
-    }
-    
-    // Get recipe changes from Recipe Change Log
-    try {
-      var changeHistory = getRecipeChangeHistory(recipeName);
-      if (changeHistory.success && changeHistory.history) {
-        // Get recent changes (last 10)
-        workflowData.recipeChanges = changeHistory.history.slice(0, 10).map(function(change) {
-          return {
-            date: change['Date'] || '',
-            time: change['Time'] || '',
-            user: change['User'] || '',
-            field: change['Field Changed'] || '',
-            oldValue: change['Old Value'] || '',
-            newValue: change['New Value'] || '',
-            reason: change['Reason'] || ''
-          };
-        });
-      }
-    } catch (e) {
-      Logger.log('Error getting recipe changes: ' + e.toString());
-    }
     
     // Load Ingredient Map for name translation
     var ingredientMap = {};
@@ -1904,8 +1620,7 @@ function getBrewerSheet(recipeName, targetBatchSize, batchNumber) {
         totalCOGS: Math.round(totalCOGS * 100) / 100,
         cogsPerBBL: Math.round(cogsPerBBL * 100) / 100,
         insufficientItems: insufficientItems,
-        hasWarnings: insufficientItems.length > 0,
-        workflow: workflowData
+        hasWarnings: insufficientItems.length > 0
       }
     });
   } catch (e) {
@@ -1949,8 +1664,7 @@ function confirmBrewStartEnhanced_Old(brewerData) {
     // Deplete raw materials
     var allIngredients = (brewerData.grains || []).concat(brewerData.hops || []).concat(brewerData.other || []);
     allIngredients.forEach(function(item) {
-      var itemUOM = (item.uom || 'lb').toString().trim();
-      depleteRawMaterial(item.ingredient, item.actualAmount || item.scaledAmount, batchNumber, null, 'Recipe', itemUOM);
+      depleteRawMaterial(item.ingredient, item.actualAmount || item.scaledAmount, batchNumber);
     });
     
     // Update equipment status
@@ -1980,70 +1694,7 @@ function generateBatchNumber(recipeName) {
   return prefix + '-' + yy + mm + dd + '-' + random;
 }
 
-/**
- * Convert quantity from one unit to another
- * @param {number} qty - Quantity to convert
- * @param {string} fromUnit - Source unit (lb, oz, kg, g, gal, ml, L, etc.)
- * @param {string} toUnit - Target unit
- * @returns {number} Converted quantity, or original qty if conversion not possible
- */
-function convertUnit(qty, fromUnit, toUnit) {
-  if (!fromUnit || !toUnit || fromUnit.toLowerCase() === toUnit.toLowerCase()) {
-    return qty; // No conversion needed
-  }
-  
-  var from = fromUnit.toLowerCase().trim();
-  var to = toUnit.toLowerCase().trim();
-  
-  // Weight conversions
-  if ((from === 'lb' || from === 'lbs') && (to === 'oz' || to === 'ozs')) {
-    return qty * 16; // 1 lb = 16 oz
-  }
-  if ((from === 'oz' || from === 'ozs') && (to === 'lb' || to === 'lbs')) {
-    return qty / 16; // 1 oz = 1/16 lb
-  }
-  if ((from === 'kg' || from === 'kilogram' || from === 'kilograms') && (to === 'g' || to === 'gram' || to === 'grams')) {
-    return qty * 1000; // 1 kg = 1000 g
-  }
-  if ((from === 'g' || from === 'gram' || from === 'grams') && (to === 'kg' || to === 'kilogram' || to === 'kilograms')) {
-    return qty / 1000; // 1 g = 1/1000 kg
-  }
-  
-  // Volume conversions
-  if ((from === 'gal' || from === 'gallon' || from === 'gallons') && (to === 'ml' || to === 'milliliter' || from === 'milliliters')) {
-    return qty * 3785.41; // 1 gal = 3785.41 ml
-  }
-  if ((from === 'ml' || from === 'milliliter' || from === 'milliliters') && (to === 'gal' || to === 'gallon' || to === 'gallons')) {
-    return qty / 3785.41; // 1 ml = 1/3785.41 gal
-  }
-  if ((from === 'gal' || from === 'gallon' || from === 'gallons') && (to === 'l' || to === 'liter' || to === 'liters')) {
-    return qty * 3.78541; // 1 gal = 3.78541 L
-  }
-  if ((from === 'l' || from === 'liter' || from === 'liters') && (to === 'gal' || to === 'gallon' || to === 'gallons')) {
-    return qty / 3.78541; // 1 L = 1/3.78541 gal
-  }
-  if ((from === 'l' || from === 'liter' || from === 'liters') && (to === 'ml' || to === 'milliliter' || to === 'milliliters')) {
-    return qty * 1000; // 1 L = 1000 ml
-  }
-  if ((from === 'ml' || from === 'milliliter' || from === 'milliliters') && (to === 'l' || to === 'liter' || to === 'liters')) {
-    return qty / 1000; // 1 ml = 1/1000 L
-  }
-  
-  // If no conversion found, return original (assume same unit or incompatible)
-  Logger.log('Warning: Unit conversion not available: ' + fromUnit + ' → ' + toUnit + '. Using original quantity.');
-  return qty;
-}
-
-/**
- * Deplete raw material from inventory
- * @param {string} itemName - Material name
- * @param {number} qty - Quantity to deplete (in source UOM)
- * @param {string} batchNumber - Batch number for logging
- * @param {string} taskId - Optional task ID for logging
- * @param {string} depletionType - Type: "Recipe", "Task", "Packaging", "Cellar"
- * @param {string} sourceUOM - Optional source UOM (if different from Raw Material UOM)
- */
-function depleteRawMaterial(itemName, qty, batchNumber, taskId, depletionType, sourceUOM) {
+function depleteRawMaterial(itemName, qty, batchNumber) {
   try {
     var ss = getBrmSpreadsheet();
     var sheet = ss.getSheetByName(RAW_MATERIAL_CONFIG.sheetName);
@@ -2055,16 +1706,7 @@ function depleteRawMaterial(itemName, qty, batchNumber, taskId, depletionType, s
     for (var i = RAW_MATERIAL_CONFIG.dataStartRow - 1; i < data.length; i++) {
       if (data[i][cols.item - 1] && data[i][cols.item - 1].toString().toLowerCase() === itemName.toLowerCase()) {
         var currentQty = parseFloat(data[i][cols.qtyOnHand - 1]) || 0;
-        var rmUnit = (data[i][cols.unit - 1] || 'lb').toString().trim();
-        
-        // Convert quantity to match Raw Material UOM if source UOM provided
-        var qtyToDeduct = qty;
-        if (sourceUOM && sourceUOM !== rmUnit) {
-          qtyToDeduct = convertUnit(qty, sourceUOM, rmUnit);
-          Logger.log('Unit conversion: ' + qty + ' ' + sourceUOM + ' → ' + qtyToDeduct.toFixed(4) + ' ' + rmUnit + ' for ' + itemName);
-        }
-        
-        var newQty = Math.max(0, currentQty - qtyToDeduct);
+        var newQty = Math.max(0, currentQty - qty);
         var cost = parseFloat(data[i][cols.avgCost - 1]) || 0;
         var reorder = parseFloat(data[i][cols.reorderPoint - 1]) || 0;
         
@@ -2076,72 +1718,12 @@ function depleteRawMaterial(itemName, qty, batchNumber, taskId, depletionType, s
         sheet.getRange(i + 1, cols.totalValue).setValue(newQty * cost);
         sheet.getRange(i + 1, cols.status).setValue(status);
         
-        // Enhanced logging with depletion type and task ID
-        var logNote = 'Batch: ' + batchNumber;
-        if (taskId) logNote += ', Task: ' + taskId;
-        if (depletionType) logNote += ', Type: ' + depletionType;
-        
-        logMaterialAdjustment(itemName, currentQty, newQty, logNote);
+        logMaterialAdjustment(itemName, currentQty, newQty, 'Batch: ' + batchNumber);
         break;
       }
     }
   } catch (e) {
     Logger.log('Error depleting material: ' + e.toString());
-  }
-}
-
-/**
- * Check if materials have already been depleted for a specific batch/task/type
- * @param {string} batchNumber - Batch number
- * @param {string} taskId - Optional task ID
- * @param {string} depletionType - "Recipe", "Task", "Packaging", "Cellar"
- * @returns {boolean} True if already depleted
- */
-function hasBeenDepleted(batchNumber, taskId, depletionType) {
-  try {
-    var ss = getBrmSpreadsheet();
-    var materialLog = ss.getSheetByName(SHEETS.MATERIAL_LOG);
-    if (!materialLog) return false;
-    
-    var data = materialLog.getDataRange().getValues();
-    var batchCol = -1, notesCol = -1;
-    
-    // Find columns
-    if (data.length > 0) {
-      var headers = data[0];
-      for (var c = 0; c < headers.length; c++) {
-        var h = (headers[c] || '').toString().toLowerCase();
-        if (h.indexOf('batch') !== -1) batchCol = c;
-        if (h.indexOf('note') !== -1 || h.indexOf('description') !== -1) notesCol = c;
-      }
-    }
-    
-    // Check Material Log for existing depletion
-    for (var i = 1; i < data.length; i++) {
-      var rowBatch = (data[i][batchCol] || '').toString();
-      var rowNotes = (data[i][notesCol] || '').toString();
-      
-      if (rowBatch === batchNumber) {
-        // Check if this matches the depletion type
-        if (depletionType === 'Recipe' && rowNotes.indexOf('Batch: ' + batchNumber) !== -1 && rowNotes.indexOf('Type: Recipe') !== -1) {
-          return true;
-        }
-        if (depletionType === 'Task' && taskId && rowNotes.indexOf('Task: ' + taskId) !== -1) {
-          return true;
-        }
-        if (depletionType === 'Packaging' && rowNotes.indexOf('Type: Packaging') !== -1) {
-          return true;
-        }
-        if (depletionType === 'Cellar' && rowNotes.indexOf('Type: Cellar') !== -1) {
-          return true;
-        }
-      }
-    }
-    
-    return false;
-  } catch (e) {
-    Logger.log('Error checking depletion status: ' + e.toString());
-    return false; // If error, allow depletion (fail open)
   }
 }
 
@@ -2501,148 +2083,6 @@ function receivePurchaseOrder(poNumber) {
     return { success: true, message: 'Received ' + itemsReceived.length + ' items' };
   } catch (e) {
     return { success: false, error: e.toString() };
-  }
-}
-
-/**
- * Create a new purchase with line items
- * Updates Raw Materials inventory and logs to Material Log
- */
-function createPurchase(purchaseData) {
-  try {
-    var ss = getBrmSpreadsheet();
-    var purchaseSheet = ss.getSheetByName(SHEETS.PURCHASE_LOG);
-    if (!purchaseSheet) return { success: false, error: 'Purchase Log sheet not found' };
-    
-    var user = getCurrentUser();
-    var purchaseDate = purchaseData.date ? new Date(purchaseData.date) : new Date();
-    var poNumber = purchaseData.poNumber || generatePONumber();
-    
-    // Get header row (row 4, 0-indexed = 3)
-    var data = purchaseSheet.getDataRange().getValues();
-    var headerRow = 3; // Row 4 (0-indexed)
-    var dataStartRow = 4; // Row 5 (0-indexed)
-    
-    // Process each line item
-    var lineItems = purchaseData.lineItems || [];
-    if (lineItems.length === 0) {
-      return { success: false, error: 'No line items provided' };
-    }
-    
-    var totalCost = 0;
-    var itemsProcessed = [];
-    
-    for (var i = 0; i < lineItems.length; i++) {
-      var item = lineItems[i];
-      var material = item.material;
-      var qty = parseFloat(item.quantity) || 0;
-      var unit = item.unit || 'lb';
-      var unitCost = parseFloat(item.unitCost) || 0;
-      var itemTotal = qty * unitCost;
-      totalCost += itemTotal;
-      
-      // Determine category from Raw Materials if available
-      var category = 'Other';
-      var rmResult = getRawMaterialsInventory({ search: material });
-      if (rmResult.success && rmResult.materials.length > 0) {
-        category = rmResult.materials[0].category || 'Other';
-      }
-      
-      // Append row to Purchase Log
-      // Columns: Date, PO Number, Supplier, Item, Category, Qty, Unit, Cost/Unit, Total Cost, Invoice#, Status
-      purchaseSheet.appendRow([
-        purchaseDate,
-        poNumber,
-        purchaseData.vendor || '',
-        material,
-        category,
-        qty,
-        unit,
-        unitCost,
-        itemTotal,
-        purchaseData.poNumber || '', // Invoice # (same as PO if not separate)
-        'Received' // Status - immediately received
-      ]);
-      
-      // Update Raw Materials inventory
-      addToRawMaterialInventory(material, qty, unitCost);
-      
-      itemsProcessed.push({
-        material: material,
-        quantity: qty,
-        unit: unit,
-        cost: itemTotal
-      });
-      
-      Logger.log('Purchase line item: ' + qty + ' ' + unit + ' of ' + material + ' @ $' + unitCost + ' = $' + itemTotal);
-    }
-    
-    // Add shipping and tax if provided
-    var shipping = parseFloat(purchaseData.shipping) || 0;
-    var tax = parseFloat(purchaseData.tax) || 0;
-    
-    if (shipping > 0 || tax > 0) {
-      // Add a line item for shipping/tax if needed
-      var grandTotal = totalCost + shipping + tax;
-      Logger.log('Purchase total: $' + totalCost + ' + Shipping: $' + shipping + ' + Tax: $' + tax + ' = $' + grandTotal);
-    }
-    
-    // Log to Material Log
-    try {
-      logMaterialAdjustment('PURCHASE', 0, totalCost, 'Purchase PO: ' + poNumber + ' from ' + (purchaseData.vendor || 'Unknown'), 'PURCHASE');
-    } catch (logErr) {
-      Logger.log('Warning: Could not log to Material Log: ' + logErr.toString());
-    }
-    
-    return serializeForHtml({
-      success: true,
-      message: 'Purchase created: ' + itemsProcessed.length + ' items',
-      poNumber: poNumber,
-      totalCost: totalCost + shipping + tax,
-      itemsProcessed: itemsProcessed
-    });
-    
-  } catch (e) {
-    Logger.log('Error creating purchase: ' + e.toString());
-    return { success: false, error: e.toString() };
-  }
-}
-
-/**
- * Generate a unique PO number
- */
-function generatePONumber() {
-  var today = new Date();
-  var dateStr = Utilities.formatDate(today, Session.getScriptTimeZone(), 'yyyyMMdd');
-  var timestamp = Date.now().toString().slice(-6);
-  return 'PO-' + dateStr + '-' + timestamp;
-}
-
-/**
- * Get list of vendors from Purchase Log
- */
-function getVendors() {
-  try {
-    var ss = getBrmSpreadsheet();
-    var sheet = ss.getSheetByName(SHEETS.PURCHASE_LOG);
-    if (!sheet) return serializeForHtml({ success: true, vendors: [] });
-    
-    var data = sheet.getDataRange().getValues();
-    var vendors = new Set();
-    
-    // Start from row 5 (0-indexed = 4), column C (Supplier)
-    for (var i = 4; i < data.length; i++) {
-      var vendor = (data[i][2] || '').toString().trim();
-      if (vendor && vendor.length > 0) {
-        vendors.add(vendor);
-      }
-    }
-    
-    var vendorArray = Array.from(vendors).sort();
-    return serializeForHtml({ success: true, vendors: vendorArray });
-  } catch (e) {
-    Logger.log('Error getting vendors: ' + e.toString());
-    return serializeForHtml({ success: false, error: e.toString(), vendors: [] });
   }
 }
 
@@ -8376,16 +7816,6 @@ function startBrew(brewerData) {
       notes: 'Recipe: ' + brewerData.recipeName + ', Brewer: ' + (brewerData.brewer || 'Unknown')
     });
     
-    // Create tasks from recipe templates
-    try {
-      var tasksResult = createTasksFromTemplates(batchNumber, brewerData.recipeName, new Date());
-      if (tasksResult.success && tasksResult.tasksCreated > 0) {
-        Logger.log('Created ' + tasksResult.tasksCreated + ' tasks from templates');
-      }
-    } catch (taskError) {
-      Logger.log('Warning: Could not create tasks from templates: ' + taskError.toString());
-    }
-    
     Logger.log('Brew started: ' + batchNumber + ' (RM not depleted yet)');
     
     return serializeForHtml({
@@ -8447,8 +7877,7 @@ function finalizeBrew(batchNumber, vessel, actualIngredients) {
     // Process grains
     if (actualIngredients.grains) {
       actualIngredients.grains.forEach(function(item) {
-        var itemUOM = (item.uom || 'lb').toString().trim();
-        var result = depleteRawMaterial(item.ingredient, item.actualAmount, batchNumber, null, 'Recipe', itemUOM);
+        var result = depleteRawMaterial(item.ingredient, item.actualAmount, batchNumber);
         var cost = item.actualAmount * (item.avgCost || 0);
         totalIngredientCost += cost;
         allIngredients.push({
@@ -8464,8 +7893,7 @@ function finalizeBrew(batchNumber, vessel, actualIngredients) {
     // Process hops
     if (actualIngredients.hops) {
       actualIngredients.hops.forEach(function(item) {
-        var itemUOM = (item.uom || 'lb').toString().trim();
-        var result = depleteRawMaterial(item.ingredient, item.actualAmount, batchNumber, null, 'Recipe', itemUOM);
+        var result = depleteRawMaterial(item.ingredient, item.actualAmount, batchNumber);
         var cost = item.actualAmount * (item.avgCost || 0);
         totalIngredientCost += cost;
         allIngredients.push({
@@ -8481,8 +7909,7 @@ function finalizeBrew(batchNumber, vessel, actualIngredients) {
     // Process other
     if (actualIngredients.other) {
       actualIngredients.other.forEach(function(item) {
-        var itemUOM = (item.uom || 'lb').toString().trim();
-        var result = depleteRawMaterial(item.ingredient, item.actualAmount, batchNumber, null, 'Recipe', itemUOM);
+        var result = depleteRawMaterial(item.ingredient, item.actualAmount, batchNumber);
         var cost = item.actualAmount * (item.avgCost || 0);
         totalIngredientCost += cost;
         allIngredients.push({
@@ -8592,7 +8019,7 @@ function addBatchEntry(batchNumber, type, data) {
 
 
 /**
- * Add gravity reading (legacy - uses SG)
+ * Add gravity reading
  */
 function addGravityReading(batchNumber, gravity, temperature, notes) {
   return addBatchEntry(batchNumber, 'Gravity', {
@@ -8601,231 +8028,6 @@ function addGravityReading(batchNumber, gravity, temperature, notes) {
     units: 'SG',
     notes: (temperature ? 'Temp: ' + temperature + '°F. ' : '') + (notes || '')
   });
-}
-
-/**
- * Get package type components configuration
- * Returns what materials/components are needed for each package type
- * Includes beer-specific flag for labels and collars
- */
-function getPackageTypeComponents(packageType, beerName) {
-  beerName = beerName || '';
-  
-  // Component definitions for each package type
-  var packageComponents = {
-    '1/2 BBL Keg': [
-      { item: '1/2 BBL Keg Shell', qtyPerUnit: 1, unit: 'each', beerSpecific: false },
-      { item: 'Keg Cap (Red)', qtyPerUnit: 1, unit: 'each', beerSpecific: false },
-      { item: (beerName ? beerName + ' Collar' : 'Keg Collar'), qtyPerUnit: 1, unit: 'each', beerSpecific: true },
-      { item: 'Product', qtyPerUnit: 15.5, unit: 'gal', beerSpecific: false }
-    ],
-    '1/6 BBL Keg': [
-      { item: '1/6 BBL Keg Shell', qtyPerUnit: 1, unit: 'each', beerSpecific: false },
-      { item: 'Keg Cap (Red)', qtyPerUnit: 1, unit: 'each', beerSpecific: false },
-      { item: (beerName ? beerName + ' Collar' : 'Keg Collar'), qtyPerUnit: 1, unit: 'each', beerSpecific: true },
-      { item: 'Product', qtyPerUnit: 5.17, unit: 'gal', beerSpecific: false }
-    ],
-    '1/4 BBL Keg': [
-      { item: '1/4 BBL Keg Shell', qtyPerUnit: 1, unit: 'each', beerSpecific: false },
-      { item: 'Keg Cap (Red)', qtyPerUnit: 1, unit: 'each', beerSpecific: false },
-      { item: (beerName ? beerName + ' Collar' : 'Keg Collar'), qtyPerUnit: 1, unit: 'each', beerSpecific: true },
-      { item: 'Product', qtyPerUnit: 7.75, unit: 'gal', beerSpecific: false }
-    ],
-    '12oz Case (4×6)': [
-      { item: '12oz Can', qtyPerUnit: 24, unit: 'each', beerSpecific: false },
-      { item: 'Can Lid', qtyPerUnit: 24, unit: 'each', beerSpecific: false },
-      { item: (beerName ? beerName + ' 12oz Label' : 'Can Label'), qtyPerUnit: 24, unit: 'each', beerSpecific: true },
-      { item: 'Six Pack Applicator (Red)', qtyPerUnit: 4, unit: 'each', beerSpecific: false },
-      { item: 'Case Pack (Tray)', qtyPerUnit: 1, unit: 'each', beerSpecific: false },
-      { item: 'Product', qtyPerUnit: 2.25, unit: 'gal', beerSpecific: false }
-    ],
-    '16oz Case (4×6)': [
-      { item: '16oz Can', qtyPerUnit: 24, unit: 'each', beerSpecific: false },
-      { item: 'Can Lid', qtyPerUnit: 24, unit: 'each', beerSpecific: false },
-      { item: (beerName ? beerName + ' 16oz Label' : 'Can Label'), qtyPerUnit: 24, unit: 'each', beerSpecific: true },
-      { item: 'Six Pack Applicator (Red)', qtyPerUnit: 4, unit: 'each', beerSpecific: false },
-      { item: 'Case Pack (Tray)', qtyPerUnit: 1, unit: 'each', beerSpecific: false },
-      { item: 'Product', qtyPerUnit: 3, unit: 'gal', beerSpecific: false }
-    ],
-    '12oz 6-pack': [
-      { item: '12oz Can', qtyPerUnit: 6, unit: 'each', beerSpecific: false },
-      { item: 'Can Lid', qtyPerUnit: 6, unit: 'each', beerSpecific: false },
-      { item: (beerName ? beerName + ' 12oz Label' : 'Can Label'), qtyPerUnit: 6, unit: 'each', beerSpecific: true },
-      { item: '6-pack Carrier', qtyPerUnit: 1, unit: 'each', beerSpecific: false },
-      { item: 'Product', qtyPerUnit: 0.5625, unit: 'gal', beerSpecific: false }
-    ],
-    '16oz 4-pack': [
-      { item: '16oz Can', qtyPerUnit: 4, unit: 'each', beerSpecific: false },
-      { item: 'Can Lid', qtyPerUnit: 4, unit: 'each', beerSpecific: false },
-      { item: (beerName ? beerName + ' 16oz Label' : 'Can Label'), qtyPerUnit: 4, unit: 'each', beerSpecific: true },
-      { item: '4-pack Carrier', qtyPerUnit: 1, unit: 'each', beerSpecific: false },
-      { item: 'Product', qtyPerUnit: 0.5, unit: 'gal', beerSpecific: false }
-    ],
-    'Growler': [
-      { item: 'Growler', qtyPerUnit: 1, unit: 'each', beerSpecific: false },
-      { item: 'Growler Cap', qtyPerUnit: 1, unit: 'each', beerSpecific: false },
-      { item: 'Product', qtyPerUnit: 0.5, unit: 'gal', beerSpecific: false }
-    ],
-    'Crowler': [
-      { item: 'Crowler Can', qtyPerUnit: 1, unit: 'each', beerSpecific: false },
-      { item: 'Can End', qtyPerUnit: 1, unit: 'each', beerSpecific: false },
-      { item: 'Product', qtyPerUnit: 0.25, unit: 'gal', beerSpecific: false }
-    ]
-  };
-  
-  return serializeForHtml({
-    success: true,
-    components: packageComponents[packageType] || []
-  });
-}
-
-/**
- * Calculate packaging materials needed and deduct from Raw Materials
- * Called from sendItWithActualLabor when packaging is complete
- */
-function deductPackagingMaterials(batchNumber, packageBreakdown, beerName) {
-  try {
-    var totalPackagingCost = 0;
-    var materialsUsed = [];
-    var rmResult = getRawMaterialsInventory({});
-    var materialsLookup = {};
-    
-    if (rmResult.success && rmResult.materials) {
-      rmResult.materials.forEach(function(m) {
-        materialsLookup[m.item.toLowerCase()] = m.avgCost || 0;
-      });
-    }
-    
-    // Process each package type
-    for (var pkgType in packageBreakdown) {
-      var qty = parseFloat(packageBreakdown[pkgType]) || 0;
-      if (qty <= 0) continue;
-      
-      // Get components for this package type
-      var componentsResult = getPackageTypeComponents(pkgType, beerName);
-      if (!componentsResult.success || !componentsResult.components) continue;
-      
-      componentsResult.components.forEach(function(comp) {
-        // Skip "Product" - that's the beer itself, not a material
-        if (comp.item.toLowerCase() === 'product') return;
-        
-        var totalQty = comp.qtyPerUnit * qty;
-        var materialName = comp.item;
-        
-        // Try to find the material in Raw Materials (case-insensitive)
-        var foundMaterial = null;
-        for (var matName in materialsLookup) {
-          if (matName === materialName.toLowerCase() || 
-              materialName.toLowerCase().indexOf(matName) !== -1 ||
-              matName.indexOf(materialName.toLowerCase()) !== -1) {
-            // Find the actual material object
-            rmResult.materials.forEach(function(m) {
-              if (m.item.toLowerCase() === matName) {
-                foundMaterial = m;
-              }
-            });
-            break;
-          }
-        }
-        
-        // If not found by exact match, try partial match
-        if (!foundMaterial) {
-          rmResult.materials.forEach(function(m) {
-            var mName = m.item.toLowerCase();
-            var cName = materialName.toLowerCase();
-            if (mName.indexOf(cName) !== -1 || cName.indexOf(mName) !== -1) {
-              foundMaterial = m;
-              materialName = m.item; // Use the actual material name from inventory
-            }
-          });
-        }
-        
-        if (foundMaterial) {
-          var unitCost = foundMaterial.avgCost || 0;
-          var totalCost = totalQty * unitCost;
-          totalPackagingCost += totalCost;
-          
-          // Deduct from Raw Materials (with Packaging type)
-          depleteRawMaterial(materialName, totalQty, batchNumber, null, 'Packaging');
-          
-          materialsUsed.push({
-            item: materialName,
-            quantity: totalQty,
-            unit: comp.unit,
-            cost: totalCost
-          });
-          
-          Logger.log('Packaging: Deducted ' + totalQty + ' ' + comp.unit + ' of ' + materialName + ' (Cost: $' + totalCost.toFixed(2) + ')');
-        } else {
-          Logger.log('Warning: Packaging material not found in inventory: ' + materialName);
-        }
-      });
-    }
-    
-    return {
-      success: true,
-      totalCost: totalPackagingCost,
-      materialsUsed: materialsUsed,
-      message: 'Deducted ' + materialsUsed.length + ' packaging materials'
-    };
-  } catch (e) {
-    Logger.log('Error deducting packaging materials: ' + e.toString());
-    return { success: false, error: e.toString(), totalCost: 0 };
-  }
-}
-
-/**
- * Log gravity and pH reading (Plato scale)
- * @param {string} batchNumber - Batch number
- * @param {Object} data - { plato, pH, temperature, vessel, notes }
- */
-function logGravityReading(batchNumber, data) {
-  try {
-    var plato = parseFloat(data.plato) || null;
-    var pH = parseFloat(data.pH) || null;
-    var temperature = parseFloat(data.temperature) || null;
-    var vessel = data.vessel || '';
-    var notes = data.notes || '';
-    
-    if (plato === null && pH === null) {
-      return { success: false, error: 'At least one reading (Plato or pH) is required' };
-    }
-    
-    var description = 'Gravity/pH reading';
-    if (plato !== null && pH !== null) {
-      description = plato.toFixed(1) + '°P, pH ' + pH.toFixed(2);
-    } else if (plato !== null) {
-      description = plato.toFixed(1) + '°P';
-    } else if (pH !== null) {
-      description = 'pH ' + pH.toFixed(2);
-    }
-    
-    var notesText = '';
-    if (temperature !== null) {
-      notesText += 'Temp: ' + temperature + '°F. ';
-    }
-    if (vessel) {
-      notesText += 'Vessel: ' + vessel + '. ';
-    }
-    notesText += notes;
-    
-    // Store both values in notes for retrieval
-    var fullNotes = 'Plato: ' + (plato !== null ? plato.toFixed(2) : 'N/A') + 
-                    ', pH: ' + (pH !== null ? pH.toFixed(2) : 'N/A') + 
-                    '. ' + notesText;
-    
-    return addBatchEntry(batchNumber, 'Gravity', {
-      description: description,
-      value: plato !== null ? plato : pH,
-      units: plato !== null ? '°P' : 'pH',
-      vessel: vessel,
-      notes: fullNotes
-    });
-    
-  } catch (e) {
-    Logger.log('Error logging gravity reading: ' + e.toString());
-    return { success: false, error: e.toString() };
-  }
 }
 
 
@@ -8858,7 +8060,7 @@ function addSecondaryAddition(batchNumber, item, amount, uom, notes) {
     }
     
     // Deplete from Raw Materials
-    var depleteResult = depleteRawMaterial(item, amount, batchNumber, null, 'Cellar');
+    var depleteResult = depleteRawMaterial(item, amount, batchNumber);
     
     // Add entry to Batch Details
     addBatchEntry(batchNumber, 'Addition', {
@@ -9711,83 +8913,7 @@ function setupBatchLogColumns() {
  * HTML calls confirmBrewStartEnhanced, but new function is startBrew
  */
 function confirmBrewStartEnhanced(brewerData) {
-  var result = startBrew(brewerData);
-  
-  // If Turn 1 and Turn 2 brewers are provided, update Brewers column with "Turn 1 / Turn 2" format
-  if (result.success && brewerData.turn1Brewer && brewerData.turn2Brewer) {
-    try {
-      var ss = getBrmSpreadsheet();
-      var batchSheet = ss.getSheetByName(SHEETS.BATCH_LOG);
-      if (batchSheet) {
-        var data = batchSheet.getDataRange().getValues();
-        var headers = data[0] || [];
-        var brewersCol = -1;
-        
-        for (var i = 0; i < headers.length; i++) {
-          if (headers[i] && headers[i].toString().toLowerCase().includes('brewer')) {
-            brewersCol = i + 1;
-            break;
-          }
-        }
-        
-        if (brewersCol > 0) {
-          for (var i = 1; i < data.length; i++) {
-            if (data[i][0] && data[i][0].toString() === result.batchNumber) {
-              var brewersStr = brewerData.turn1Brewer + ' / ' + brewerData.turn2Brewer;
-              batchSheet.getRange(i + 1, brewersCol).setValue(brewersStr);
-              break;
-            }
-          }
-        }
-      }
-    } catch (e) {
-      Logger.log('Warning: Could not update Brewers column: ' + e.toString());
-    }
-  }
-  
-  return result;
-}
-
-/**
- * Update Batch Brewers column with Turn 1 / Turn 2 format
- */
-function updateBatchBrewers(batchNumber, brewersString) {
-  try {
-    var ss = getBrmSpreadsheet();
-    var batchSheet = ss.getSheetByName(SHEETS.BATCH_LOG);
-    
-    if (!batchSheet) {
-      return { success: false, error: 'Batch Log not found' };
-    }
-    
-    var data = batchSheet.getDataRange().getValues();
-    var headers = data[0] || [];
-    var brewersCol = -1;
-    
-    for (var i = 0; i < headers.length; i++) {
-      if (headers[i] && headers[i].toString().toLowerCase().includes('brewer')) {
-        brewersCol = i + 1;
-        break;
-      }
-    }
-    
-    if (brewersCol <= 0) {
-      return { success: false, error: 'Brewers column not found' };
-    }
-    
-    for (var i = 1; i < data.length; i++) {
-      if (data[i][0] && data[i][0].toString() === batchNumber) {
-        batchSheet.getRange(i + 1, brewersCol).setValue(brewersString);
-        return { success: true, message: 'Brewers column updated' };
-      }
-    }
-    
-    return { success: false, error: 'Batch not found: ' + batchNumber };
-    
-  } catch (e) {
-    Logger.log('Error updating batch brewers: ' + e.toString());
-    return { success: false, error: e.toString() };
-  }
+  return startBrew(brewerData);
 }
 // ═══════════════════════════════════════════════════════════════════════════════
 // RED LEG BREWING - PERSISTENT BATCH SHEET SYSTEM
@@ -9928,688 +9054,6 @@ function getBatchSheet(batchNumber) {
   }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// TASK MANAGEMENT SYSTEM
-// ═══════════════════════════════════════════════════════════════════════════════
-
-/**
- * Ensure Batch Tasks sheet exists with proper structure
- */
-function ensureBatchTasksSheet() {
-  try {
-    var ss = getBrmSpreadsheet();
-    var sheet = ss.getSheetByName(SHEETS.BATCH_TASKS);
-    
-    if (!sheet) {
-      sheet = ss.insertSheet(SHEETS.BATCH_TASKS);
-      
-      var headers = [
-        'Task ID',           // A - Auto-generated unique ID
-        'Batch Number',      // B - Links to Batch Log
-        'Task Type',         // C - Dropdown
-        'Task Name',         // D - Display name
-        'Assigned To',       // E - Brewer name
-        'Due Date',          // F - Expected completion
-        'Status',            // G - Planned/In Progress/Completed
-        'Completed By',      // H - Who marked complete
-        'Completed Date',    // I - When completed
-        'Volume In',         // J - BBL in (for transfers)
-        'Volume Out',        // K - BBL out (for transfers)
-        'Loss Reason',       // L - Dropdown
-        'Notes',             // M - Task notes/instructions
-        'Materials JSON',    // N - JSON array of materials
-        'Created Date',      // O - When created
-        'Created By',        // P - Who created
-        'Materials Depleted At'  // Q - Timestamp when materials were depleted
-      ];
-      
-      sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
-      sheet.getRange(1, 1, 1, headers.length)
-        .setFontWeight('bold')
-        .setBackground('#1a365d')
-        .setFontColor('white');
-      sheet.setFrozenRows(1);
-      
-      // Column widths
-      sheet.setColumnWidth(1, 100);  // Task ID
-      sheet.setColumnWidth(2, 120);  // Batch Number
-      sheet.setColumnWidth(3, 120);  // Task Type
-      sheet.setColumnWidth(4, 200);  // Task Name
-      sheet.setColumnWidth(5, 120);  // Assigned To
-      sheet.setColumnWidth(6, 100);  // Due Date
-      sheet.setColumnWidth(7, 100);  // Status
-      sheet.setColumnWidth(8, 120);  // Completed By
-      sheet.setColumnWidth(9, 120);  // Completed Date
-      sheet.setColumnWidth(10, 80);  // Volume In
-      sheet.setColumnWidth(11, 80);  // Volume Out
-      sheet.setColumnWidth(12, 120); // Loss Reason
-      sheet.setColumnWidth(13, 300); // Notes
-      sheet.setColumnWidth(14, 400); // Materials JSON
-      sheet.setColumnWidth(15, 100); // Created Date
-      sheet.setColumnWidth(16, 120); // Created By
-      sheet.setColumnWidth(17, 150); // Materials Depleted At
-      
-      Logger.log('Created Batch Tasks sheet');
-    }
-    
-    return sheet;
-  } catch (e) {
-    Logger.log('Error ensuring Batch Tasks sheet: ' + e.toString());
-    return null;
-  }
-}
-
-/**
- * Generate unique Task ID
- */
-function generateTaskId(batchNumber) {
-  try {
-    var ss = getBrmSpreadsheet();
-    var sheet = ss.getSheetByName(SHEETS.BATCH_TASKS);
-    if (!sheet) {
-      ensureBatchTasksSheet();
-      sheet = ss.getSheetByName(SHEETS.BATCH_TASKS);
-    }
-    
-    var data = sheet.getDataRange().getValues();
-    var taskCount = data.length - 1; // Exclude header
-    var taskId = 'TASK-' + batchNumber + '-' + String(taskCount + 1).padStart(3, '0');
-    
-    return taskId;
-  } catch (e) {
-    // Fallback if sheet doesn't exist
-    return 'TASK-' + batchNumber + '-' + Date.now();
-  }
-}
-
-/**
- * CREATE BATCH TASK
- */
-function createBatchTask(batchNumber, taskData) {
-  try {
-    var sheet = ensureBatchTasksSheet();
-    if (!sheet) {
-      return { success: false, error: 'Could not create Batch Tasks sheet' };
-    }
-    
-    var taskId = generateTaskId(batchNumber);
-    var user = getCurrentUser();
-    var now = new Date();
-    
-    var row = [
-      taskId,                                    // A: Task ID
-      batchNumber,                               // B: Batch Number
-      taskData.taskType || '',                   // C: Task Type
-      taskData.taskName || taskData.taskType || '', // D: Task Name
-      taskData.assignedTo || '',                 // E: Assigned To
-      taskData.dueDate || '',                    // F: Due Date
-      taskData.status || 'Planned',              // G: Status
-      '',                                        // H: Completed By
-      '',                                        // I: Completed Date
-      taskData.volumeIn || '',                  // J: Volume In
-      taskData.volumeOut || '',                 // K: Volume Out
-      taskData.lossReason || '',                // L: Loss Reason
-      taskData.notes || '',                     // M: Notes
-      JSON.stringify(taskData.materials || []), // N: Materials JSON
-      now,                                       // O: Created Date
-      user.name                                  // P: Created By
-    ];
-    
-    sheet.appendRow(row);
-    
-    return serializeForHtml({
-      success: true,
-      taskId: taskId,
-      message: 'Task created successfully'
-    });
-  } catch (e) {
-    Logger.log('Error creating batch task: ' + e.toString());
-    return { success: false, error: e.toString() };
-  }
-}
-
-/**
- * GET BATCH TASKS
- */
-function getBatchTasks(batchNumber) {
-  try {
-    var sheet = ensureBatchTasksSheet();
-    if (!sheet) {
-      return serializeForHtml({ success: true, tasks: [] });
-    }
-    
-    var data = sheet.getDataRange().getValues();
-    if (data.length <= 1) {
-      return serializeForHtml({ success: true, tasks: [] });
-    }
-    
-    var headers = data[0];
-    var tasks = [];
-    
-    for (var i = 1; i < data.length; i++) {
-      if (data[i][1] && data[i][1].toString() === batchNumber) {
-        var materialsJson = data[i][13] || '[]';
-        var materials = [];
-        try {
-          materials = JSON.parse(materialsJson);
-        } catch (e) {
-          materials = [];
-        }
-        
-        tasks.push({
-          taskId: data[i][0],
-          batchNumber: data[i][1],
-          taskType: data[i][2],
-          taskName: data[i][3],
-          assignedTo: data[i][4],
-          dueDate: data[i][5],
-          status: data[i][6],
-          completedBy: data[i][7],
-          completedDate: data[i][8],
-          volumeIn: data[i][9],
-          volumeOut: data[i][10],
-          lossReason: data[i][11],
-          notes: data[i][12],
-          materials: materials,
-          createdDate: data[i][14],
-          createdBy: data[i][15]
-        });
-      }
-    }
-    
-    return serializeForHtml({
-      success: true,
-      tasks: tasks
-    });
-  } catch (e) {
-    Logger.log('Error getting batch tasks: ' + e.toString());
-    return { success: false, error: e.toString() };
-  }
-}
-
-/**
- * UPDATE BATCH TASK
- */
-function updateBatchTask(taskId, updates) {
-  try {
-    var sheet = ensureBatchTasksSheet();
-    if (!sheet) {
-      return { success: false, error: 'Batch Tasks sheet not found' };
-    }
-    
-    var data = sheet.getDataRange().getValues();
-    var taskRow = -1;
-    
-    for (var i = 1; i < data.length; i++) {
-      if (data[i][0] && data[i][0].toString() === taskId) {
-        taskRow = i + 1;
-        break;
-      }
-    }
-    
-    if (taskRow === -1) {
-      return { success: false, error: 'Task not found: ' + taskId };
-    }
-    
-    // Update fields (preserve existing if not provided)
-    if (updates.taskType !== undefined) sheet.getRange(taskRow, 3).setValue(updates.taskType);
-    if (updates.taskName !== undefined) sheet.getRange(taskRow, 4).setValue(updates.taskName);
-    if (updates.assignedTo !== undefined) sheet.getRange(taskRow, 5).setValue(updates.assignedTo);
-    if (updates.dueDate !== undefined) sheet.getRange(taskRow, 6).setValue(updates.dueDate);
-    if (updates.status !== undefined) sheet.getRange(taskRow, 7).setValue(updates.status);
-    if (updates.volumeIn !== undefined) {
-      if (updates.volumeIn === null || updates.volumeIn === '') {
-        sheet.getRange(taskRow, 10).setValue('');
-      } else {
-        sheet.getRange(taskRow, 10).setValue(updates.volumeIn);
-      }
-    }
-    if (updates.volumeOut !== undefined) {
-      if (updates.volumeOut === null || updates.volumeOut === '') {
-        sheet.getRange(taskRow, 11).setValue('');
-      } else {
-        sheet.getRange(taskRow, 11).setValue(updates.volumeOut);
-      }
-    }
-    if (updates.lossReason !== undefined) sheet.getRange(taskRow, 12).setValue(updates.lossReason);
-    if (updates.notes !== undefined) sheet.getRange(taskRow, 13).setValue(updates.notes);
-    if (updates.materials !== undefined) {
-      sheet.getRange(taskRow, 14).setValue(JSON.stringify(updates.materials));
-    }
-    if (updates.packageType !== undefined) {
-      // Store in notes or create new column - for now, store in notes
-      var currentNotes = sheet.getRange(taskRow, 13).getValue();
-      if (currentNotes && currentNotes.indexOf('Package Type:') === -1) {
-        sheet.getRange(taskRow, 13).setValue(currentNotes + (currentNotes ? ' | ' : '') + 'Package Type: ' + updates.packageType);
-      }
-    }
-    if (updates.packageQty !== undefined) {
-      var currentNotes = sheet.getRange(taskRow, 13).getValue();
-      if (currentNotes && currentNotes.indexOf('Package Qty:') === -1) {
-        sheet.getRange(taskRow, 13).setValue(currentNotes + (currentNotes ? ' | ' : '') + 'Package Qty: ' + updates.packageQty);
-      }
-    }
-    
-    return { success: true, message: 'Task updated successfully' };
-  } catch (e) {
-    Logger.log('Error updating batch task: ' + e.toString());
-    return { success: false, error: e.toString() };
-  }
-}
-
-/**
- * COMPLETE BATCH TASK
- * Marks task as complete and handles material depletion
- */
-function completeBatchTask(taskId, completionData) {
-  try {
-    var sheet = ensureBatchTasksSheet();
-    if (!sheet) {
-      return { success: false, error: 'Batch Tasks sheet not found' };
-    }
-    
-    var data = sheet.getDataRange().getValues();
-    var taskRow = -1;
-    var task = null;
-    
-    for (var i = 1; i < data.length; i++) {
-      if (data[i][0] && data[i][0].toString() === taskId) {
-        taskRow = i + 1;
-        var materialsJson = data[i][13] || '[]';
-        var materials = [];
-        try {
-          materials = JSON.parse(materialsJson);
-        } catch (e) {
-          materials = [];
-        }
-        
-        task = {
-          taskId: data[i][0],
-          batchNumber: data[i][1],
-          taskType: data[i][2],
-          taskName: data[i][3],
-          materials: materials,
-          materialsDepletedBy: completionData.materialsDepletedBy || null
-        };
-        break;
-      }
-    }
-    
-    if (!task) {
-      return { success: false, error: 'Task not found: ' + taskId };
-    }
-    
-    var user = getCurrentUser();
-    var now = new Date();
-    
-    // Update task status
-    sheet.getRange(taskRow, 7).setValue('Completed');  // Status
-    sheet.getRange(taskRow, 8).setValue(user.name);    // Completed By
-    sheet.getRange(taskRow, 9).setValue(now);          // Completed Date
-    
-    // Update volume if provided
-    if (completionData.volumeOut !== undefined) {
-      sheet.getRange(taskRow, 11).setValue(completionData.volumeOut);
-    }
-    if (completionData.lossReason !== undefined) {
-      sheet.getRange(taskRow, 12).setValue(completionData.lossReason);
-    }
-    
-    // Check if materials already depleted (check timestamp column)
-    var materialsDepletedAt = data[taskRow - 1][16]; // Column Q (0-indexed = 16)
-    var alreadyDepleted = materialsDepletedAt && materialsDepletedAt !== '';
-    
-    // Deplete materials if not already depleted
-    if (!alreadyDepleted && task.materials && task.materials.length > 0 && 
-        (!task.materialsDepletedBy || task.materialsDepletedBy === 'task')) {
-      
-      // Check Material Log to be extra safe
-      if (!hasBeenDepleted(task.batchNumber, taskId, 'Task')) {
-        for (var m = 0; m < task.materials.length; m++) {
-          var mat = task.materials[m];
-          if (mat.actualQty && mat.actualQty > 0) {
-            var matUOM = (mat.unit || mat.uom || 'lb').toString().trim();
-            depleteRawMaterial(mat.item, mat.actualQty, task.batchNumber, taskId, 'Task', matUOM);
-          }
-        }
-        
-        // Set depletion timestamp
-        sheet.getRange(taskRow, 17).setValue(now); // Column Q
-        Logger.log('Task materials depleted: ' + taskId + ' for batch ' + task.batchNumber);
-      } else {
-        Logger.log('Task materials already depleted (found in Material Log): ' + taskId);
-      }
-    } else if (alreadyDepleted) {
-      Logger.log('Task materials already depleted (timestamp exists): ' + taskId);
-    }
-    
-    // Log to Batch Details
-    addBatchEntry(task.batchNumber, 'Task', {
-      description: task.taskName || task.taskType,
-      notes: 'Task completed: ' + (completionData.notes || '')
-    });
-    
-    return { success: true, message: 'Task completed successfully' };
-  } catch (e) {
-    Logger.log('Error completing batch task: ' + e.toString());
-    return { success: false, error: e.toString() };
-  }
-}
-
-/**
- * DELETE BATCH TASK
- */
-function deleteBatchTask(taskId) {
-  try {
-    var sheet = ensureBatchTasksSheet();
-    if (!sheet) {
-      return { success: false, error: 'Batch Tasks sheet not found' };
-    }
-    
-    var data = sheet.getDataRange().getValues();
-    var taskRow = -1;
-    
-    for (var i = 1; i < data.length; i++) {
-      if (data[i][0] && data[i][0].toString() === taskId) {
-        taskRow = i + 1;
-        break;
-      }
-    }
-    
-    if (taskRow === -1) {
-      return { success: false, error: 'Task not found: ' + taskId };
-    }
-    
-    sheet.deleteRow(taskRow);
-    
-    return { success: true, message: 'Task deleted successfully' };
-  } catch (e) {
-    Logger.log('Error deleting batch task: ' + e.toString());
-    return { success: false, error: e.toString() };
-  }
-}
-
-/**
- * ASSIGN BATCH TASK
- */
-function assignBatchTask(taskId, assignee) {
-  try {
-    return updateBatchTask(taskId, { assignedTo: assignee });
-  } catch (e) {
-    Logger.log('Error assigning batch task: ' + e.toString());
-    return { success: false, error: e.toString() };
-  }
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// RECIPE TASK TEMPLATES
-// ═══════════════════════════════════════════════════════════════════════════════
-
-/**
- * Ensure Recipe Task Templates sheet exists
- */
-function ensureRecipeTaskTemplatesSheet() {
-  try {
-    var ss = getBrmSpreadsheet();
-    var sheet = ss.getSheetByName(SHEETS.RECIPE_TASK_TEMPLATES);
-    
-    if (!sheet) {
-      sheet = ss.insertSheet(SHEETS.RECIPE_TASK_TEMPLATES);
-      
-      var headers = [
-        'Template ID',      // A - Auto-generated
-        'Recipe Name',      // B - Links to Recipes
-        'Task Type',        // C - Dropdown
-        'Task Name',        // D - Default name
-        'Day Offset',       // E - Days after brew (0=brew day)
-        'Default Assigned To', // F - Optional brewer
-        'Default Materials',   // G - JSON array
-        'Default Notes',       // H - Instructions
-        'Sort Order',          // I - Display order
-        'Active',              // J - TRUE/FALSE
-        'Created Date',        // K
-        'Created By'           // L
-      ];
-      
-      sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
-      sheet.getRange(1, 1, 1, headers.length)
-        .setFontWeight('bold')
-        .setBackground('#1a365d')
-        .setFontColor('white');
-      sheet.setFrozenRows(1);
-      
-      Logger.log('Created Recipe Task Templates sheet');
-    }
-    
-    return sheet;
-  } catch (e) {
-    Logger.log('Error ensuring Recipe Task Templates sheet: ' + e.toString());
-    return null;
-  }
-}
-
-/**
- * GET RECIPE TASK TEMPLATES
- */
-function getRecipeTaskTemplates(recipeName) {
-  try {
-    var sheet = ensureRecipeTaskTemplatesSheet();
-    if (!sheet) {
-      return serializeForHtml({ success: true, templates: [] });
-    }
-    
-    var data = sheet.getDataRange().getValues();
-    if (data.length <= 1) {
-      return serializeForHtml({ success: true, templates: [] });
-    }
-    
-    var templates = [];
-    for (var i = 1; i < data.length; i++) {
-      if (data[i][1] && data[i][1].toString() === recipeName && 
-          (data[i][9] === true || data[i][9] === 'TRUE')) { // Active
-        var materialsJson = data[i][6] || '[]';
-        var materials = [];
-        try {
-          materials = JSON.parse(materialsJson);
-        } catch (e) {
-          materials = [];
-        }
-        
-        templates.push({
-          templateId: data[i][0],
-          recipeName: data[i][1],
-          taskType: data[i][2],
-          taskName: data[i][3],
-          dayOffset: data[i][4],
-          defaultAssignedTo: data[i][5],
-          defaultMaterials: materials,
-          defaultNotes: data[i][7],
-          sortOrder: data[i][8] || 0,
-          active: data[i][9],
-          createdDate: data[i][10],
-          createdBy: data[i][11]
-        });
-      }
-    }
-    
-    // Sort by sort order
-    templates.sort(function(a, b) {
-      return (a.sortOrder || 0) - (b.sortOrder || 0);
-    });
-    
-    return serializeForHtml({
-      success: true,
-      templates: templates
-    });
-  } catch (e) {
-    Logger.log('Error getting recipe task templates: ' + e.toString());
-    return { success: false, error: e.toString() };
-  }
-}
-
-/**
- * CREATE TASKS FROM TEMPLATES
- * Called when Start Brew is clicked
- */
-function createTasksFromTemplates(batchNumber, recipeName, brewDate) {
-  try {
-    var templatesResult = getRecipeTaskTemplates(recipeName);
-    if (!templatesResult.success || !templatesResult.templates || templatesResult.templates.length === 0) {
-      return { success: true, message: 'No task templates for this recipe', tasksCreated: 0 };
-    }
-    
-    var brewDateObj = brewDate instanceof Date ? brewDate : new Date(brewDate);
-    var tasksCreated = 0;
-    
-    templatesResult.templates.forEach(function(template) {
-      var dueDate = new Date(brewDateObj);
-      dueDate.setDate(dueDate.getDate() + (template.dayOffset || 0));
-      
-      var taskData = {
-        taskType: template.taskType,
-        taskName: template.taskName || template.taskType,
-        assignedTo: template.defaultAssignedTo || '',
-        dueDate: dueDate.toISOString().split('T')[0],
-        status: 'Planned',
-        notes: template.defaultNotes || '',
-        materials: template.defaultMaterials || []
-      };
-      
-      var result = createBatchTask(batchNumber, taskData);
-      if (result.success) {
-        tasksCreated++;
-      }
-    });
-    
-    Logger.log('Created ' + tasksCreated + ' tasks from templates for ' + recipeName);
-    
-    return {
-      success: true,
-      tasksCreated: tasksCreated,
-      message: 'Created ' + tasksCreated + ' tasks from templates'
-    };
-  } catch (e) {
-    Logger.log('Error creating tasks from templates: ' + e.toString());
-    return { success: false, error: e.toString() };
-  }
-}
-
-/**
- * ADD RECIPE TASK TEMPLATE
- */
-function addRecipeTaskTemplate(recipeName, templateData) {
-  try {
-    var sheet = ensureRecipeTaskTemplatesSheet();
-    if (!sheet) {
-      return { success: false, error: 'Could not create Recipe Task Templates sheet' };
-    }
-    
-    var templateId = 'TEMPLATE-' + recipeName + '-' + Date.now();
-    var user = getCurrentUser();
-    var now = new Date();
-    
-    var row = [
-      templateId,                                    // A: Template ID
-      recipeName,                                    // B: Recipe Name
-      templateData.taskType || '',                   // C: Task Type
-      templateData.taskName || templateData.taskType || '', // D: Task Name
-      templateData.dayOffset || 0,                   // E: Day Offset
-      templateData.defaultAssignedTo || '',           // F: Default Assigned To
-      JSON.stringify(templateData.defaultMaterials || []), // G: Default Materials
-      templateData.defaultNotes || '',               // H: Default Notes
-      templateData.sortOrder || 0,                   // I: Sort Order
-      true,                                          // J: Active
-      now,                                           // K: Created Date
-      user.name                                      // L: Created By
-    ];
-    
-    sheet.appendRow(row);
-    
-    return serializeForHtml({
-      success: true,
-      templateId: templateId,
-      message: 'Template created successfully'
-    });
-  } catch (e) {
-    Logger.log('Error creating recipe task template: ' + e.toString());
-    return { success: false, error: e.toString() };
-  }
-}
-
-/**
- * UPDATE RECIPE TASK TEMPLATE
- */
-function updateRecipeTaskTemplate(templateId, updates) {
-  try {
-    var sheet = ensureRecipeTaskTemplatesSheet();
-    if (!sheet) {
-      return { success: false, error: 'Recipe Task Templates sheet not found' };
-    }
-    
-    var data = sheet.getDataRange().getValues();
-    var templateRow = -1;
-    
-    for (var i = 1; i < data.length; i++) {
-      if (data[i][0] && data[i][0].toString() === templateId) {
-        templateRow = i + 1;
-        break;
-      }
-    }
-    
-    if (templateRow === -1) {
-      return { success: false, error: 'Template not found: ' + templateId };
-    }
-    
-    // Update fields
-    if (updates.taskType !== undefined) sheet.getRange(templateRow, 3).setValue(updates.taskType);
-    if (updates.taskName !== undefined) sheet.getRange(templateRow, 4).setValue(updates.taskName);
-    if (updates.dayOffset !== undefined) sheet.getRange(templateRow, 5).setValue(updates.dayOffset);
-    if (updates.defaultAssignedTo !== undefined) sheet.getRange(templateRow, 6).setValue(updates.defaultAssignedTo);
-    if (updates.defaultMaterials !== undefined) sheet.getRange(templateRow, 7).setValue(JSON.stringify(updates.defaultMaterials));
-    if (updates.defaultNotes !== undefined) sheet.getRange(templateRow, 8).setValue(updates.defaultNotes);
-    if (updates.sortOrder !== undefined) sheet.getRange(templateRow, 9).setValue(updates.sortOrder);
-    if (updates.active !== undefined) sheet.getRange(templateRow, 10).setValue(updates.active);
-    
-    return { success: true, message: 'Template updated successfully' };
-  } catch (e) {
-    Logger.log('Error updating recipe task template: ' + e.toString());
-    return { success: false, error: e.toString() };
-  }
-}
-
-/**
- * DELETE RECIPE TASK TEMPLATE
- */
-function deleteRecipeTaskTemplate(templateId) {
-  try {
-    var sheet = ensureRecipeTaskTemplatesSheet();
-    if (!sheet) {
-      return { success: false, error: 'Recipe Task Templates sheet not found' };
-    }
-    
-    var data = sheet.getDataRange().getValues();
-    var templateRow = -1;
-    
-    for (var i = 1; i < data.length; i++) {
-      if (data[i][0] && data[i][0].toString() === templateId) {
-        templateRow = i + 1;
-        break;
-      }
-    }
-    
-    if (templateRow === -1) {
-      return { success: false, error: 'Template not found: ' + templateId };
-    }
-    
-    sheet.deleteRow(templateRow);
-    
-    return { success: true, message: 'Template deleted successfully' };
-  } catch (e) {
-    Logger.log('Error deleting recipe task template: ' + e.toString());
-    return { success: false, error: e.toString() };
-  }
-}
-
 
 /**
  * CREATE BATCH - Step 1: Brewer clicks "Brew This"
@@ -10739,10 +9183,9 @@ function finalizeBrewWithActuals(batchNumber, vessel, brewer, actualIngredients,
       if (actualIngredients[category] && actualIngredients[category].length > 0) {
         actualIngredients[category].forEach(function(item) {
           var amt = parseFloat(item.actualAmount) || parseFloat(item.amount) || 0;
-          var itemUOM = (item.uom || 'lb').toString().trim();
           if (amt > 0 && item.ingredient) {
-            // Deplete from Raw Materials (with unit conversion)
-            depleteRawMaterial(item.ingredient, amt, batchNumber, null, 'Recipe', itemUOM);
+            // Deplete from Raw Materials
+            depleteRawMaterial(item.ingredient, amt, batchNumber);
             
             // Calculate cost
             var unitCost = parseFloat(item.avgCost) || parseFloat(item.unitCost) || 0;
@@ -10895,7 +9338,7 @@ function addCellarAddition(batchNumber, ingredient, amount, uom, notes) {
     var totalCost = amount * unitCost;
     
     // Deplete from Raw Materials
-    depleteRawMaterial(ingredient, amount, batchNumber, null, 'Cellar');
+    depleteRawMaterial(ingredient, amount, batchNumber);
     
     // Log to Batch Details
     addBatchEntry(batchNumber, 'Addition', {
@@ -12967,9 +11410,7 @@ function assignBrewLabor(batchNumber, brewers, batchesBrewedToday) {
     
     // Update batch with brew labor
     batchSheet.getRange(batchRow, brewLaborCol).setValue(laborCalc.perBatchCost);
-    // Format brewers as "Turn 1 / Turn 2" if provided, otherwise join with comma
-    var brewersStr = brewers.length === 2 ? brewers.join(' / ') : brewers.join(', ');
-    batchSheet.getRange(batchRow, brewersCol).setValue(brewersStr);
+    batchSheet.getRange(batchRow, brewersCol).setValue(brewers.join(', '));
     
     // Also update the Labor $ column (G) and Labor Hrs (F)
     var hoursPerBatch = STANDARD_SHIFT_HOURS / Math.max(1, batchesBrewedToday);
@@ -13267,92 +11708,9 @@ function sendItWithActualLabor(batchNumber, packageBreakdown, currentVessel, pac
       }
     }
     
-    // Get task material costs
-    var taskMaterialCost = 0;
-    try {
-      var tasksResult = getBatchTasks(batchNumber);
-      if (tasksResult.success && tasksResult.tasks) {
-        var rmResult = getRawMaterialsInventory({});
-        var materialsLookup = {};
-        if (rmResult.success && rmResult.materials) {
-          rmResult.materials.forEach(function(m) {
-            materialsLookup[m.item] = m.avgCost || 0;
-          });
-        }
-        
-        tasksResult.tasks.forEach(function(task) {
-          if (task.status === 'Completed' && task.materials && task.materials.length > 0) {
-            task.materials.forEach(function(mat) {
-              var unitCost = materialsLookup[mat.item] || 0;
-              var qty = 0;
-              
-              if (mat.isPackaging) {
-                // For packaging, deduct actual + waste
-                qty = (mat.actualQty || 0) + (mat.wasteQty || 0);
-              } else {
-                // Regular materials - use actual quantity
-                qty = mat.actualQty || mat.quantity || 0;
-              }
-              
-              taskMaterialCost += qty * unitCost;
-            });
-          }
-        });
-      }
-    } catch (taskError) {
-      Logger.log('Warning: Could not calculate task material costs: ' + taskError.toString());
-    }
-    
-    // Check if packaging materials already depleted
-    var packagingMaterialsDepletedCol = -1;
-    for (var h = 0; h < headers.length; h++) {
-      if ((headers[h] || '').toString().toLowerCase().indexOf('packagingmaterialsdepleted') !== -1) {
-        packagingMaterialsDepletedCol = h;
-        break;
-      }
-    }
-    
-    var packagingAlreadyDepleted = false;
-    if (packagingMaterialsDepletedCol !== -1) {
-      var flagValue = batchData[packagingMaterialsDepletedCol];
-      packagingAlreadyDepleted = (flagValue === true || flagValue === 'TRUE' || flagValue === 'Yes' || flagValue === 'Y');
-    }
-    
-    // Also check Material Log
-    if (!packagingAlreadyDepleted && hasBeenDepleted(batchNumber, null, 'Packaging')) {
-      packagingAlreadyDepleted = true;
-      Logger.log('Packaging materials already depleted (found in Material Log) for batch: ' + batchNumber);
-    }
-    
-    // Deduct packaging materials and calculate cost
-    var packagingMaterialCost = 0;
-    if (!packagingAlreadyDepleted && packageBreakdown) {
-      try {
-        var packagingResult = deductPackagingMaterials(batchNumber, packageBreakdown, beerName);
-        if (packagingResult.success) {
-          packagingMaterialCost = packagingResult.totalCost || 0;
-          Logger.log('Packaging materials cost: $' + packagingMaterialCost.toFixed(2));
-          
-          // Set packagingMaterialsDepleted flag
-          if (packagingMaterialsDepletedCol === -1) {
-            // Add column if missing
-            var lastCol = batchSheet.getLastColumn();
-            batchSheet.getRange(1, lastCol + 1).setValue('Packaging Materials Depleted');
-            packagingMaterialsDepletedCol = lastCol;
-          }
-          batchSheet.getRange(batchRow, packagingMaterialsDepletedCol + 1).setValue('Yes');
-          Logger.log('Set packagingMaterialsDepleted flag for batch: ' + batchNumber);
-        }
-      } catch (pkgError) {
-        Logger.log('Warning: Could not deduct packaging materials: ' + pkgError.toString());
-      }
-    } else if (packagingAlreadyDepleted) {
-      Logger.log('Packaging materials already depleted for batch: ' + batchNumber + ' - skipping');
-    }
-    
-    // Calculate FINAL total cost with ACTUAL labor + task materials + packaging materials
+    // Calculate FINAL total cost with ACTUAL labor
     var totalLabor = brewLabor + cellarLabor + pkgLabor;
-    var totalCost = recipeCost + totalLabor + overhead + taskMaterialCost + packagingMaterialCost;
+    var totalCost = recipeCost + totalLabor + overhead;
     
     // Calculate efficiency and COGS/BBL
     var efficiency = expectedYield > 0 ? (actualYield / expectedYield * 100) : 0;
@@ -13367,18 +11725,12 @@ function sendItWithActualLabor(batchNumber, packageBreakdown, currentVessel, pac
     batchSheet.getRange(batchRow, 14).setValue(cogsPerBBL);          // N: Cost/BBL
     batchSheet.getRange(batchRow, 15).setValue(variance);            // O: Variance
     
-    // Append labor, task materials, and packaging materials breakdown to notes
+    // Append labor breakdown to notes
     var existingNotes = batchData[15] || '';
     var laborNote = ' | Labor: Brew $' + brewLabor.toFixed(0) + 
                     ' + Cellar $' + cellarLabor.toFixed(0) + 
                     ' + Pkg $' + pkgLabor.toFixed(0) + 
                     ' = $' + totalLabor.toFixed(0);
-    if (taskMaterialCost > 0) {
-      laborNote += ' | Task Materials: $' + taskMaterialCost.toFixed(2);
-    }
-    if (packagingMaterialCost > 0) {
-      laborNote += ' | Packaging Materials: $' + packagingMaterialCost.toFixed(2);
-    }
     batchSheet.getRange(batchRow, 16).setValue(existingNotes + laborNote);
     
     // Add to Finished Goods
@@ -13414,9 +11766,7 @@ function sendItWithActualLabor(batchNumber, packageBreakdown, currentVessel, pac
     }
     
     Logger.log('🚀 SEND IT! ' + batchNumber + ' complete. COGS/BBL: $' + cogsPerBBL.toFixed(2) + 
-               ' (Ingredients: $' + recipeCost.toFixed(2) + ', Labor: $' + totalLabor.toFixed(2) + 
-               ', Task Materials: $' + taskMaterialCost.toFixed(2) + 
-               ', Packaging: $' + packagingMaterialCost.toFixed(2) + ', OH: $' + overhead.toFixed(2) + ')');
+               ' (Ingredients: $' + recipeCost.toFixed(2) + ', Labor: $' + totalLabor.toFixed(2) + ', OH: $' + overhead.toFixed(2) + ')');
     
     return serializeForHtml({
       success: true,
@@ -13432,16 +11782,6 @@ function sendItWithActualLabor(batchNumber, packageBreakdown, currentVessel, pac
         packaging: pkgLabor,
         total: totalLabor
       },
-      taskMaterialCost: taskMaterialCost,
-      costBreakdown: {
-        ingredients: recipeCost,
-        labor: totalLabor,
-        taskMaterials: taskMaterialCost,
-        packagingMaterials: packagingMaterialCost,
-        overhead: overhead,
-        total: totalCost
-      },
-      packagingMaterialsCost: packagingMaterialCost,
       fgUpdated: fgResult.success,
       archived: archiveResult.success,
       archiveUrl: archiveResult.url || '',
@@ -13712,134 +12052,54 @@ function updateBatchIngredientActuals(batchNumber, ingredientActuals) {
 
 /**
  * Consume ingredients from Raw Materials inventory
- * Checks ingredientsDepleted flag to prevent double depletion
  */
 function consumeIngredientsForBatch(batchNumber, recipeName, batchSize) {
-  try {
-    var ss = getBrmSpreadsheet();
-    var batchSheet = ss.getSheetByName(SHEETS.BATCH_LOG);
-    
-    // Check if ingredients already depleted
-    if (batchSheet) {
-      var batchData = batchSheet.getDataRange().getValues();
-      var headers = batchData[0];
-      var ingredientsDepletedCol = -1;
-      
-      // Find ingredientsDepleted column (or add it if missing)
-      for (var h = 0; h < headers.length; h++) {
-        if ((headers[h] || '').toString().toLowerCase().indexOf('ingredientsdepleted') !== -1) {
-          ingredientsDepletedCol = h;
-          break;
-        }
-      }
-      
-      // Find batch row
-      for (var i = 1; i < batchData.length; i++) {
-        if (batchData[i][0] && batchData[i][0].toString() === batchNumber) {
-          if (ingredientsDepletedCol !== -1) {
-            var alreadyDepleted = batchData[i][ingredientsDepletedCol];
-            if (alreadyDepleted === true || alreadyDepleted === 'TRUE' || alreadyDepleted === 'Yes' || alreadyDepleted === 'Y') {
-              Logger.log('Ingredients already depleted for batch: ' + batchNumber);
-              return; // Skip depletion
-            }
-          }
-          
-          // Also check Material Log
-          if (hasBeenDepleted(batchNumber, null, 'Recipe')) {
-            Logger.log('Ingredients already depleted (found in Material Log) for batch: ' + batchNumber);
-            // Set flag even if not in column yet
-            if (ingredientsDepletedCol === -1) {
-              // Add column if missing
-              var lastCol = batchSheet.getLastColumn();
-              batchSheet.getRange(1, lastCol + 1).setValue('Ingredients Depleted');
-              ingredientsDepletedCol = lastCol;
-            }
-            batchSheet.getRange(i + 1, ingredientsDepletedCol + 1).setValue('Yes');
-            return;
-          }
-          break;
-        }
-      }
-    }
-    
-    // Get recipe ingredients
-    var recipeResult = getRecipeIngredients(recipeName);
-    
-    if (!recipeResult.success) {
-      Logger.log('Could not get recipe ingredients for consumption');
-      return;
-    }
-    
-    var rmSheet = ss.getSheetByName(SHEETS.RAW_MATERIALS);
-    if (!rmSheet) return;
-    
-    var rmData = rmSheet.getDataRange().getValues();
-    var headers = rmData[0];
-    var qtyCol = headers.indexOf('Qty On Hand') + 1 || 4;  // D column
-    
-    // Scale factor for batch size
-    var recipeBatchSize = recipeResult.batchSize || 60;
-    var scaleFactor = batchSize / recipeBatchSize;
-    
-    // Combine all ingredients
-    var allIngredients = [].concat(
-      recipeResult.grains || [],
-      recipeResult.hops || [],
-      recipeResult.other || []
-    );
-    
-    allIngredients.forEach(function(ing) {
-      var amountNeeded = (ing.amount || 0) * scaleFactor;
-      var ingName = (ing.ingredient || ing.name || '').toLowerCase().trim();
-      var recipeUOM = (ing.uom || 'lb').toString().trim();
-      
-      // Find in raw materials and deduct
-      for (var i = RAW_MATERIAL_CONFIG.dataStartRow - 1; i < rmData.length; i++) {
-        var rmName = (rmData[i][RAW_MATERIAL_CONFIG.columns.item - 1] || '').toString().toLowerCase().trim();
-        
-        if (rmName === ingName || rmName.indexOf(ingName) !== -1 || ingName.indexOf(rmName) !== -1) {
-          var rmUnit = (rmData[i][RAW_MATERIAL_CONFIG.columns.unit - 1] || 'lb').toString().trim();
-          var currentQty = parseFloat(rmData[i][RAW_MATERIAL_CONFIG.columns.qtyOnHand - 1]) || 0;
-          
-          // Convert recipe UOM to Raw Material UOM
-          var amountToDeduct = amountNeeded;
-          if (recipeUOM !== rmUnit) {
-            amountToDeduct = convertUnit(amountNeeded, recipeUOM, rmUnit);
-            Logger.log('Unit conversion for ' + ing.ingredient + ': ' + amountNeeded + ' ' + recipeUOM + ' → ' + amountToDeduct.toFixed(4) + ' ' + rmUnit);
-          }
-          
-          var newQty = Math.max(0, currentQty - amountToDeduct);
-          rmSheet.getRange(i + 1, RAW_MATERIAL_CONFIG.columns.qtyOnHand).setValue(newQty);
-          
-          // Log to Material Log with Recipe type
-          logMaterialAdjustment(ing.ingredient || ing.name, currentQty, newQty, 'Batch: ' + batchNumber + ', Type: Recipe');
-          
-          Logger.log('Consumed ' + amountToDeduct.toFixed(4) + ' ' + rmUnit + ' (' + amountNeeded + ' ' + recipeUOM + ') of ' + ing.ingredient + ' (was: ' + currentQty + ', now: ' + newQty + ')');
-          break;
-        }
-      }
-    });
-    
-    // Set ingredientsDepleted flag
-    if (batchSheet) {
-      var batchData = batchSheet.getDataRange().getValues();
-      for (var i = 1; i < batchData.length; i++) {
-        if (batchData[i][0] && batchData[i][0].toString() === batchNumber) {
-          if (ingredientsDepletedCol === -1) {
-            // Add column if missing
-            var lastCol = batchSheet.getLastColumn();
-            batchSheet.getRange(1, lastCol + 1).setValue('Ingredients Depleted');
-            ingredientsDepletedCol = lastCol;
-          }
-          batchSheet.getRange(i + 1, ingredientsDepletedCol + 1).setValue('Yes');
-          Logger.log('Set ingredientsDepleted flag for batch: ' + batchNumber);
-          break;
-        }
-      }
-    }
-  } catch (e) {
-    Logger.log('Error in consumeIngredientsForBatch: ' + e.toString());
+  // Get recipe ingredients
+  var recipeResult = getRecipeIngredients(recipeName);
+  
+  if (!recipeResult.success) {
+    Logger.log('Could not get recipe ingredients for consumption');
+    return;
   }
+  
+  var ss = getBrmSpreadsheet();
+  var rmSheet = ss.getSheetByName(SHEETS.RAW_MATERIALS);
+  
+  if (!rmSheet) return;
+  
+  var rmData = rmSheet.getDataRange().getValues();
+  var headers = rmData[0];
+  var qtyCol = headers.indexOf('Qty On Hand') + 1 || 4;  // D column
+  
+  // Scale factor for batch size
+  var recipeBatchSize = recipeResult.batchSize || 60;
+  var scaleFactor = batchSize / recipeBatchSize;
+  
+  // Combine all ingredients
+  var allIngredients = [].concat(
+    recipeResult.grains || [],
+    recipeResult.hops || [],
+    recipeResult.other || []
+  );
+  
+  allIngredients.forEach(function(ing) {
+    var amountNeeded = (ing.amount || 0) * scaleFactor;
+    var ingName = (ing.ingredient || ing.name || '').toLowerCase().trim();
+    
+    // Find in raw materials and deduct
+    for (var i = 1; i < rmData.length; i++) {
+      var rmName = (rmData[i][0] || '').toLowerCase().trim();
+      
+      if (rmName === ingName || rmName.indexOf(ingName) !== -1 || ingName.indexOf(rmName) !== -1) {
+        var currentQty = parseFloat(rmData[i][qtyCol - 1]) || 0;
+        var newQty = Math.max(0, currentQty - amountNeeded);
+        rmSheet.getRange(i + 1, qtyCol).setValue(newQty);
+        
+        Logger.log('Consumed ' + amountNeeded.toFixed(2) + ' ' + ing.ingredient + ' (was: ' + currentQty + ', now: ' + newQty + ')');
+        break;
+      }
+    }
+  });
 }
 // ═══════════════════════════════════════════════════════════════════════════════
 // RED LEG BREWING - LABOR TRACKING SYSTEM
@@ -14225,17 +12485,11 @@ function logBrewLabor(batchNumber, employeeName, hours, workDate) {
     batchSheet.getRange(batchRow, laborCostCol).setValue(existingCost + laborCost);
     
     // Update brewer name if column exists
-    // Only update if it doesn't already contain this brewer (to preserve Turn 1 / Turn 2 format)
     if (brewerCol > 0) {
       var existingBrewers = batchSheet.getRange(batchRow, brewerCol).getValue() || '';
       if (!existingBrewers.toString().includes(employeeName)) {
-        // If format is "Turn 1 / Turn 2", preserve it; otherwise append
-        if (existingBrewers.toString().indexOf(' / ') !== -1) {
-          // Already has Turn format, don't modify
-        } else {
-          var newBrewers = existingBrewers ? existingBrewers + ', ' + employeeName : employeeName;
-          batchSheet.getRange(batchRow, brewerCol).setValue(newBrewers);
-        }
+        var newBrewers = existingBrewers ? existingBrewers + ', ' + employeeName : employeeName;
+        batchSheet.getRange(batchRow, brewerCol).setValue(newBrewers);
       }
     }
     
@@ -15725,104 +13979,71 @@ function updateFinishedGoodsItem(data) {
  */
 function updateRawMaterialItem(data) {
   try {
-    Logger.log('updateRawMaterialItem called with item: ' + data.item);
-    // Use getActiveSpreadsheet() since this runs from the bound spreadsheet
-    var ss = SpreadsheetApp.getActiveSpreadsheet();
-    if (!ss) {
-      Logger.log('getActiveSpreadsheet() failed, trying getBrmSpreadsheet()');
-      ss = getBrmSpreadsheet();
-    }
-    
-    // Use the same sheet name and structure as other Raw Materials functions
-    var sheet = ss.getSheetByName(RAW_MATERIAL_CONFIG.sheetName);
-    if (!sheet) {
-      // Fallback to common name
-      sheet = ss.getSheetByName('Raw Materials');
-      if (!sheet) return { success: false, error: 'Raw Materials sheet not found' };
-    }
-    Logger.log('Found Raw Materials sheet: ' + sheet.getName());
+    var ss = SpreadsheetApp.openById('1bbbvYjFRO5peYuMPNaxcl10X--Wg5RjjJvs_No4Ch16WjpfO80oP-tqJ');
+    var sheet = ss.getSheetByName('Raw Materials');
+    if (!sheet) return { success: false, error: 'Raw Materials sheet not found' };
     
     var dataRange = sheet.getDataRange();
     var values = dataRange.getValues();
+    var headers = values[0];
     
-    // Use RAW_MATERIAL_CONFIG structure (header at row 4, data starts at row 5)
-    var cols = RAW_MATERIAL_CONFIG.columns;
-    var dataStartRow = RAW_MATERIAL_CONFIG.dataStartRow - 1; // Convert to 0-indexed
+    // Find column indices
+    var itemCol = -1, catCol = -1, qtyCol = -1, unitCol = -1, costCol = -1;
+    var totalCol = -1, reorderPtCol = -1, reorderQtyCol = -1, statusCol = -1, supplierCol = -1, notesCol = -1;
     
-    Logger.log('Searching for item: "' + data.item + '" (trimmed: "' + data.item.trim() + '")');
-    Logger.log('Item column: ' + (cols.item - 1) + ' (1-indexed: ' + cols.item + ')');
-    Logger.log('Data starts at row index: ' + dataStartRow + ' (sheet row: ' + (dataStartRow + 1) + ')');
-    
-    // Log first few items for debugging
-    var sampleItems = [];
-    for (var s = dataStartRow; s < Math.min(dataStartRow + 5, values.length); s++) {
-      var sampleItem = (values[s][cols.item - 1] || '').toString().trim();
-      sampleItems.push(sampleItem);
+    for (var c = 0; c < headers.length; c++) {
+      var h = (headers[c] || '').toString().toLowerCase();
+      if (h === 'item' || h === 'name' || h === 'material') itemCol = c;
+      if (h.indexOf('category') !== -1 || h === 'type') catCol = c;
+      if (h.indexOf('qty') !== -1 || h.indexOf('on hand') !== -1 || h.indexOf('quantity') !== -1) qtyCol = c;
+      if (h === 'unit' || h === 'uom') unitCol = c;
+      if ((h.indexOf('cost') !== -1 || h.indexOf('price') !== -1) && h.indexOf('total') === -1) costCol = c;
+      if (h.indexOf('total') !== -1 || h.indexOf('value') !== -1) totalCol = c;
+      if (h.indexOf('reorder') !== -1 && h.indexOf('point') !== -1) reorderPtCol = c;
+      if (h.indexOf('reorder') !== -1 && h.indexOf('qty') !== -1) reorderQtyCol = c;
+      if (h.indexOf('status') !== -1) statusCol = c;
+      if (h.indexOf('supplier') !== -1 || h.indexOf('vendor') !== -1) supplierCol = c;
+      if (h.indexOf('note') !== -1) notesCol = c;
     }
-    Logger.log('Sample items from sheet: ' + sampleItems.join(', '));
     
-    // Find the row - start from dataStartRow, not row 1
-    var searchItem = (data.item || '').toString().trim().toLowerCase();
-    var foundRow = -1;
-    
-    for (var i = dataStartRow; i < values.length; i++) {
-      var itemName = (values[i][cols.item - 1] || '').toString().trim();
-      var itemNameLower = itemName.toLowerCase();
+    // Find the row
+    for (var i = 1; i < values.length; i++) {
+      var itemName = (values[i][itemCol] || '').toString().trim();
       
-      Logger.log('Comparing: "' + itemName + '" (lower: "' + itemNameLower + '") with "' + searchItem + '"');
-      
-      if (itemNameLower === searchItem) {
-        foundRow = i;
-        Logger.log('Found item at row index: ' + i + ' (sheet row: ' + (i + 1) + ')');
-        break;
+      if (itemName.toLowerCase() === data.item.toLowerCase()) {
+        var qty = parseFloat(data.qtyOnHand) || 0;
+        var avgCost = parseFloat(data.avgCost) || 0;
+        var reorderPoint = parseFloat(data.reorderPoint) || 0;
+        var reorderQty = parseFloat(data.reorderQty) || 0;
+        var totalValue = qty * avgCost;
+        
+        // Determine status
+        var status = '✅ OK';
+        if (qty <= 0) status = '🚨 OUT';
+        else if (reorderPoint > 0 && qty <= reorderPoint) status = '⚠️ REORDER';
+        
+        // Update cells
+        var rowNum = i + 1;
+        if (qtyCol >= 0) sheet.getRange(rowNum, qtyCol + 1).setValue(qty);
+        if (costCol >= 0) sheet.getRange(rowNum, costCol + 1).setValue(avgCost);
+        if (totalCol >= 0) sheet.getRange(rowNum, totalCol + 1).setValue(Math.round(totalValue * 100) / 100);
+        if (reorderPtCol >= 0) sheet.getRange(rowNum, reorderPtCol + 1).setValue(reorderPoint);
+        if (reorderQtyCol >= 0) sheet.getRange(rowNum, reorderQtyCol + 1).setValue(reorderQty);
+        if (statusCol >= 0) sheet.getRange(rowNum, statusCol + 1).setValue(status);
+        if (supplierCol >= 0 && data.supplier) sheet.getRange(rowNum, supplierCol + 1).setValue(data.supplier);
+        if (notesCol >= 0 && data.notes !== undefined) sheet.getRange(rowNum, notesCol + 1).setValue(data.notes);
+        
+        // Log the change
+        try {
+          logMaterialAdjustment(data.item, values[i][qtyCol], qty, 'UI edit', 'EDIT');
+        } catch(logErr) {
+          // Logging is optional
+        }
+        
+        return { success: true, message: 'Raw material updated' };
       }
     }
-    
-    if (foundRow === -1) {
-      Logger.log('Item not found. Searched ' + (values.length - dataStartRow) + ' rows');
-      return { success: false, error: 'Item not found: ' + data.item + '. Check logs for details.' };
-    }
-    
-    // Found the item, now update it
-    var i = foundRow;
-    var qty = parseFloat(data.qtyOnHand) || 0;
-    var avgCost = parseFloat(data.avgCost) || 0;
-    var reorderPoint = parseFloat(data.reorderPoint) || 0;
-    var reorderQty = parseFloat(data.reorderQty) || 0;
-    var totalValue = qty * avgCost;
-    
-    // Get current values for logging
-    var currentQty = parseFloat(values[i][cols.qtyOnHand - 1]) || 0;
-    
-    // Determine status
-    var status = '✅ OK';
-    if (qty <= 0) status = '🚨 OUT';
-    else if (reorderPoint > 0 && qty <= reorderPoint) status = '⚠️ REORDER';
-    
-    // Update cells using RAW_MATERIAL_CONFIG column numbers (1-indexed)
-    var rowNum = i + 1;
-    Logger.log('Updating row ' + rowNum);
-    
-    sheet.getRange(rowNum, cols.qtyOnHand).setValue(qty);
-    if (data.unit) sheet.getRange(rowNum, cols.unit).setValue(data.unit);
-    sheet.getRange(rowNum, cols.avgCost).setValue(avgCost);
-    sheet.getRange(rowNum, cols.totalValue).setValue(Math.round(totalValue * 100) / 100);
-    sheet.getRange(rowNum, cols.reorderPoint).setValue(reorderPoint);
-    sheet.getRange(rowNum, cols.reorderQty).setValue(reorderQty);
-    sheet.getRange(rowNum, cols.status).setValue(status);
-    if (data.supplier && cols.supplier) sheet.getRange(rowNum, cols.supplier).setValue(data.supplier);
-    if (data.notes !== undefined && cols.notes) sheet.getRange(rowNum, cols.notes).setValue(data.notes);
-    
-    Logger.log('Updated: Qty=' + qty + ', Unit=' + (data.unit || 'unchanged') + ', Cost=' + avgCost);
-    
-    // Log the change
-    try {
-      logMaterialAdjustment(data.item, currentQty, qty, 'UI edit', 'EDIT');
-    } catch(logErr) {
-      Logger.log('Warning: Could not log material adjustment: ' + logErr.toString());
-    }
-    
-    return { success: true, message: 'Raw material updated' };
+    return { success: false, error: 'Item not found: ' + data.item };
   } catch (e) {
     return { success: false, error: e.toString() };
   }

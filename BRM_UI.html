@@ -627,7 +627,6 @@
     <h1>🍺 RED LEG BRM <span class="subtitle">Brewery Resource Management</span></h1>
     <div class="header-right">
       <span class="header-date" id="currentDate"></span>
-      <span class="header-user" id="currentUser" style="font-size: 13px; opacity: 0.9;">Loading...</span>
       <span class="header-badge">Veteran Owned</span>
     </div>
   </header>
@@ -1882,21 +1881,8 @@
           <input type="number" id="editRMQty" step="0.01" min="0">
         </div>
         <div class="form-group">
-          <label>Unit of Measure (UOM)</label>
-          <select id="editRMUnit" style="width:100%;padding:10px;border:1px solid #d1d5db;border-radius:6px;font-size:14px;">
-            <option value="lb">lb</option>
-            <option value="oz">oz</option>
-            <option value="kg">kg</option>
-            <option value="g">g</option>
-            <option value="ea">ea (each)</option>
-            <option value="gal">gal</option>
-            <option value="ml">ml</option>
-            <option value="L">L</option>
-            <option value="case">case</option>
-            <option value="pack">pack</option>
-            <option value="roll">roll</option>
-            <option value="sheet">sheet</option>
-          </select>
+          <label>Unit</label>
+          <input type="text" id="editRMUnit" readonly style="background:#f3f4f6;">
         </div>
       </div>
       <div class="form-group">
@@ -2246,37 +2232,7 @@
     // INITIALIZATION
     // ═══════════════════════════════════════════════════════════════════════════
     
-    // Load current user info on page load
-    function loadCurrentUser() {
-      google.script.run
-        .withSuccessHandler(function(result) {
-          if (result.success && result.user) {
-            var userEl = document.getElementById('currentUser');
-            if (userEl) {
-              userEl.textContent = result.user.name;
-              userEl.title = result.user.email + ' (' + result.user.role + ')';
-            }
-          } else {
-            var userEl = document.getElementById('currentUser');
-            if (userEl) {
-              userEl.textContent = 'User';
-            }
-          }
-        })
-        .withFailureHandler(function(err) {
-          console.error('Error loading user info:', err);
-          var userEl = document.getElementById('currentUser');
-          if (userEl) {
-            userEl.textContent = 'User';
-          }
-        })
-        .getCurrentUserInfo();
-    }
-    
     document.addEventListener('DOMContentLoaded', function() {
-      // Load user info first
-      loadCurrentUser();
-      
       document.getElementById('currentDate').textContent = new Date().toLocaleDateString('en-US', { 
         weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' 
       });
@@ -2376,13 +2332,6 @@
     function handleError(err) {
       console.error('Error:', err);
       showToast('Error: ' + err, 'error');
-    }
-    
-    function handleScriptError(error, context) {
-      console.error('Script error in ' + (context || 'unknown') + ':', error);
-      var message = (error && error.message) ? error.message :
-                    (error && error.toString ? error.toString() : 'Something went wrong');
-      showToast('Error' + (context ? ' in ' + context : '') + ': ' + message, 'error');
     }
     
     function formatNumber(num) {
@@ -2568,9 +2517,7 @@
   }
   document.getElementById('batchTableBody').innerHTML = batches.map(function(b) {
     var isActive = b.status && !['Packaged', 'Dumped', 'Cancelled'].includes(b.status);
-    var batchNum = (b.batchNumber || '').replace(/'/g, "\\'");
-    var beerName = (b.beerType || b.beer || '').replace(/'/g, "\\'");
-    return '<tr class="batch-row-clickable" onclick="openBrewerSheetFromBatch(\'' + batchNum + '\', \'' + beerName + '\', ' + (b.batchSize || b.size || 60) + ')" style="cursor:pointer;">' +
+    return '<tr>' +
       '<td><strong>' + escapeHtml(b.batchNumber) + '</strong></td>' +
       '<td>' + formatDate(b.brewDate || b.date) + '</td>' +
       '<td>' + escapeHtml(b.beerType || b.beer) + '</td>' +
@@ -2581,7 +2528,7 @@
       '<td style="text-align:right;">$' + formatNumber(b.totalCost || 0) + '</td>' +
       '<td><span class="badge ' + getStatusBadge(b.status) + '">' + (b.status || 'Unknown') + '</span></td>' +
       '<td style="text-align:right;">' + (b.actualYield || b.expectedYield || '--') + '</td>' +
-      '<td class="batch-actions" onclick="event.stopPropagation();">' + (isActive ? renderBatchActions(b) : '<span class="text-muted">Complete</span>') + '</td>' +
+      '<td class="batch-actions">' + (isActive ? renderBatchActions(b) : '<span class="text-muted">Complete</span>') + '</td>' +
     '</tr>';
   }).join('');
 }
@@ -2741,6 +2688,7 @@
     
     var allRecipes = [];
     var currentRecipeName = '';
+    var currentBrewLaborEntries = [];
     var currentBrewBatchNumber = null;
     
     function loadRecipes() {
@@ -2914,43 +2862,6 @@
       });
     }
     
-    /**
-     * Open Brewer's Sheet from batch row click
-     * Called when clicking anywhere on a batch row in Production tab
-     */
-    function openBrewerSheetFromBatch(batchNumber, recipeName, batchSize) {
-      if (!batchNumber || !recipeName) {
-        showToast('Invalid batch data', 'error');
-        return;
-      }
-      
-      showToast('Loading Brewer\'s Sheet...', 'info');
-      
-      Promise.all([
-        new Promise(function(resolve, reject) {
-          google.script.run.withSuccessHandler(resolve).withFailureHandler(reject).getBrewerSheet(recipeName, batchSize || 60, batchNumber);
-        }),
-        new Promise(function(resolve, reject) {
-          google.script.run.withSuccessHandler(resolve).withFailureHandler(reject).getBrewers();
-        }),
-        new Promise(function(resolve, reject) {
-          google.script.run.withSuccessHandler(resolve).withFailureHandler(reject).getAvailableVessels();
-        })
-      ]).then(function(results) {
-        var sheetResult = results[0];
-        var brewersResult = results[1];
-        var vesselsResult = results[2];
-        
-        if (!sheetResult.success) {
-          showToast('Error: ' + (sheetResult.error || 'Could not load brewer sheet'), 'error');
-          return;
-        }
-        showBrewerSheetModal(sheetResult.brewerSheet, brewersResult.success ? brewersResult.brewers : [], vesselsResult.success ? vesselsResult.vessels : []);
-      }).catch(function(err) {
-        showToast('Error loading brewer sheet: ' + err, 'error');
-      });
-    }
-    
     window.currentBrewerSheet = null;
     window.currentBrewers = [];
     window.currentVessels = [];
@@ -2962,67 +2873,8 @@
       window.currentBrewerSheet = sheet;
       window.currentBrewers = brewers;
       window.currentVessels = vessels;
-      window.turn1Labor = { brewer: null, hours: 0 };
-      window.turn2Labor = { brewer: null, hours: 0 };
-      
-      // Load existing turn assignments from workflow if batch exists
-      if (sheet.workflow && sheet.workflow.batchExists) {
-        if (sheet.workflow.turn1Brewer) {
-          window.turn1Labor.brewer = sheet.workflow.turn1Brewer;
-          // Try to load hours from batch labor entries
-          google.script.run
-            .withSuccessHandler(function(laborResult) {
-              if (laborResult.success && laborResult.entries) {
-                var turn1Entry = laborResult.entries.find(function(e) {
-                  return e.employee === sheet.workflow.turn1Brewer;
-                });
-                if (turn1Entry) {
-                  window.turn1Labor.hours = turn1Entry.hours || 0;
-                  var turn1HoursInput = document.getElementById('turn1Hours');
-                  if (turn1HoursInput) turn1HoursInput.value = window.turn1Labor.hours;
-                  var turn1BrewerSelect = document.getElementById('turn1Brewer');
-                  if (turn1BrewerSelect) turn1BrewerSelect.value = window.turn1Labor.brewer;
-                }
-              }
-            })
-            .withFailureHandler(function() {})
-            .getBatchBrewLabor(null); // Will be called after modal is created
-        }
-        if (sheet.workflow.turn2Brewer) {
-          window.turn2Labor.brewer = sheet.workflow.turn2Brewer;
-        }
-      }
-      
-      document.body.insertAdjacentHTML('beforeend', modalHtml);
-      
-      // Load turn data after modal is created
-      if (sheet.workflow && sheet.workflow.batchExists && (sheet.workflow.turn1Brewer || sheet.workflow.turn2Brewer)) {
-        // Find batch number from workflow or get from current batch
-        google.script.run
-          .withSuccessHandler(function(laborResult) {
-            if (laborResult.success && laborResult.entries) {
-              laborResult.entries.forEach(function(entry) {
-                if (entry.employee === sheet.workflow.turn1Brewer) {
-                  window.turn1Labor.hours = entry.hours || 0;
-                  var turn1HoursInput = document.getElementById('turn1Hours');
-                  var turn1BrewerSelect = document.getElementById('turn1Brewer');
-                  if (turn1HoursInput) turn1HoursInput.value = window.turn1Labor.hours;
-                  if (turn1BrewerSelect) turn1BrewerSelect.value = window.turn1Labor.brewer;
-                }
-                if (entry.employee === sheet.workflow.turn2Brewer) {
-                  window.turn2Labor.hours = entry.hours || 0;
-                  var turn2HoursInput = document.getElementById('turn2Hours');
-                  var turn2BrewerSelect = document.getElementById('turn2Brewer');
-                  if (turn2HoursInput) turn2HoursInput.value = window.turn2Labor.hours;
-                  if (turn2BrewerSelect) turn2BrewerSelect.value = window.turn2Labor.brewer;
-                }
-              });
-              updateBrewLaborTotal();
-            }
-          })
-          .withFailureHandler(function() {})
-          .getBatchBrewLabor(null); // Will need batch number - this is a placeholder
-      }
+      currentBrewLaborEntries = [];
+      currentBrewBatchNumber = null;
       
       var availableFermenters = (vessels || []).filter(function(v) {
         return v.available && (v.type === 'Fermenter' || v.type === 'Pilot Fermenter');
@@ -3066,78 +2918,6 @@
         '<option value="Richard Mar">Richard Mar</option>' +
         '<option value="Alex Velasco">Alex Velasco</option>';
       
-      function buildWorkflowSection(workflow) {
-        if (!workflow || !workflow.batchExists) {
-          return '<div style="background:#e3f2fd;border:2px solid #2196f3;border-radius:8px;padding:16px;margin:16px 0;">' +
-            '<h4 style="margin:0 0 12px 0;color:#1565c0;font-size:14px;">📋 Complete Brew Workflow</h4>' +
-            '<p style="margin:0;color:#666;font-size:13px;">Workflow details will appear here once the brew is started.</p>' +
-            '</div>';
-        }
-        
-        var html = '<div style="background:#f0f9ff;border:2px solid #0ea5e9;border-radius:8px;padding:16px;margin:16px 0;">' +
-          '<h4 style="margin:0 0 16px 0;color:#0c4a6e;font-size:16px;border-bottom:2px solid #0ea5e9;padding-bottom:8px;">📋 Complete Brew Workflow</h4>';
-        
-        // Yeast Details
-        if (workflow.yeastDetails) {
-          html += '<div style="margin-bottom:16px;background:white;padding:12px;border-radius:6px;border-left:4px solid #f59e0b;">' +
-            '<h5 style="margin:0 0 8px 0;color:#d97706;font-size:13px;font-weight:600;">🦠 Yeast Addition</h5>' +
-            '<div style="font-size:14px;color:#92400e;">' + workflow.yeastDetails + '</div></div>';
-        }
-        
-        // Recipe Changes
-        if (workflow.recipeChanges && workflow.recipeChanges.length > 0) {
-          html += '<div style="margin-bottom:16px;background:white;padding:12px;border-radius:6px;border-left:4px solid #6366f1;">' +
-            '<h5 style="margin:0 0 8px 0;color:#4f46e5;font-size:13px;font-weight:600;">📝 Recipe Changes/Modifications</h5>' +
-            '<div style="max-height:150px;overflow-y:auto;font-size:12px;">';
-          workflow.recipeChanges.slice(0, 5).forEach(function(change) {
-            html += '<div style="padding:6px 0;border-bottom:1px solid #e5e7eb;">' +
-              '<div style="font-weight:600;color:#374151;">' + (change.field || 'Unknown') + '</div>' +
-              '<div style="color:#6b7280;font-size:11px;">' + (change.date || '') + ' - ' + (change.user ? change.user.split('@')[0] : '') + '</div>' +
-              '<div style="color:#666;margin-top:2px;">' +
-              '<span style="color:#ef4444;">' + (change.oldValue || '') + '</span> → ' +
-              '<span style="color:#10b981;">' + (change.newValue || '') + '</span>' +
-              '</div></div>';
-          });
-          html += '</div></div>';
-        }
-        
-        // Dry Hop Schedule
-        if (workflow.dryHopSchedule && workflow.dryHopSchedule.length > 0) {
-          html += '<div style="margin-bottom:16px;background:white;padding:12px;border-radius:6px;border-left:4px solid #a855f7;">' +
-            '<h5 style="margin:0 0 8px 0;color:#9333ea;font-size:13px;font-weight:600;">🌿 Dry Hop Schedule</h5>' +
-            '<div style="font-size:12px;">';
-          workflow.dryHopSchedule.forEach(function(dh) {
-            var dateStr = dh.date ? (dh.date instanceof Date ? dh.date.toLocaleDateString() : dh.date) : '';
-            html += '<div style="padding:6px 0;border-bottom:1px solid #e5e7eb;">' +
-              '<div style="font-weight:600;color:#374151;">' + (dh.ingredient || 'Unknown') + '</div>' +
-              '<div style="color:#6b7280;">' + (dh.amount || '') + ' ' + (dh.units || '') + 
-              (dateStr ? ' - ' + dateStr : '') + '</div>' +
-              (dh.notes ? '<div style="color:#9ca3af;font-size:11px;margin-top:2px;">' + dh.notes + '</div>' : '') +
-              '</div>';
-          });
-          html += '</div></div>';
-        }
-        
-        // Cleaning Tasks
-        if (workflow.cleaningTasks && workflow.cleaningTasks.length > 0) {
-          html += '<div style="margin-bottom:16px;background:white;padding:12px;border-radius:6px;border-left:4px solid #06b6d4;">' +
-            '<h5 style="margin:0 0 8px 0;color:#0891b2;font-size:13px;font-weight:600;">🧹 Cleaning Tasks</h5>' +
-            '<div style="font-size:12px;">';
-          workflow.cleaningTasks.forEach(function(task) {
-            var dateStr = task.date ? (task.date instanceof Date ? task.date.toLocaleDateString() : task.date) : '';
-            html += '<div style="padding:6px 0;border-bottom:1px solid #e5e7eb;">' +
-              '<div style="font-weight:600;color:#374151;">' + (task.description || 'Cleaning task') + '</div>' +
-              (dateStr ? '<div style="color:#6b7280;font-size:11px;">' + dateStr + '</div>' : '') +
-              (task.notes ? '<div style="color:#9ca3af;font-size:11px;margin-top:2px;">' + task.notes + '</div>' : '') +
-              '</div>';
-          });
-          html += '</div></div>';
-        }
-        
-        html += '</div>';
-        return html;
-      }
-      
       var modalHtml = '<div id="brewerSheetModal" style="display:flex;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.6);z-index:2000;justify-content:center;align-items:flex-start;padding:20px;overflow-y:auto;">' +
         '<div style="background:white;border-radius:12px;max-width:900px;width:100%;margin:20px auto;">' +
           '<div style="background:linear-gradient(135deg,#8B0000,#a50000);color:white;padding:20px;border-radius:12px 12px 0 0;">' +
@@ -3154,63 +2934,24 @@
               '<div><label style="font-size:12px;color:#666;">Est. Total Cost</label><div style="font-size:20px;font-weight:bold;color:#8B0000;">$' + estimatedCost.toFixed(2) + '</div></div>' +
             '</div>' +
             '<div style="background:linear-gradient(135deg,#fef3c7,#fde68a);border:2px solid #d97706;border-radius:8px;padding:16px;margin:16px 0;">' +
-              '<h4 style="margin:0 0 16px 0;color:#92400e;font-size:14px;">🍺 Brew Labor</h4>' +
-              '<table style="width:100%;border-collapse:collapse;background:white;border-radius:6px;overflow:hidden;">' +
-                '<thead>' +
-                  '<tr style="background:#f9fafb;">' +
-                    '<th style="text-align:left;padding:10px;font-size:12px;font-weight:600;color:#374151;width:80px;">Turn</th>' +
-                    '<th style="text-align:left;padding:10px;font-size:12px;font-weight:600;color:#374151;">Brewer</th>' +
-                    '<th style="text-align:left;padding:10px;font-size:12px;font-weight:600;color:#374151;width:120px;">Hours</th>' +
-                    '<th style="text-align:center;padding:10px;font-size:12px;font-weight:600;color:#374151;width:120px;">Action</th>' +
-                  '</tr>' +
-                '</thead>' +
-                '<tbody>' +
-                  '<tr style="border-bottom:1px solid #e5e7eb;">' +
-                    '<td style="padding:10px;font-weight:600;color:#92400e;">Turn 1</td>' +
-                    '<td style="padding:10px;"><select id="turn1Brewer" style="width:100%;padding:8px;border:1px solid #d1d5db;border-radius:6px;font-size:14px;">' + brewerOptions + '</select></td>' +
-                    '<td style="padding:10px;"><input type="number" id="turn1Hours" step="0.5" min="0" max="16" placeholder="8" style="width:100%;padding:8px;border:1px solid #d1d5db;border-radius:6px;font-size:14px;"></td>' +
-                    '<td style="padding:10px;text-align:center;"><button type="button" onclick="logTurnLabor(1)" style="padding:8px 16px;background:#22c55e;color:white;border:none;border-radius:6px;cursor:pointer;font-weight:600;font-size:13px;">+ Log Hours</button></td>' +
-                  '</tr>' +
-                  '<tr>' +
-                    '<td style="padding:10px;font-weight:600;color:#92400e;">Turn 2</td>' +
-                    '<td style="padding:10px;"><select id="turn2Brewer" style="width:100%;padding:8px;border:1px solid #d1d5db;border-radius:6px;font-size:14px;">' + brewerOptions + '</select></td>' +
-                    '<td style="padding:10px;"><input type="number" id="turn2Hours" step="0.5" min="0" max="16" placeholder="8" style="width:100%;padding:8px;border:1px solid #d1d5db;border-radius:6px;font-size:14px;"></td>' +
-                    '<td style="padding:10px;text-align:center;"><button type="button" onclick="logTurnLabor(2)" style="padding:8px 16px;background:#22c55e;color:white;border:none;border-radius:6px;cursor:pointer;font-weight:600;font-size:13px;">+ Log Hours</button></td>' +
-                  '</tr>' +
-                '</tbody>' +
-              '</table>' +
-              '<div style="display:flex;justify-content:space-between;margin-top:12px;padding-top:12px;border-top:2px solid #d97706;background:white;padding:12px;border-radius:6px;">' +
+              '<h4 style="margin:0 0 12px 0;color:#92400e;font-size:14px;">🍺 Brew Labor</h4>' +
+              '<div id="brewLaborEntries" style="margin-bottom:12px;"></div>' +
+              '<div style="background:white;padding:12px;border-radius:6px;border:2px dashed #d97706;">' +
+                '<div style="display:flex;gap:12px;align-items:flex-end;">' +
+                  '<div style="flex:1;"><label style="display:block;font-size:12px;font-weight:600;color:#374151;margin-bottom:4px;">Brewer</label><select id="brewLaborBrewer" style="width:100%;padding:10px;border:1px solid #d1d5db;border-radius:6px;font-size:14px;">' + brewerOptions + '</select></div>' +
+                  '<div style="flex:0 0 100px;"><label style="display:block;font-size:12px;font-weight:600;color:#374151;margin-bottom:4px;">Hours</label><input type="number" id="brewLaborHours" step="0.5" min="0.5" max="16" placeholder="8" style="width:100%;padding:10px;border:1px solid #d1d5db;border-radius:6px;font-size:14px;"></div>' +
+                  '<div><label style="display:block;font-size:12px;color:transparent;margin-bottom:4px;">&nbsp;</label><button type="button" onclick="addBrewLaborEntryUI()" style="padding:10px 16px;background:#22c55e;color:white;border:none;border-radius:6px;cursor:pointer;font-weight:600;font-size:14px;white-space:nowrap;">+ Log Hours</button></div>' +
+                '</div>' +
+              '</div>' +
+              '<div style="display:flex;justify-content:space-between;margin-top:12px;padding-top:12px;border-top:2px solid #d97706;">' +
                 '<span style="font-weight:600;color:#92400e;">Total Brew Labor:</span>' +
                 '<span id="brewLaborTotal" style="font-weight:bold;font-size:16px;color:#92400e;">0 hrs</span>' +
               '</div>' +
-            '</div>' +
-            '<div style="background:linear-gradient(135deg,#fef3c7,#fde68a);border:2px solid #f59e0b;border-radius:8px;padding:16px;margin:16px 0;">' +
-              '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">' +
-                '<h4 style="margin:0;color:#92400e;font-size:16px;">📊 Quick Logging</h4>' +
-                '<button onclick="openGravitypHModal()" style="padding:8px 16px;background:#f59e0b;color:white;border:none;border-radius:6px;cursor:pointer;font-weight:600;font-size:13px;">📈 Log Gravity/pH</button>' +
-              '</div>' +
-            '</div>' +
-            '<div id="taskListSection" style="background:linear-gradient(135deg,#e0e7ff,#c7d2fe);border:2px solid #6366f1;border-radius:8px;padding:16px;margin:16px 0;">' +
-              '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">' +
-                '<h4 style="margin:0;color:#4f46e5;font-size:16px;">📋 Task List</h4>' +
-                '<div style="display:flex;gap:8px;">' +
-                  '<select id="taskFilterStatus" onchange="filterTasks()" style="padding:6px 12px;border:1px solid #6366f1;border-radius:6px;font-size:13px;background:white;">' +
-                    '<option value="all">All Tasks</option>' +
-                    '<option value="Planned">Planned</option>' +
-                    '<option value="In Progress">In Progress</option>' +
-                    '<option value="Completed">Completed</option>' +
-                  '</select>' +
-                  '<button onclick="openTaskModal(null)" style="padding:8px 16px;background:#6366f1;color:white;border:none;border-radius:6px;cursor:pointer;font-weight:600;font-size:13px;">+ Add Task</button>' +
-                '</div>' +
-              '</div>' +
-              '<div id="taskListContainer" style="background:white;border-radius:6px;min-height:100px;max-height:400px;overflow-y:auto;">' +
-                '<div style="padding:20px;text-align:center;color:#9ca3af;">Loading tasks...</div>' +
-              '</div>' +
+              '<div style="font-size:11px;color:#b45309;margin-top:8px;font-style:italic;">💡 Both brewers can log their turns. Standard: 2 turns × 8 hrs = 16 hrs total.</div>' +
             '</div>' +
             '<h3 style="margin:0 0 8px 0;border-bottom:2px solid #d4af37;padding-bottom:4px;">🌾 Grains (' + totalGrain.toFixed(0) + ' lbs)</h3>' + buildTable(sheet.grains, 'grains') +
             '<h3 style="margin:0 0 8px 0;border-bottom:2px solid #228B22;padding-bottom:4px;">🌿 Hops</h3>' + buildTable(sheet.hops, 'hops') +
             '<h3 style="margin:0 0 8px 0;border-bottom:2px solid #8B4513;padding-bottom:4px;">🍯 Other</h3>' + buildTable(sheet.other, 'other') +
-            buildWorkflowSection(sheet.workflow || {}) +
             '<div style="margin-top:16px;"><label style="font-weight:600;">Notes</label><textarea id="brewNotes" rows="2" style="width:100%;padding:8px;border:1px solid #ccc;border-radius:4px;margin-top:4px;">' + (sheet.notes || '') + '</textarea></div>' +
             '<div style="margin-top:20px;display:flex;gap:12px;justify-content:flex-end;">' +
               '<button onclick="printBrewerSheet()" style="padding:10px 20px;background:#6c757d;color:white;border:none;border-radius:6px;cursor:pointer;">🖨️ Print</button>' +
@@ -3222,802 +2963,11 @@
       '</div>';
       
       document.body.insertAdjacentHTML('beforeend', modalHtml);
-      
-      // Store batch number for task management
-      if (sheet.workflow && sheet.workflow.batchExists && sheet.workflow.batchNumber) {
-        window.currentBatchNumber = sheet.workflow.batchNumber;
-        loadBatchTasks(sheet.workflow.batchNumber);
-      } else {
-        window.currentBatchNumber = null;
-        // No batch yet - show empty state
-        var container = document.getElementById('taskListContainer');
-        if (container) {
-          container.innerHTML = '<div style="padding:20px;text-align:center;color:#9ca3af;">No batch started yet. Tasks will appear here after starting the brew.</div>';
-        }
-      }
     }
     
-    // Turn-based labor tracking
-    window.turn1Labor = { brewer: null, hours: 0 };
-    window.turn2Labor = { brewer: null, hours: 0 };
-    
-    // Task management
-    window.currentBatchNumber = null;
-    window.allTasks = [];
-    
-    function loadBatchTasks(batchNumber) {
-      window.currentBatchNumber = batchNumber;
-      google.script.run
-        .withSuccessHandler(function(result) {
-          if (result.success && result.tasks) {
-            window.allTasks = result.tasks;
-            renderTasks('all');
-          } else {
-            window.allTasks = [];
-            renderTasks('all');
-          }
-        })
-        .withFailureHandler(function(err) {
-          showToast('Error loading tasks: ' + err, 'error');
-          window.allTasks = [];
-          renderTasks('all');
-        })
-        .getBatchTasks(batchNumber);
-    }
-    
-    function renderTasks(filterStatus) {
-      var container = document.getElementById('taskListContainer');
-      if (!container) return;
-      
-      var tasks = window.allTasks || [];
-      
-      // Filter by status
-      if (filterStatus && filterStatus !== 'all') {
-        tasks = tasks.filter(function(t) { return t.status === filterStatus; });
-      }
-      
-      // Sort by due date (earliest first)
-      tasks.sort(function(a, b) {
-        var dateA = a.dueDate ? new Date(a.dueDate) : new Date(9999, 12, 31);
-        var dateB = b.dueDate ? new Date(b.dueDate) : new Date(9999, 12, 31);
-        return dateA - dateB;
-      });
-      
-      if (tasks.length === 0) {
-        container.innerHTML = '<div style="padding:20px;text-align:center;color:#9ca3af;">No tasks found.</div>';
-        return;
-      }
-      
-      var html = '<table style="width:100%;border-collapse:collapse;">';
-      tasks.forEach(function(task) {
-        var statusColor = '#9ca3af'; // Planned - gray
-        if (task.status === 'In Progress') statusColor = '#fbbf24'; // yellow
-        if (task.status === 'Completed') statusColor = '#22c55e'; // green
-        
-        var dueDate = task.dueDate ? new Date(task.dueDate).toLocaleDateString() : 'No due date';
-        var isOverdue = task.dueDate && task.status !== 'Completed' && new Date(task.dueDate) < new Date();
-        if (isOverdue) statusColor = '#ef4444'; // red
-        
-        html += '<tr onclick="openTaskModal(\'' + task.taskId + '\')" style="cursor:pointer;border-bottom:1px solid #e5e7eb;transition:background 0.2s;" onmouseover="this.style.background=\'#f9fafb\'" onmouseout="this.style.background=\'white\'">' +
-          '<td style="padding:12px;width:40px;"><div style="width:12px;height:12px;border-radius:50%;background:' + statusColor + ';"></div></td>' +
-          '<td style="padding:12px;"><div style="font-weight:600;color:#374151;">' + escapeHtml(task.taskName || task.taskType) + '</div><div style="font-size:12px;color:#6b7280;">' + escapeHtml(task.taskType) + '</div></td>' +
-          '<td style="padding:12px;font-size:13px;color:#6b7280;">' + escapeHtml(task.assignedTo || 'Unassigned') + '</td>' +
-          '<td style="padding:12px;font-size:13px;color:' + (isOverdue ? '#ef4444' : '#6b7280') + ';">' + dueDate + '</td>' +
-          '<td style="padding:12px;"><span style="padding:4px 8px;background:' + statusColor + ';color:white;border-radius:4px;font-size:11px;font-weight:600;">' + escapeHtml(task.status) + '</span></td>' +
-        '</tr>';
-      });
-      html += '</table>';
-      
-      container.innerHTML = html;
-    }
-    
-    function filterTasks() {
-      var filter = document.getElementById('taskFilterStatus');
-      renderTasks(filter ? filter.value : 'all');
-    }
-    
-    function openTaskModal(taskId) {
-      var task = null;
-      if (taskId) {
-        task = window.allTasks.find(function(t) { return t.taskId === taskId; });
-      }
-      
-      var taskTypes = [
-        'Turn 1 Brew', 'Turn 2 Brew', 'Transfer to FV', 'Yeast Pitch', 'Dry Hop',
-        'Fining/Additions', 'Gravity Reading', 'pH Reading', 'Transfer to BT',
-        'Transfer to SV', 'Filtering', 'Carbonation', 'Packaging', 'Custom'
-      ];
-      
-      // Load brewery staff for dropdown
-      google.script.run
-        .withSuccessHandler(function(result) {
-          if (result.success && result.staff) {
-            buildTaskModal(task, taskTypes, result.staff);
-          } else {
-            // Fallback to hardcoded list
-            buildTaskModal(task, taskTypes, ['Richard Mar', 'Alex Velasco', 'Jeremy Ueberroth', 'Zach Schneider', 'Dwayne Klaus']);
-          }
-        })
-        .withFailureHandler(function(err) {
-          // Fallback on error
-          buildTaskModal(task, taskTypes, ['Richard Mar', 'Alex Velasco', 'Jeremy Ueberroth', 'Zach Schneider', 'Dwayne Klaus']);
-        })
-        .getBreweryStaff();
-    }
-    
-    function buildTaskModal(task, taskTypes, staffNames) {
-      var brewerOptions = '<option value="">-- Select Brewer --</option>';
-      staffNames.forEach(function(name) {
-        var selected = task && task.assignedTo === name ? ' selected' : '';
-        brewerOptions += '<option value="' + escapeHtml(name) + '"' + selected + '>' + escapeHtml(name) + '</option>';
-      });
-      
-      var taskTypeOptions = taskTypes.map(function(t) {
-        return '<option value="' + t + '"' + (task && task.taskType === t ? ' selected' : '') + '>' + t + '</option>';
-      }).join('');
-      
-      var modalHtml = '<div id="taskModal" style="display:flex;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.6);z-index:3000;justify-content:center;align-items:center;">' +
-        '<div style="background:white;border-radius:12px;max-width:600px;width:90%;max-height:90vh;overflow-y:auto;">' +
-          '<div style="background:linear-gradient(135deg,#6366f1,#4f46e5);color:white;padding:20px;border-radius:12px 12px 0 0;">' +
-            '<div style="display:flex;justify-content:space-between;align-items:center;">' +
-              '<h3 style="margin:0;">' + (task ? 'Edit Task' : 'Create Task') + '</h3>' +
-              '<button onclick="closeTaskModal()" style="background:rgba(255,255,255,0.2);border:none;color:white;width:32px;height:32px;border-radius:50%;cursor:pointer;">✕</button>' +
-            '</div>' +
-          '</div>' +
-          '<div style="padding:24px;">' +
-            '<div style="margin-bottom:16px;">' +
-              '<label style="display:block;font-weight:600;margin-bottom:6px;color:#374151;">Task Type *</label>' +
-              '<select id="taskType" style="width:100%;padding:10px;border:1px solid #d1d5db;border-radius:6px;font-size:14px;">' + taskTypeOptions + '</select>' +
-            '</div>' +
-            '<div style="margin-bottom:16px;">' +
-              '<label style="display:block;font-weight:600;margin-bottom:6px;color:#374151;">Task Name *</label>' +
-              '<input type="text" id="taskName" value="' + (task ? escapeHtml(task.taskName) : '') + '" placeholder="Enter task name" style="width:100%;padding:10px;border:1px solid #d1d5db;border-radius:6px;font-size:14px;">' +
-            '</div>' +
-            '<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;">' +
-              '<div>' +
-                '<label style="display:block;font-weight:600;margin-bottom:6px;color:#374151;">Assigned To</label>' +
-                '<select id="taskAssignedTo" style="width:100%;padding:10px;border:1px solid #d1d5db;border-radius:6px;font-size:14px;">' + brewerOptions + '</select>' +
-              '</div>' +
-              '<div>' +
-                '<label style="display:block;font-weight:600;margin-bottom:6px;color:#374151;">Due Date</label>' +
-                '<input type="date" id="taskDueDate" value="' + (task && task.dueDate ? new Date(task.dueDate).toISOString().split('T')[0] : '') + '" style="width:100%;padding:10px;border:1px solid #d1d5db;border-radius:6px;font-size:14px;">' +
-              '</div>' +
-            '</div>' +
-            '<div style="margin-bottom:16px;">' +
-              '<label style="display:block;font-weight:600;margin-bottom:6px;color:#374151;">Status</label>' +
-              '<select id="taskStatus" style="width:100%;padding:10px;border:1px solid #d1d5db;border-radius:6px;font-size:14px;">' +
-                '<option value="Planned"' + (task && task.status === 'Planned' ? ' selected' : '') + '>Planned</option>' +
-                '<option value="In Progress"' + (task && task.status === 'In Progress' ? ' selected' : '') + '>In Progress</option>' +
-                '<option value="Completed"' + (task && task.status === 'Completed' ? ' selected' : '') + '>Completed</option>' +
-              '</select>' +
-            '</div>' +
-            '<div style="margin-bottom:16px;">' +
-              '<label style="display:block;font-weight:600;margin-bottom:6px;color:#374151;">Notes</label>' +
-              '<textarea id="taskNotes" rows="3" placeholder="Task instructions, notes..." style="width:100%;padding:10px;border:1px solid #d1d5db;border-radius:6px;font-size:14px;">' + (task ? escapeHtml(task.notes || '') : '') + '</textarea>' +
-            '</div>' +
-            '<div id="taskPackagingSection" style="margin-bottom:16px;background:#fef3c7;border:2px solid #f59e0b;border-radius:6px;padding:16px;display:none;">' +
-              '<label style="display:block;font-weight:600;margin-bottom:12px;color:#92400e;">📦 Packaging Details</label>' +
-              '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px;">' +
-                '<div>' +
-                  '<label style="display:block;font-size:12px;font-weight:600;color:#374151;margin-bottom:4px;">Package Type</label>' +
-                  '<select id="taskPackageType" onchange="loadPackageComponents()" style="width:100%;padding:8px;border:1px solid #f59e0b;border-radius:4px;font-size:14px;">' +
-                    '<option value="">-- Select Package Type --</option>' +
-                    '<option value="1/2 BBL Keg">1/2 BBL Keg</option>' +
-                    '<option value="1/6 BBL Keg">1/6 BBL Keg</option>' +
-                    '<option value="1/4 BBL Keg">1/4 BBL Keg</option>' +
-                    '<option value="12oz Case (4×6)">12oz Case (4×6)</option>' +
-                    '<option value="16oz Case (4×6)">16oz Case (4×6)</option>' +
-                    '<option value="12oz 6-pack">12oz 6-pack</option>' +
-                    '<option value="16oz 4-pack">16oz 4-pack</option>' +
-                    '<option value="Growler">Growler</option>' +
-                    '<option value="Crowler">Crowler</option>' +
-                  '</select>' +
-                '</div>' +
-                '<div>' +
-                  '<label style="display:block;font-size:12px;font-weight:600;color:#374151;margin-bottom:4px;">Quantity Packaged</label>' +
-                  '<input type="number" id="taskPackageQty" step="1" min="0" value="' + (task && task.packageQty ? task.packageQty : '') + '" onchange="calculatePackageMaterials()" placeholder="20" style="width:100%;padding:8px;border:1px solid #f59e0b;border-radius:4px;font-size:14px;">' +
-                '</div>' +
-              '</div>' +
-              '<div id="taskPackageMaterialsList" style="background:white;border-radius:4px;padding:12px;max-height:400px;overflow-y:auto;">' +
-                '<div style="padding:8px;color:#9ca3af;font-size:13px;text-align:center;">Select package type and quantity to calculate components.</div>' +
-              '</div>' +
-            '</div>' +
-            '<div id="taskMaterialsSection" style="margin-bottom:16px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;padding:16px;">' +
-              '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">' +
-                '<label style="font-weight:600;color:#374151;">Materials/Components</label>' +
-                '<button type="button" onclick="addTaskMaterialRow()" style="padding:6px 12px;background:#6366f1;color:white;border:none;border-radius:4px;cursor:pointer;font-size:12px;font-weight:600;">+ Add Material</button>' +
-              '</div>' +
-              '<div id="taskMaterialsList" style="space-y:8px;">' +
-                '<div style="padding:8px;color:#9ca3af;font-size:13px;text-align:center;border:1px dashed #d1d5db;border-radius:4px;">No materials added. Click "+ Add Material" to add components.</div>' +
-              '</div>' +
-            '</div>' +
-            '<div id="taskVolumeSection" style="margin-bottom:16px;background:#f0f9ff;border:1px solid #0ea5e9;border-radius:6px;padding:16px;display:none;">' +
-              '<label style="display:block;font-weight:600;margin-bottom:12px;color:#0c4a6e;">📊 Volume Tracking (for Transfer Tasks)</label>' +
-              '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:12px;">' +
-                '<div>' +
-                  '<label style="display:block;font-size:12px;font-weight:600;color:#374151;margin-bottom:4px;">Volume In (BBL)</label>' +
-                  '<input type="number" id="taskVolumeIn" step="0.1" min="0" value="' + (task && task.volumeIn ? task.volumeIn : '') + '" placeholder="0.0" style="width:100%;padding:8px;border:1px solid #0ea5e9;border-radius:4px;font-size:14px;">' +
-                '</div>' +
-                '<div>' +
-                  '<label style="display:block;font-size:12px;font-weight:600;color:#374151;margin-bottom:4px;">Volume Out (BBL)</label>' +
-                  '<input type="number" id="taskVolumeOut" step="0.1" min="0" value="' + (task && task.volumeOut ? task.volumeOut : '') + '" placeholder="0.0" style="width:100%;padding:8px;border:1px solid #0ea5e9;border-radius:4px;font-size:14px;" onchange="calculateTaskLoss()">' +
-                '</div>' +
-                '<div>' +
-                  '<label style="display:block;font-size:12px;font-weight:600;color:#374151;margin-bottom:4px;">Loss (BBL)</label>' +
-                  '<input type="number" id="taskLoss" step="0.1" readonly style="width:100%;padding:8px;border:1px solid #d1d5db;border-radius:4px;font-size:14px;background:#f3f4f6;" value="0.0">' +
-                '</div>' +
-              '</div>' +
-              '<div style="display:grid;grid-template-columns:1fr;gap:12px;">' +
-                '<div>' +
-                  '<label style="display:block;font-size:12px;font-weight:600;color:#374151;margin-bottom:4px;">Loss Reason</label>' +
-                  '<select id="taskLossReason" style="width:100%;padding:8px;border:1px solid #0ea5e9;border-radius:4px;font-size:14px;">' +
-                    '<option value="">-- Select Reason --</option>' +
-                    '<option value="Trub/Sediment"' + (task && task.lossReason === 'Trub/Sediment' ? ' selected' : '') + '>Trub/Sediment</option>' +
-                    '<option value="Yeast"' + (task && task.lossReason === 'Yeast' ? ' selected' : '') + '>Yeast</option>' +
-                    '<option value="Sampling"' + (task && task.lossReason === 'Sampling' ? ' selected' : '') + '>Sampling</option>' +
-                    '<option value="Spill"' + (task && task.lossReason === 'Spill' ? ' selected' : '') + '>Spill</option>' +
-                    '<option value="Evaporation"' + (task && task.lossReason === 'Evaporation' ? ' selected' : '') + '>Evaporation</option>' +
-                    '<option value="Transfer Loss"' + (task && task.lossReason === 'Transfer Loss' ? ' selected' : '') + '>Transfer Loss</option>' +
-                    '<option value="Dry Hop Absorption"' + (task && task.lossReason === 'Dry Hop Absorption' ? ' selected' : '') + '>Dry Hop Absorption</option>' +
-                    '<option value="Filter Loss"' + (task && task.lossReason === 'Filter Loss' ? ' selected' : '') + '>Filter Loss</option>' +
-                    '<option value="Other"' + (task && task.lossReason === 'Other' ? ' selected' : '') + '>Other</option>' +
-                  '</select>' +
-                '</div>' +
-              '</div>' +
-            '</div>' +
-            '<div style="display:flex;gap:12px;justify-content:flex-end;margin-top:24px;">' +
-              '<button onclick="closeTaskModal()" style="padding:10px 20px;background:#e9ecef;border:none;border-radius:6px;cursor:pointer;">Cancel</button>' +
-              (task ? '<button onclick="deleteTask(\'' + (task.taskId || '').replace(/'/g, "\\'") + '\')" style="padding:10px 20px;background:#ef4444;color:white;border:none;border-radius:6px;cursor:pointer;">Delete</button>' : '') +
-              (task && task.status !== 'Completed' ? '<button onclick="completeTaskFromModal(\'' + (task.taskId || '').replace(/'/g, "\\'") + '\')" style="padding:10px 20px;background:#22c55e;color:white;border:none;border-radius:6px;cursor:pointer;font-weight:600;">✓ Complete Task</button>' : '') +
-              '<button onclick="saveTask(\'' + (task ? (task.taskId || '').replace(/'/g, "\\'") : '') + '\')" style="padding:10px 24px;background:#6366f1;color:white;border:none;border-radius:6px;cursor:pointer;font-weight:bold;">Save</button>' +
-            '</div>' +
-          '</div>' +
-        '</div>' +
-      '</div>';
-      
-      var existing = document.getElementById('taskModal');
-      if (existing) existing.remove();
-      document.body.insertAdjacentHTML('beforeend', modalHtml);
-      
-      // Load materials for dropdown
-      loadTaskMaterialsForDropdown();
-      
-      // Load existing materials if editing
-      if (task && task.materials && task.materials.length > 0) {
-        task.materials.forEach(function(mat) {
-          addTaskMaterialRow(mat);
-        });
-      }
-      
-      // Show/hide sections based on task type
-      var taskTypeSelect = document.getElementById('taskType');
-      var volumeSection = document.getElementById('taskVolumeSection');
-      var packagingSection = document.getElementById('taskPackagingSection');
-      var materialsSection = document.getElementById('taskMaterialsSection');
-      
-      function toggleTaskSections() {
-        var taskType = taskTypeSelect.value;
-        var isTransferTask = taskType && (
-          taskType.indexOf('Transfer') !== -1 || 
-          taskType === 'Filtering'
-        );
-        var isPackagingTask = taskType === 'Packaging';
-        
-        if (volumeSection) {
-          volumeSection.style.display = isTransferTask ? 'block' : 'none';
-        }
-        if (packagingSection) {
-          packagingSection.style.display = isPackagingTask ? 'block' : 'none';
-        }
-        if (materialsSection) {
-          materialsSection.style.display = isPackagingTask ? 'none' : 'block';
-        }
-      }
-      
-      taskTypeSelect.addEventListener('change', function() {
-        var taskNameInput = document.getElementById('taskName');
-        if (!taskNameInput.value) {
-          taskNameInput.value = this.value;
-        }
-        toggleTaskSections();
-        if (this.value === 'Packaging') {
-          loadPackageComponents();
-        }
-      });
-      
-      // Initial toggle
-      toggleTaskSections();
-      
-      // Load packaging data if editing packaging task
-      if (task && task.taskType === 'Packaging') {
-        if (task.packageType) {
-          document.getElementById('taskPackageType').value = task.packageType;
-        }
-        if (task.packageQty) {
-          document.getElementById('taskPackageQty').value = task.packageQty;
-        }
-        loadPackageComponents();
-      }
-      
-      // Calculate loss on volume change
-      if (document.getElementById('taskVolumeIn')) {
-        document.getElementById('taskVolumeIn').addEventListener('change', calculateTaskLoss);
-      }
-      if (document.getElementById('taskVolumeOut')) {
-        document.getElementById('taskVolumeOut').addEventListener('change', calculateTaskLoss);
-      }
-    }
-    
-    function calculateTaskLoss() {
-      var volumeIn = parseFloat(document.getElementById('taskVolumeIn').value) || 0;
-      var volumeOut = parseFloat(document.getElementById('taskVolumeOut').value) || 0;
-      var loss = Math.max(0, volumeIn - volumeOut);
-      var lossInput = document.getElementById('taskLoss');
-      if (lossInput) {
-        lossInput.value = loss.toFixed(2);
-      }
-    }
-    
-    window.taskMaterialsList = []; // Store raw materials for dropdown
-    window.taskMaterialRows = []; // Store material row data
-    
-    function loadTaskMaterialsForDropdown() {
-      google.script.run
-        .withSuccessHandler(function(result) {
-          if (result.success && result.materials) {
-            window.taskMaterialsList = result.materials;
-          }
-        })
-        .withFailureHandler(function(err) {
-          console.error('Error loading materials:', err);
-          window.taskMaterialsList = [];
-        })
-        .getRawMaterialsInventory({});
-    }
-    
-    function addTaskMaterialRow(materialData) {
-      materialData = materialData || { item: '', quantity: '', unit: '', notes: '' };
-      var rowId = 'matRow_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
-      
-      var container = document.getElementById('taskMaterialsList');
-      if (!container) return;
-      
-      // Remove empty state message if present
-      if (container.children.length === 1 && container.children[0].textContent.indexOf('No materials') !== -1) {
-        container.innerHTML = '';
-      }
-      
-      // Build material options
-      var materialOptions = '<option value="">-- Select Material --</option>';
-      (window.taskMaterialsList || []).forEach(function(mat) {
-        var selected = materialData.item === mat.item ? ' selected' : '';
-        materialOptions += '<option value="' + escapeHtml(mat.item) + '" data-unit="' + escapeHtml(mat.unit || '') + '"' + selected + '>' + escapeHtml(mat.item) + ' (' + escapeHtml(mat.category || '') + ')</option>';
-      });
-      
-      var rowHtml = '<div id="' + rowId + '" style="display:grid;grid-template-columns:2fr 1fr 1fr auto;gap:8px;padding:12px;background:white;border:1px solid #e5e7eb;border-radius:4px;margin-bottom:8px;align-items:end;">' +
-        '<div>' +
-          '<label style="display:block;font-size:11px;font-weight:600;color:#6b7280;margin-bottom:4px;">Material</label>' +
-          '<select class="task-material-item" onchange="updateTaskMaterialUnit(this)" style="width:100%;padding:8px;border:1px solid #d1d5db;border-radius:4px;font-size:13px;">' + materialOptions + '</select>' +
-        '</div>' +
-        '<div>' +
-          '<label style="display:block;font-size:11px;font-weight:600;color:#6b7280;margin-bottom:4px;">Quantity</label>' +
-          '<input type="number" class="task-material-qty" step="0.01" min="0" value="' + (materialData.quantity || '') + '" placeholder="0" style="width:100%;padding:8px;border:1px solid #d1d5db;border-radius:4px;font-size:13px;">' +
-        '</div>' +
-        '<div>' +
-          '<label style="display:block;font-size:11px;font-weight:600;color:#6b7280;margin-bottom:4px;">Unit</label>' +
-          '<input type="text" class="task-material-unit" value="' + escapeHtml(materialData.unit || '') + '" placeholder="lb" style="width:100%;padding:8px;border:1px solid #d1d5db;border-radius:4px;font-size:13px;">' +
-        '</div>' +
-        '<div>' +
-          '<label style="display:block;font-size:11px;color:transparent;margin-bottom:4px;">&nbsp;</label>' +
-          '<button type="button" onclick="removeTaskMaterialRow(\'' + rowId + '\')" style="padding:8px 12px;background:#ef4444;color:white;border:none;border-radius:4px;cursor:pointer;font-size:12px;">✕</button>' +
-        '</div>' +
-      '</div>';
-      
-      container.insertAdjacentHTML('beforeend', rowHtml);
-    }
-    
-    function updateTaskMaterialUnit(select) {
-      var row = select.closest('[id^="matRow_"]');
-      if (!row) return;
-      
-      var option = select.options[select.selectedIndex];
-      var unit = option ? option.getAttribute('data-unit') : '';
-      var unitInput = row.querySelector('.task-material-unit');
-      if (unitInput && unit) {
-        unitInput.value = unit;
-      }
-    }
-    
-    function removeTaskMaterialRow(rowId) {
-      var row = document.getElementById(rowId);
-      if (row) {
-        row.remove();
-        // Show empty state if no materials left
-        var container = document.getElementById('taskMaterialsList');
-        if (container && container.children.length === 0) {
-          container.innerHTML = '<div style="padding:8px;color:#9ca3af;font-size:13px;text-align:center;border:1px dashed #d1d5db;border-radius:4px;">No materials added. Click "+ Add Material" to add components.</div>';
-        }
-      }
-    }
-    
-    function getTaskMaterials() {
-      var materials = [];
-      
-      // Get packaging materials if packaging task
-      var packagingSection = document.getElementById('taskPackagingSection');
-      if (packagingSection && packagingSection.style.display !== 'none') {
-        var packageRows = document.querySelectorAll('[id^="pkgMatRow_"]');
-        packageRows.forEach(function(row) {
-          var item = row.querySelector('.pkg-material-item');
-          var planned = row.querySelector('.pkg-material-planned');
-          var actual = row.querySelector('.pkg-material-actual');
-          var waste = row.querySelector('.pkg-material-waste');
-          var notes = row.querySelector('.pkg-material-notes');
-          
-          if (item && item.value) {
-            materials.push({
-              item: item.value,
-              plannedQty: parseFloat(planned.value) || 0,
-              actualQty: parseFloat(actual.value) || 0,
-              wasteQty: parseFloat(waste.value) || 0,
-              unit: item.getAttribute('data-unit') || '',
-              notes: notes ? notes.value : '',
-              isPackaging: true
-            });
-          }
-        });
-      } else {
-        // Get regular materials
-        var rows = document.querySelectorAll('[id^="matRow_"]');
-        rows.forEach(function(row) {
-          var item = row.querySelector('.task-material-item');
-          var qty = row.querySelector('.task-material-qty');
-          var unit = row.querySelector('.task-material-unit');
-          
-          if (item && item.value && qty && parseFloat(qty.value) > 0) {
-            materials.push({
-              item: item.value,
-              quantity: parseFloat(qty.value) || 0,
-              actualQty: parseFloat(qty.value) || 0,
-              unit: unit ? unit.value : '',
-              notes: ''
-            });
-          }
-        });
-      }
-      
-      return materials;
-    }
-    
-    function loadPackageComponents() {
-      var packageType = document.getElementById('taskPackageType').value;
-      var packageQty = parseFloat(document.getElementById('taskPackageQty').value) || 0;
-      
-      if (!packageType) {
-        document.getElementById('taskPackageMaterialsList').innerHTML = 
-          '<div style="padding:8px;color:#9ca3af;font-size:13px;text-align:center;">Select package type and quantity to calculate components.</div>';
-        return;
-      }
-      
-      google.script.run
-        .withSuccessHandler(function(result) {
-          if (result.success && result.components) {
-            renderPackageMaterials(result.components, packageQty);
-          }
-        })
-        .withFailureHandler(function(err) {
-          console.error('Error loading package components:', err);
-        })
-        .getPackageTypeComponents(packageType);
-    }
-    
-    function calculatePackageMaterials() {
-      var packageQty = parseFloat(document.getElementById('taskPackageQty').value) || 0;
-      var packageType = document.getElementById('taskPackageType').value;
-      
-      if (packageType && packageQty > 0) {
-        loadPackageComponents();
-      }
-    }
-    
-    function renderPackageMaterials(components, packageQty) {
-      var container = document.getElementById('taskPackageMaterialsList');
-      if (!container) return;
-      
-      if (components.length === 0) {
-        container.innerHTML = '<div style="padding:8px;color:#9ca3af;font-size:13px;text-align:center;">No components defined for this package type.</div>';
-        return;
-      }
-      
-      var html = '<table style="width:100%;border-collapse:collapse;font-size:12px;">' +
-        '<thead>' +
-          '<tr style="background:#f3f4f6;border-bottom:2px solid #e5e7eb;">' +
-            '<th style="text-align:left;padding:8px;font-weight:600;color:#374151;">Component</th>' +
-            '<th style="text-align:right;padding:8px;font-weight:600;color:#374151;">Planned</th>' +
-            '<th style="text-align:right;padding:8px;font-weight:600;color:#374151;">Actual</th>' +
-            '<th style="text-align:right;padding:8px;font-weight:600;color:#374151;">Waste</th>' +
-            '<th style="text-align:left;padding:8px;font-weight:600;color:#374151;">Unit</th>' +
-            '<th style="text-align:left;padding:8px;font-weight:600;color:#374151;">Notes</th>' +
-          '</tr>' +
-        '</thead>' +
-        '<tbody>';
-      
-      components.forEach(function(comp, idx) {
-        var planned = (comp.qtyPerUnit * packageQty).toFixed(2);
-        var rowId = 'pkgMatRow_' + idx;
-        var existingData = window.packageMaterialsData && window.packageMaterialsData[comp.item] || {};
-        
-        html += '<tr id="' + rowId + '" style="border-bottom:1px solid #e5e7eb;">' +
-          '<td style="padding:8px;"><input type="hidden" class="pkg-material-item" value="' + escapeHtml(comp.item) + '" data-unit="' + escapeHtml(comp.unit) + '">' + escapeHtml(comp.item) + '</td>' +
-          '<td style="padding:8px;text-align:right;"><input type="number" class="pkg-material-planned" value="' + (existingData.plannedQty || planned) + '" step="0.01" readonly style="width:80px;padding:4px;border:1px solid #d1d5db;border-radius:4px;text-align:right;background:#f9fafb;"></td>' +
-          '<td style="padding:8px;text-align:right;"><input type="number" class="pkg-material-actual" value="' + (existingData.actualQty || planned) + '" step="0.01" min="0" onchange="updatePackageWaste(this)" style="width:80px;padding:4px;border:2px solid #22c55e;border-radius:4px;text-align:right;"></td>' +
-          '<td style="padding:8px;text-align:right;"><input type="number" class="pkg-material-waste" value="' + (existingData.wasteQty || 0) + '" step="0.01" min="0" style="width:80px;padding:4px;border:1px solid #d1d5db;border-radius:4px;text-align:right;"></td>' +
-          '<td style="padding:8px;">' + escapeHtml(comp.unit) + '</td>' +
-          '<td style="padding:8px;"><input type="text" class="pkg-material-notes" value="' + escapeHtml(existingData.notes || '') + '" placeholder="Notes" style="width:100%;padding:4px;border:1px solid #d1d5db;border-radius:4px;font-size:11px;"></td>' +
-        '</tr>';
-      });
-      
-      html += '</tbody></table>';
-      container.innerHTML = html;
-    }
-    
-    function updatePackageWaste(actualInput) {
-      var row = actualInput.closest('tr');
-      if (!row) return;
-      
-      var planned = parseFloat(row.querySelector('.pkg-material-planned').value) || 0;
-      var actual = parseFloat(actualInput.value) || 0;
-      var waste = Math.max(0, actual - planned);
-      
-      var wasteInput = row.querySelector('.pkg-material-waste');
-      if (wasteInput) {
-        wasteInput.value = waste.toFixed(2);
-      }
-    }
-    
-    function closeTaskModal() {
-      var modal = document.getElementById('taskModal');
-      if (modal) modal.remove();
-    }
-    
-    function saveTask(taskId) {
-      var batchNumber = window.currentBatchNumber;
-      if (!batchNumber) {
-        showToast('No batch number found', 'error');
-        return;
-      }
-      
-      var taskType = document.getElementById('taskType').value;
-      var taskName = document.getElementById('taskName').value;
-      if (!taskType || !taskName) {
-        showToast('Task Type and Task Name are required', 'error');
-        return;
-      }
-      
-      var materials = getTaskMaterials();
-      
-      var volumeIn = document.getElementById('taskVolumeIn') ? parseFloat(document.getElementById('taskVolumeIn').value) || null : null;
-      var volumeOut = document.getElementById('taskVolumeOut') ? parseFloat(document.getElementById('taskVolumeOut').value) || null : null;
-      var lossReason = document.getElementById('taskLossReason') ? document.getElementById('taskLossReason').value : '';
-      
-      var packageType = document.getElementById('taskPackageType') ? document.getElementById('taskPackageType').value : '';
-      var packageQty = document.getElementById('taskPackageQty') ? parseFloat(document.getElementById('taskPackageQty').value) || null : null;
-      
-      var taskData = {
-        taskType: taskType,
-        taskName: taskName,
-        assignedTo: document.getElementById('taskAssignedTo').value,
-        dueDate: document.getElementById('taskDueDate').value,
-        status: document.getElementById('taskStatus').value,
-        notes: document.getElementById('taskNotes').value,
-        materials: materials,
-        volumeIn: volumeIn,
-        volumeOut: volumeOut,
-        lossReason: lossReason,
-        packageType: packageType,
-        packageQty: packageQty
-      };
-      
-      if (taskId) {
-        // Update existing
-        google.script.run
-          .withSuccessHandler(function(result) {
-            if (result.success) {
-              showToast('Task updated!', 'success');
-              closeTaskModal();
-              loadBatchTasks(batchNumber);
-            } else {
-              showToast('Error: ' + result.error, 'error');
-            }
-          })
-          .withFailureHandler(function(err) {
-            showToast('Error: ' + err, 'error');
-          })
-          .updateBatchTask(taskId, taskData);
-      } else {
-        // Create new
-        google.script.run
-          .withSuccessHandler(function(result) {
-            if (result.success) {
-              showToast('Task created!', 'success');
-              closeTaskModal();
-              loadBatchTasks(batchNumber);
-            } else {
-              showToast('Error: ' + result.error, 'error');
-            }
-          })
-          .withFailureHandler(function(err) {
-            showToast('Error: ' + err, 'error');
-          })
-          .createBatchTask(batchNumber, taskData);
-      }
-    }
-    
-    function deleteTask(taskId) {
-      if (!confirm('Are you sure you want to delete this task?')) return;
-      
-      google.script.run
-        .withSuccessHandler(function(result) {
-          if (result.success) {
-            showToast('Task deleted!', 'success');
-            closeTaskModal();
-            loadBatchTasks(window.currentBatchNumber);
-          } else {
-            showToast('Error: ' + result.error, 'error');
-          }
-        })
-        .withFailureHandler(function(err) {
-          showToast('Error: ' + err, 'error');
-        })
-        .deleteBatchTask(taskId);
-    }
-    
-    function completeTaskFromModal(taskId) {
-      var volumeOut = document.getElementById('taskVolumeOut') ? parseFloat(document.getElementById('taskVolumeOut').value) || null : null;
-      var lossReason = document.getElementById('taskLossReason') ? document.getElementById('taskLossReason').value : '';
-      var notes = document.getElementById('taskNotes') ? document.getElementById('taskNotes').value : '';
-      
-      var completionData = {
-        volumeOut: volumeOut,
-        lossReason: lossReason,
-        notes: notes,
-        materialsDepletedBy: 'task' // Task system will deplete materials
-      };
-      
-      google.script.run
-        .withSuccessHandler(function(result) {
-          if (result.success) {
-            showToast('Task completed! Materials depleted.', 'success');
-            closeTaskModal();
-            loadBatchTasks(window.currentBatchNumber);
-          } else {
-            showToast('Error: ' + result.error, 'error');
-          }
-        })
-        .withFailureHandler(function(err) {
-          handleScriptError(err, 'completeBatchTask');
-        })
-        .completeBatchTask(taskId, completionData);
-    }
-    
-    function openGravitypHModal() {
-      var batchNumber = window.currentBatchNumber;
-      if (!batchNumber) {
-        showToast('No batch number found', 'error');
-        return;
-      }
-      
-      var vesselOptions = '<option value="">-- Select Vessel --</option>';
-      (window.currentVessels || []).forEach(function(v) {
-        vesselOptions += '<option value="' + escapeHtml(v.name) + '">' + escapeHtml(v.name) + '</option>';
-      });
-      
-      var modalHtml = '<div id="gravitypHModal" style="display:flex;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.6);z-index:3000;justify-content:center;align-items:center;">' +
-        '<div style="background:white;border-radius:12px;max-width:500px;width:90%;">' +
-          '<div style="background:linear-gradient(135deg,#f59e0b,#d97706);color:white;padding:20px;border-radius:12px 12px 0 0;">' +
-            '<div style="display:flex;justify-content:space-between;align-items:center;">' +
-              '<h3 style="margin:0;">📈 Log Gravity/pH Reading</h3>' +
-              '<button onclick="closeGravitypHModal()" style="background:rgba(255,255,255,0.2);border:none;color:white;width:32px;height:32px;border-radius:50%;cursor:pointer;">✕</button>' +
-            '</div>' +
-          '</div>' +
-          '<div style="padding:24px;">' +
-            '<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;">' +
-              '<div>' +
-                '<label style="display:block;font-weight:600;margin-bottom:6px;color:#374151;">Plato (°P)</label>' +
-                '<input type="number" id="gravityPlato" step="0.1" min="0" max="30" placeholder="12.5" style="width:100%;padding:10px;border:1px solid #d1d5db;border-radius:6px;font-size:14px;">' +
-              '</div>' +
-              '<div>' +
-                '<label style="display:block;font-weight:600;margin-bottom:6px;color:#374151;">pH</label>' +
-                '<input type="number" id="gravitypH" step="0.01" min="0" max="14" placeholder="4.5" style="width:100%;padding:10px;border:1px solid #d1d5db;border-radius:6px;font-size:14px;">' +
-              '</div>' +
-            '</div>' +
-            '<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;">' +
-              '<div>' +
-                '<label style="display:block;font-weight:600;margin-bottom:6px;color:#374151;">Temperature (°F)</label>' +
-                '<input type="number" id="gravityTemp" step="0.1" placeholder="68" style="width:100%;padding:10px;border:1px solid #d1d5db;border-radius:6px;font-size:14px;">' +
-              '</div>' +
-              '<div>' +
-                '<label style="display:block;font-weight:600;margin-bottom:6px;color:#374151;">Vessel</label>' +
-                '<select id="gravityVessel" style="width:100%;padding:10px;border:1px solid #d1d5db;border-radius:6px;font-size:14px;">' + vesselOptions + '</select>' +
-              '</div>' +
-            '</div>' +
-            '<div style="margin-bottom:16px;">' +
-              '<label style="display:block;font-weight:600;margin-bottom:6px;color:#374151;">Notes</label>' +
-              '<textarea id="gravityNotes" rows="2" placeholder="Reading point (Mash, Pre-boil, OG, Daily, FG, etc.)" style="width:100%;padding:10px;border:1px solid #d1d5db;border-radius:6px;font-size:14px;"></textarea>' +
-            '</div>' +
-            '<div style="display:flex;gap:12px;justify-content:flex-end;margin-top:24px;">' +
-              '<button onclick="closeGravitypHModal()" style="padding:10px 20px;background:#e9ecef;border:none;border-radius:6px;cursor:pointer;">Cancel</button>' +
-              '<button onclick="saveGravitypHReading()" style="padding:10px 24px;background:#f59e0b;color:white;border:none;border-radius:6px;cursor:pointer;font-weight:bold;">Save Reading</button>' +
-            '</div>' +
-          '</div>' +
-        '</div>' +
-      '</div>';
-      
-      var existing = document.getElementById('gravitypHModal');
-      if (existing) existing.remove();
-      document.body.insertAdjacentHTML('beforeend', modalHtml);
-    }
-    
-    function closeGravitypHModal() {
-      var modal = document.getElementById('gravitypHModal');
-      if (modal) modal.remove();
-    }
-    
-    function saveGravitypHReading() {
-      var batchNumber = window.currentBatchNumber;
-      if (!batchNumber) {
-        showToast('No batch number found', 'error');
-        return;
-      }
-      
-      var plato = document.getElementById('gravityPlato').value ? parseFloat(document.getElementById('gravityPlato').value) : null;
-      var pH = document.getElementById('gravitypH').value ? parseFloat(document.getElementById('gravitypH').value) : null;
-      var temperature = document.getElementById('gravityTemp').value ? parseFloat(document.getElementById('gravityTemp').value) : null;
-      var vessel = document.getElementById('gravityVessel').value;
-      var notes = document.getElementById('gravityNotes').value;
-      
-      if (plato === null && pH === null) {
-        showToast('Please enter at least one reading (Plato or pH)', 'error');
-        return;
-      }
-      
-      if (plato !== null && (plato < 0 || plato > 30)) {
-        showToast('Plato must be between 0 and 30', 'error');
-        return;
-      }
-      
-      if (pH !== null && (pH < 0 || pH > 14)) {
-        showToast('pH must be between 0 and 14', 'error');
-        return;
-      }
-      
-      var data = {
-        plato: plato,
-        pH: pH,
-        temperature: temperature,
-        vessel: vessel,
-        notes: notes
-      };
-      
-      google.script.run
-        .withSuccessHandler(function(result) {
-          if (result.success) {
-            showToast('Gravity/pH reading saved!', 'success');
-            closeGravitypHModal();
-            // Reload batch data if needed
-          } else {
-            showToast('Error: ' + result.error, 'error');
-          }
-        })
-        .withFailureHandler(function(err) {
-          showToast('Error: ' + err, 'error');
-        })
-        .logGravityReading(batchNumber, data);
-    }
-    
-    function logTurnLabor(turnNumber) {
-      var brewerSelect = document.getElementById('turn' + turnNumber + 'Brewer');
-      var hoursInput = document.getElementById('turn' + turnNumber + 'Hours');
+    function addBrewLaborEntryUI() {
+      var brewerSelect = document.getElementById('brewLaborBrewer');
+      var hoursInput = document.getElementById('brewLaborHours');
       
       if (!brewerSelect || !hoursInput) {
         showToast('Form elements not found', 'error');
@@ -4028,57 +2978,54 @@
       var hours = parseFloat(hoursInput.value) || 0;
       
       if (!brewer) {
-        showToast('Please select a brewer for Turn ' + turnNumber, 'error');
+        showToast('Please select a brewer', 'error');
         return;
       }
       
       if (hours <= 0) {
-        showToast('Please enter hours worked for Turn ' + turnNumber, 'error');
+        showToast('Please enter hours worked', 'error');
         return;
       }
       
-      // Store turn labor
-      if (turnNumber === 1) {
-        window.turn1Labor = { brewer: brewer, hours: hours };
+      var existingEntry = currentBrewLaborEntries.find(function(e) {
+        return e.employee === brewer;
+      });
+      
+      if (existingEntry) {
+        if (!confirm(brewer + ' already has ' + existingEntry.hours + ' hrs logged. Add ' + hours + ' more hours?')) {
+          return;
+        }
+        existingEntry.hours += hours;
       } else {
-        window.turn2Labor = { brewer: brewer, hours: hours };
+        currentBrewLaborEntries.push({ employee: brewer, hours: hours });
       }
       
-      updateBrewLaborTotal();
-      showToast('✓ Turn ' + turnNumber + ': ' + brewer + ' - ' + hours + ' hrs logged', 'success');
+      updateBrewLaborEntriesUI();
+      brewerSelect.value = '';
+      hoursInput.value = '';
+      showToast('✓ ' + brewer + ': ' + hours + ' hrs added', 'success');
     }
     
-    function updateBrewLaborTotal() {
+    function updateBrewLaborEntriesUI() {
+      var container = document.getElementById('brewLaborEntries');
       var totalDisplay = document.getElementById('brewLaborTotal');
-      if (!totalDisplay) return;
       
-      var totalHours = (window.turn1Labor.hours || 0) + (window.turn2Labor.hours || 0);
-      totalDisplay.textContent = totalHours + ' hrs';
-    }
-    
-    function getTurnLaborEntries() {
-      var entries = [];
-      if (window.turn1Labor && window.turn1Labor.brewer && window.turn1Labor.hours > 0) {
-        entries.push({ turn: 1, employee: window.turn1Labor.brewer, hours: window.turn1Labor.hours });
-      }
-      if (window.turn2Labor && window.turn2Labor.brewer && window.turn2Labor.hours > 0) {
-        entries.push({ turn: 2, employee: window.turn2Labor.brewer, hours: window.turn2Labor.hours });
-      }
-      return entries;
-    }
-    
-    function getBrewersString() {
-      var turn1 = window.turn1Labor && window.turn1Labor.brewer ? window.turn1Labor.brewer : null;
-      var turn2 = window.turn2Labor && window.turn2Labor.brewer ? window.turn2Labor.brewer : null;
+      if (!container) return;
       
-      if (turn1 && turn2) {
-        return turn1 + ' / ' + turn2;
-      } else if (turn1) {
-        return turn1;
-      } else if (turn2) {
-        return turn2;
-      }
-      return '';
+      var html = '';
+      var totalHours = 0;
+      
+      currentBrewLaborEntries.forEach(function(entry) {
+        html += '<div style="display:flex;justify-content:space-between;align-items:center;background:white;padding:8px 12px;border-radius:6px;margin-bottom:6px;border-left:4px solid #22c55e;">' +
+          '<span style="font-weight:600;color:#166534;">' + entry.employee + '</span>' +
+          '<span style="color:#166534;">' + entry.hours + ' hrs</span>' +
+          '<span style="color:#22c55e;font-size:18px;">✓</span>' +
+        '</div>';
+        totalHours += parseFloat(entry.hours) || 0;
+      });
+      
+      container.innerHTML = html;
+      if (totalDisplay) totalDisplay.textContent = totalHours + ' hrs';
     }
     
     function confirmStartBrew() {
@@ -4092,14 +3039,13 @@
         return; 
       }
       
-      var turnEntries = getTurnLaborEntries();
-      if (turnEntries.length === 0) {
-        showToast('Please log at least one turn\'s hours', 'error');
+      if (currentBrewLaborEntries.length === 0) {
+        showToast('Please log at least one brewer\'s hours', 'error');
         return;
       }
       
-      var totalHours = turnEntries.reduce(function(sum, e) { return sum + e.hours; }, 0);
-      var brewersString = getBrewersString();
+      var totalHours = currentBrewLaborEntries.reduce(function(sum, e) { return sum + e.hours; }, 0);
+      var brewerNames = currentBrewLaborEntries.map(function(e) { return e.employee; }).join(', ');
       
       function collectActuals(category) {
         var items = sheet[category] || [];
@@ -4121,13 +3067,9 @@
         recipeName: sheet.recipeName, 
         style: sheet.style, 
         targetBatchSize: batchSize,
-        brewer: brewersString,
-        brewers: brewersString,
-        turn1Brewer: window.turn1Labor.brewer || null,
-        turn2Brewer: window.turn2Labor.brewer || null,
-        turn1Hours: window.turn1Labor.hours || 0,
-        turn2Hours: window.turn2Labor.hours || 0,
-        laborEntries: turnEntries.map(function(e) { return { employee: e.employee, hours: e.hours }; }),
+        brewer: brewerNames,
+        brewers: brewerNames,
+        laborEntries: currentBrewLaborEntries,
         totalLaborHours: totalHours,
         vessel: vessel, 
         notes: notes,
@@ -4145,14 +3087,9 @@
       };
       
       var confirmMsg = 'Start brew of ' + sheet.recipeName + '?\n\n' +
-        'Brew Labor:\n';
-      if (window.turn1Labor.brewer && window.turn1Labor.hours > 0) {
-        confirmMsg += '  • Turn 1: ' + window.turn1Labor.brewer + ' - ' + window.turn1Labor.hours + ' hrs\n';
-      }
-      if (window.turn2Labor.brewer && window.turn2Labor.hours > 0) {
-        confirmMsg += '  • Turn 2: ' + window.turn2Labor.brewer + ' - ' + window.turn2Labor.hours + ' hrs\n';
-      }
-      confirmMsg += '\nTotal: ' + totalHours + ' hrs\n' +
+        'Brew Labor:\n' + 
+        currentBrewLaborEntries.map(function(e) { return '  • ' + e.employee + ': ' + e.hours + ' hrs'; }).join('\n') +
+        '\n\nTotal: ' + totalHours + ' hrs\n' +
         'Vessel: ' + vessel + '\n' +
         'Batch: ' + batchSize + ' BBL\n\n' +
         'This will deplete inventory and create batch record.';
@@ -4166,44 +3103,24 @@
           if (result.success) {
             var batchNumber = result.batchNumber;
             var logIndex = 0;
-            var turnEntries = getTurnLaborEntries();
             
             function logNextEntry() {
-              if (logIndex >= turnEntries.length) {
-                // Update Brewers column with Turn 1 / Turn 2 format
-                var brewersString = getBrewersString();
-                if (brewersString) {
-                  google.script.run
-                    .withSuccessHandler(function() {
-                      closeBrewerSheetModal();
-                      showToast('🎉 Batch ' + batchNumber + ' started! ' + totalHours + ' hrs brew labor logged', 'success');
-                      if (typeof loadBatches === 'function') loadBatches();
-                      if (result.pdfUrl) window.open(result.pdfUrl, '_blank');
-                    })
-                    .withFailureHandler(function(err) {
-                      handleScriptError(err, 'updateBatchBrewers');
-                      closeBrewerSheetModal();
-                      showToast('🎉 Batch ' + batchNumber + ' started! (Note: Brewers column update failed)', 'success');
-                      if (typeof loadBatches === 'function') loadBatches();
-                    })
-                    .updateBatchBrewers(batchNumber, brewersString);
-                } else {
-                  closeBrewerSheetModal();
-                  showToast('🎉 Batch ' + batchNumber + ' started! ' + totalHours + ' hrs brew labor logged', 'success');
-                  if (typeof loadBatches === 'function') loadBatches();
-                  if (result.pdfUrl) window.open(result.pdfUrl, '_blank');
-                }
+              if (logIndex >= currentBrewLaborEntries.length) {
+                closeBrewerSheetModal();
+                showToast('🎉 Batch ' + batchNumber + ' started! ' + totalHours + ' hrs brew labor logged', 'success');
+                if (typeof loadBatches === 'function') loadBatches();
+                if (result.pdfUrl) window.open(result.pdfUrl, '_blank');
                 return;
               }
               
-              var entry = turnEntries[logIndex];
+              var entry = currentBrewLaborEntries[logIndex];
               google.script.run
                 .withSuccessHandler(function(laborResult) {
                   logIndex++;
                   logNextEntry();
                 })
                 .withFailureHandler(function(err) {
-                  handleScriptError(err, 'logBrewLabor');
+                  console.error('Labor log error:', err);
                   logIndex++;
                   logNextEntry();
                 })
@@ -4217,7 +3134,7 @@
           }
         })
         .withFailureHandler(function(err) { 
-          handleScriptError(err, 'confirmBrewStartEnhanced');
+          showToast('Error: ' + err, 'error'); 
         })
         .confirmBrewStartEnhanced(brewerData);
     }
@@ -4434,53 +3351,13 @@
     }
     
     function editMaterial(item) {
-      editRM(item);
-    }
-    
-    function editRM(item) {
       var mat = allMaterials.find(function(m) { return m.item === item; });
       if (!mat) { showToast('Material not found', 'error'); return; }
       
-      document.getElementById('editRMItem').value = mat.item || '';
-      document.getElementById('editRMCategory').value = mat.category || '';
-      document.getElementById('editRMQty').value = mat.qtyOnHand || 0;
-      document.getElementById('editRMUnit').value = mat.unit || '';
-      document.getElementById('editRMCost').value = mat.avgCost || 0;
-      document.getElementById('editRMReorderPoint').value = mat.reorderPoint || 0;
-      document.getElementById('editRMReorderQty').value = mat.reorderQty || 0;
-      document.getElementById('editRMSupplier').value = mat.supplier || '';
-      document.getElementById('editRMNotes').value = mat.notes || '';
-      document.getElementById('editRMModal').style.display = 'flex';
-    }
-    
-    function closeEditRMModal() {
-      document.getElementById('editRMModal').style.display = 'none';
-    }
-    
-    function saveEditRM() {
-      var data = {
-        item: document.getElementById('editRMItem').value,
-        qtyOnHand: parseFloat(document.getElementById('editRMQty').value) || 0,
-        unit: document.getElementById('editRMUnit').value || 'lb',
-        avgCost: parseFloat(document.getElementById('editRMCost').value) || 0,
-        reorderPoint: parseFloat(document.getElementById('editRMReorderPoint').value) || 0,
-        reorderQty: parseFloat(document.getElementById('editRMReorderQty').value) || 0,
-        supplier: document.getElementById('editRMSupplier').value,
-        notes: document.getElementById('editRMNotes').value
-      };
-      
-      google.script.run
-        .withSuccessHandler(function(result) {
-          if (result.success) {
-            showToast('Updated!', 'success');
-            closeEditRMModal();
-            loadRawMaterials();
-          } else {
-            showToast('Error: ' + result.error, 'error');
-          }
-        })
-        .withFailureHandler(function(err) { showToast('Error: ' + err, 'error'); })
-        .updateRawMaterialItem(data);
+      showToast('Edit in Raw Materials sheet for full control', 'info');
+      google.script.run.withSuccessHandler(function(url) {
+        if (url) window.open(url, '_blank');
+      }).getSheetUrl('Raw Materials');
     }
     
     function adjustMaterial(item, currentQty) {
@@ -4547,7 +3424,7 @@
           '<td style="text-align:right;">$' + formatNumber(i.totalValue || 0) + '</td>' +
           '<td><span class="' + statusClass + ' font-bold">' + escapeHtml(i.status || 'OK') + '</span></td>' +
           '<td class="action-cell">' +
-            '<button class="btn-icon" onclick="editFG(\'' + escapeHtml(i.beer || i.beerName).replace(/'/g, "\\'") + '\', \'' + escapeHtml(i.package || i.packageType).replace(/'/g, "\\'") + '\')" title="Edit">✏️</button>' +
+            '<button class="btn-icon" onclick="editFG(\'' + escapeHtml(i.beer || i.beerName).replace(/'/g, "\\'") + '\')" title="Edit">✏️</button>' +
             '<button class="btn-icon" onclick="adjustFG(\'' + escapeHtml(i.beer || i.beerName).replace(/'/g, "\\'") + '\', \'' + escapeHtml(i.package || i.packageType).replace(/'/g, "\\'") + '\', ' + (i.qtyOnHand || 0) + ')" title="Adjust">📦</button>' +
           '</td></tr>';
       }).join('');
@@ -4568,9 +3445,9 @@
       }).getSheetUrl('FG Inventory');
     }
     
-    function editFG(beer, package) {
+    function editFG(beer) {
   var item = allFG.find(function(i) { 
-    return (i.beer || i.beerName) === beer && (i.package || i.packageType) === package; 
+    return (i.beer || i.beerName) === beer; 
   });
   if (!item) { showToast('Item not found', 'error'); return; }
   
@@ -4681,292 +3558,10 @@ function saveEditFG() {
     }
     
     function showNewPurchaseModal() {
-      // Load vendors and materials for dropdowns
-      google.script.run
-        .withSuccessHandler(function(vendorsResult) {
-          var vendors = vendorsResult.vendors || [];
-          var vendorOptions = '<option value="">-- Select Vendor --</option>';
-          vendors.forEach(function(v) {
-            vendorOptions += '<option value="' + escapeHtml(v) + '">' + escapeHtml(v) + '</option>';
-          });
-          
-          google.script.run
-            .withSuccessHandler(function(materialsResult) {
-              var materials = materialsResult.materials || [];
-              buildPurchaseModal(vendorOptions, materials);
-            })
-            .withFailureHandler(function() {
-              buildPurchaseModal(vendorOptions, []);
-            })
-            .getRawMaterialsInventory({});
-        })
-        .withFailureHandler(function() {
-          buildPurchaseModal('<option value="">-- Select Vendor --</option>', []);
-        })
-        .getVendors();
-    }
-    
-    function buildPurchaseModal(vendorOptions, materials) {
-      var materialOptions = '<option value="">-- Select Material --</option>';
-      materials.forEach(function(m) {
-        materialOptions += '<option value="' + escapeHtml(m.item) + '" data-unit="' + escapeHtml(m.unit || 'lb') + '">' + escapeHtml(m.item) + ' (' + escapeHtml(m.category || '') + ')</option>';
-      });
-      
-      var modalHtml = '<div id="newPurchaseModal" style="display:flex;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.6);z-index:3000;justify-content:center;align-items:center;">' +
-        '<div style="background:white;border-radius:12px;max-width:800px;width:90%;max-height:90vh;overflow-y:auto;">' +
-          '<div style="background:linear-gradient(135deg,#8B0000,#a50000);color:white;padding:20px;border-radius:12px 12px 0 0;">' +
-            '<div style="display:flex;justify-content:space-between;align-items:center;">' +
-              '<h3 style="margin:0;">🛒 New Purchase</h3>' +
-              '<button onclick="closePurchaseModal()" style="background:rgba(255,255,255,0.2);border:none;color:white;width:32px;height:32px;border-radius:50%;cursor:pointer;">✕</button>' +
-            '</div>' +
-          '</div>' +
-          '<div style="padding:24px;">' +
-            '<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;">' +
-              '<div>' +
-                '<label style="display:block;font-weight:600;margin-bottom:6px;color:#374151;">Vendor</label>' +
-                '<select id="purchaseVendor" style="width:100%;padding:10px;border:1px solid #d1d5db;border-radius:6px;font-size:14px;">' + vendorOptions + '</select>' +
-                '<input type="text" id="purchaseVendorText" placeholder="Or enter vendor name" style="width:100%;padding:10px;border:1px solid #d1d5db;border-radius:6px;font-size:14px;margin-top:8px;display:none;">' +
-                '<button type="button" onclick="toggleVendorInput()" style="margin-top:4px;padding:4px 8px;background:#e9ecef;border:none;border-radius:4px;cursor:pointer;font-size:12px;">+ New Vendor</button>' +
-              '</div>' +
-              '<div>' +
-                '<label style="display:block;font-weight:600;margin-bottom:6px;color:#374151;">Purchase Date</label>' +
-                '<input type="date" id="purchaseDate" value="' + new Date().toISOString().split('T')[0] + '" style="width:100%;padding:10px;border:1px solid #d1d5db;border-radius:6px;font-size:14px;">' +
-              '</div>' +
-            '</div>' +
-            '<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;">' +
-              '<div>' +
-                '<label style="display:block;font-weight:600;margin-bottom:6px;color:#374151;">Invoice/PO Number</label>' +
-                '<input type="text" id="purchasePONumber" placeholder="PO-12345" style="width:100%;padding:10px;border:1px solid #d1d5db;border-radius:6px;font-size:14px;">' +
-              '</div>' +
-              '<div></div>' +
-            '</div>' +
-            '<div style="margin-bottom:16px;">' +
-              '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">' +
-                '<label style="font-weight:600;color:#374151;">Line Items</label>' +
-                '<button type="button" onclick="addPurchaseLineItem()" style="padding:6px 12px;background:#10B981;color:white;border:none;border-radius:4px;cursor:pointer;font-size:12px;font-weight:600;">+ Add Item</button>' +
-              '</div>' +
-              '<div id="purchaseLineItems" style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;padding:12px;min-height:100px;">' +
-                '<div style="padding:8px;color:#9ca3af;font-size:13px;text-align:center;">No items added. Click "+ Add Item" to add line items.</div>' +
-              '</div>' +
-            '</div>' +
-            '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:16px;background:#f0f9ff;padding:16px;border-radius:6px;border:1px solid #0ea5e9;">' +
-              '<div>' +
-                '<label style="display:block;font-size:12px;font-weight:600;color:#374151;margin-bottom:4px;">Subtotal</label>' +
-                '<div id="purchaseSubtotal" style="font-size:18px;font-weight:bold;color:#0c4a6e;">$0.00</div>' +
-              '</div>' +
-              '<div>' +
-                '<label style="display:block;font-size:12px;font-weight:600;color:#374151;margin-bottom:4px;">Shipping</label>' +
-                '<input type="number" id="purchaseShipping" step="0.01" min="0" value="0" onchange="calculatePurchaseTotal()" placeholder="0.00" style="width:100%;padding:8px;border:1px solid #0ea5e9;border-radius:4px;font-size:14px;">' +
-              '</div>' +
-              '<div>' +
-                '<label style="display:block;font-size:12px;font-weight:600;color:#374151;margin-bottom:4px;">Tax</label>' +
-                '<input type="number" id="purchaseTax" step="0.01" min="0" value="0" onchange="calculatePurchaseTotal()" placeholder="0.00" style="width:100%;padding:8px;border:1px solid #0ea5e9;border-radius:4px;font-size:14px;">' +
-              '</div>' +
-            '</div>' +
-            '<div style="background:#fef3c7;padding:16px;border-radius:6px;border:2px solid #f59e0b;margin-bottom:16px;">' +
-              '<div style="display:flex;justify-content:space-between;align-items:center;">' +
-                '<label style="font-size:16px;font-weight:bold;color:#92400e;">Total</label>' +
-                '<div id="purchaseTotal" style="font-size:24px;font-weight:bold;color:#92400e;">$0.00</div>' +
-              '</div>' +
-            '</div>' +
-            '<div style="margin-bottom:16px;">' +
-              '<label style="display:block;font-weight:600;margin-bottom:6px;color:#374151;">Notes</label>' +
-              '<textarea id="purchaseNotes" rows="2" placeholder="Purchase notes, delivery info, etc." style="width:100%;padding:10px;border:1px solid #d1d5db;border-radius:6px;font-size:14px;"></textarea>' +
-            '</div>' +
-            '<div style="display:flex;gap:12px;justify-content:flex-end;margin-top:24px;">' +
-              '<button onclick="closePurchaseModal()" style="padding:10px 20px;background:#e9ecef;border:none;border-radius:6px;cursor:pointer;">Cancel</button>' +
-              '<button onclick="savePurchase()" style="padding:10px 24px;background:#8B0000;color:white;border:none;border-radius:6px;cursor:pointer;font-weight:bold;">💾 Save Purchase</button>' +
-            '</div>' +
-          '</div>' +
-        '</div>' +
-      '</div>';
-      
-      var existing = document.getElementById('newPurchaseModal');
-      if (existing) existing.remove();
-      document.body.insertAdjacentHTML('beforeend', modalHtml);
-    }
-    
-    function toggleVendorInput() {
-      var select = document.getElementById('purchaseVendor');
-      var text = document.getElementById('purchaseVendorText');
-      if (text.style.display === 'none') {
-        text.style.display = 'block';
-        select.style.display = 'none';
-        text.focus();
-      } else {
-        text.style.display = 'none';
-        select.style.display = 'block';
-      }
-    }
-    
-    function closePurchaseModal() {
-      var modal = document.getElementById('newPurchaseModal');
-      if (modal) modal.remove();
-    }
-    
-    function addPurchaseLineItem() {
-      var container = document.getElementById('purchaseLineItems');
-      if (!container) return;
-      
-      // Remove empty state message
-      if (container.children.length === 1 && container.children[0].textContent.indexOf('No items') !== -1) {
-        container.innerHTML = '';
-      }
-      
-      var itemId = 'purchaseItem_' + Date.now();
-      var materialOptions = '<option value="">-- Select Material --</option>';
-      google.script.run
-        .withSuccessHandler(function(result) {
-          if (result.success && result.materials) {
-            result.materials.forEach(function(m) {
-              materialOptions += '<option value="' + escapeHtml(m.item) + '" data-unit="' + escapeHtml(m.unit || 'lb') + '">' + escapeHtml(m.item) + ' (' + escapeHtml(m.category || '') + ')</option>';
-            });
-            
-            var rowHtml = '<div id="' + itemId + '" style="display:grid;grid-template-columns:2fr 1fr 1fr 1fr auto;gap:8px;padding:12px;background:white;border:1px solid #e5e7eb;border-radius:4px;margin-bottom:8px;align-items:end;">' +
-              '<div>' +
-                '<label style="display:block;font-size:11px;font-weight:600;color:#6b7280;margin-bottom:4px;">Material</label>' +
-                '<select class="purchase-material" onchange="updatePurchaseItemUnit(this)" style="width:100%;padding:8px;border:1px solid #d1d5db;border-radius:4px;font-size:13px;">' + materialOptions + '</select>' +
-              '</div>' +
-              '<div>' +
-                '<label style="display:block;font-size:11px;font-weight:600;color:#6b7280;margin-bottom:4px;">Quantity</label>' +
-                '<input type="number" class="purchase-qty" step="0.01" min="0" onchange="calculatePurchaseItemTotal(this);calculatePurchaseTotal()" placeholder="0" style="width:100%;padding:8px;border:1px solid #d1d5db;border-radius:4px;font-size:13px;">' +
-              '</div>' +
-              '<div>' +
-                '<label style="display:block;font-size:11px;font-weight:600;color:#6b7280;margin-bottom:4px;">Unit</label>' +
-                '<input type="text" class="purchase-unit" value="" placeholder="lb" style="width:100%;padding:8px;border:1px solid #d1d5db;border-radius:4px;font-size:13px;">' +
-              '</div>' +
-              '<div>' +
-                '<label style="display:block;font-size:11px;font-weight:600;color:#6b7280;margin-bottom:4px;">Unit Cost</label>' +
-                '<input type="number" class="purchase-unit-cost" step="0.01" min="0" onchange="calculatePurchaseItemTotal(this);calculatePurchaseTotal()" placeholder="0.00" style="width:100%;padding:8px;border:1px solid #d1d5db;border-radius:4px;font-size:13px;">' +
-              '</div>' +
-              '<div>' +
-                '<label style="display:block;font-size:11px;font-weight:600;color:#6b7280;margin-bottom:4px;">Total</label>' +
-                '<input type="number" class="purchase-item-total" step="0.01" readonly style="width:100%;padding:8px;border:1px solid #d1d5db;border-radius:4px;font-size:13px;background:#f3f4f6;" value="0.00">' +
-              '</div>' +
-              '<div>' +
-                '<label style="display:block;font-size:11px;color:transparent;margin-bottom:4px;">&nbsp;</label>' +
-                '<button type="button" onclick="removePurchaseLineItem(\'' + itemId + '\')" style="padding:8px 12px;background:#ef4444;color:white;border:none;border-radius:4px;cursor:pointer;font-size:12px;">✕</button>' +
-              '</div>' +
-            '</div>';
-            
-            container.insertAdjacentHTML('beforeend', rowHtml);
-          }
-        })
-        .withFailureHandler(function() {
-          showToast('Error loading materials', 'error');
-        })
-        .getRawMaterialsInventory({});
-    }
-    
-    function updatePurchaseItemUnit(select) {
-      var row = select.closest('[id^="purchaseItem_"]');
-      if (!row) return;
-      
-      var option = select.options[select.selectedIndex];
-      var unit = option ? option.getAttribute('data-unit') : '';
-      var unitInput = row.querySelector('.purchase-unit');
-      if (unitInput && unit) {
-        unitInput.value = unit;
-      }
-    }
-    
-    function calculatePurchaseItemTotal(input) {
-      var row = input.closest('[id^="purchaseItem_"]');
-      if (!row) return;
-      
-      var qty = parseFloat(row.querySelector('.purchase-qty').value) || 0;
-      var unitCost = parseFloat(row.querySelector('.purchase-unit-cost').value) || 0;
-      var total = qty * unitCost;
-      
-      var totalInput = row.querySelector('.purchase-item-total');
-      if (totalInput) {
-        totalInput.value = total.toFixed(2);
-      }
-    }
-    
-    function removePurchaseLineItem(itemId) {
-      var row = document.getElementById(itemId);
-      if (row) {
-        row.remove();
-        calculatePurchaseTotal();
-        
-        var container = document.getElementById('purchaseLineItems');
-        if (container && container.children.length === 0) {
-          container.innerHTML = '<div style="padding:8px;color:#9ca3af;font-size:13px;text-align:center;">No items added. Click "+ Add Item" to add line items.</div>';
-        }
-      }
-    }
-    
-    function calculatePurchaseTotal() {
-      var subtotal = 0;
-      document.querySelectorAll('.purchase-item-total').forEach(function(input) {
-        subtotal += parseFloat(input.value) || 0;
-      });
-      
-      var shipping = parseFloat(document.getElementById('purchaseShipping').value) || 0;
-      var tax = parseFloat(document.getElementById('purchaseTax').value) || 0;
-      var total = subtotal + shipping + tax;
-      
-      document.getElementById('purchaseSubtotal').textContent = '$' + subtotal.toFixed(2);
-      document.getElementById('purchaseTotal').textContent = '$' + total.toFixed(2);
-    }
-    
-    function savePurchase() {
-      var vendor = document.getElementById('purchaseVendor').value || document.getElementById('purchaseVendorText').value;
-      if (!vendor) {
-        showToast('Please enter a vendor', 'error');
-        return;
-      }
-      
-      var lineItems = [];
-      document.querySelectorAll('[id^="purchaseItem_"]').forEach(function(row) {
-        var material = row.querySelector('.purchase-material').value;
-        var qty = parseFloat(row.querySelector('.purchase-qty').value) || 0;
-        var unit = row.querySelector('.purchase-unit').value || 'lb';
-        var unitCost = parseFloat(row.querySelector('.purchase-unit-cost').value) || 0;
-        
-        if (material && qty > 0) {
-          lineItems.push({
-            material: material,
-            quantity: qty,
-            unit: unit,
-            unitCost: unitCost,
-            total: qty * unitCost
-          });
-        }
-      });
-      
-      if (lineItems.length === 0) {
-        showToast('Please add at least one line item', 'error');
-        return;
-      }
-      
-      var purchaseData = {
-        vendor: vendor,
-        date: document.getElementById('purchaseDate').value,
-        poNumber: document.getElementById('purchasePONumber').value,
-        lineItems: lineItems,
-        subtotal: parseFloat(document.getElementById('purchaseSubtotal').textContent.replace('$', '')) || 0,
-        shipping: parseFloat(document.getElementById('purchaseShipping').value) || 0,
-        tax: parseFloat(document.getElementById('purchaseTax').value) || 0,
-        total: parseFloat(document.getElementById('purchaseTotal').textContent.replace('$', '')) || 0,
-        notes: document.getElementById('purchaseNotes').value
-      };
-      
-      google.script.run
-        .withSuccessHandler(function(result) {
-          if (result.success) {
-            showToast('Purchase saved! Materials updated.', 'success');
-            closePurchaseModal();
-            loadPurchases();
-          } else {
-            showToast('Error: ' + result.error, 'error');
-          }
-        })
-        .withFailureHandler(function(err) {
-          handleScriptError(err, 'createPurchase');
-        })
-        .createPurchase(purchaseData);
+      showToast('Add purchases in Purchase Log sheet', 'info');
+      google.script.run.withSuccessHandler(function(url) {
+        if (url) window.open(url, '_blank');
+      }).getSheetUrl('Purchase Log');
     }
     
     function receivePO(poNumber) {
@@ -5769,9 +4364,7 @@ function renderOpExCategories(categories) {
       }
       document.getElementById('batchTableBody').innerHTML = batches.map(function(b) {
         var isActive = b.status && ['Brewing', 'Fermenting', 'Conditioning', 'Carbonating', 'Ready to Package'].indexOf(b.status) !== -1;
-        var batchNum = (b.batchNumber || '').replace(/'/g, "\\'");
-        var beerName = (b.beerType || b.beer || '').replace(/'/g, "\\'");
-        return '<tr class="batch-row-clickable" onclick="openBrewerSheetFromBatch(\'' + batchNum + '\', \'' + beerName + '\', ' + (b.batchSize || b.size || 60) + ')" style="cursor:pointer;">' +
+        return '<tr>' +
           '<td><strong>' + escapeHtml(b.batchNumber) + '</strong></td>' +
           '<td>' + formatDate(b.brewDate || b.date) + '</td>' +
           '<td>' + escapeHtml(b.beerType || b.beer) + '</td>' +
@@ -5782,7 +4375,7 @@ function renderOpExCategories(categories) {
           '<td style="text-align:right;">$' + formatNumber(b.totalCost || 0) + '</td>' +
           '<td><span class="badge ' + getStatusBadge(b.status) + '">' + (b.status || 'Unknown') + '</span></td>' +
           '<td style="text-align:right;">' + (b.actualYield || b.expectedYield || '--') + '</td>' +
-          '<td class="batch-actions" onclick="event.stopPropagation();">' + (isActive ? renderBatchActions(b) : '<button class="btn-icon" onclick="event.stopPropagation();openBrewerSheetFromBatch(\'' + batchNum + '\', \'' + beerName + '\', ' + (b.batchSize || b.size || 60) + ')" title="View Brewer\'s Sheet">👁️</button>') + '</td>' +
+          '<td class="batch-actions">' + (isActive ? renderBatchActions(b) : '<button class="btn-icon" onclick="viewBatch(\'' + escapeHtml(b.batchNumber) + '\')" title="View">👁️</button>') + '</td>' +
         '</tr>';
       }).join('');
     };
@@ -7869,9 +6462,6 @@ renderBatches = function(batches) {
       <button class="edit-recipe-tab" onclick="showEditRecipeTab('ingredients')" id="tabIngredients" style="flex:1; padding:14px; border:none; background:transparent; cursor:pointer; font-weight:500; color:#666; border-bottom:3px solid transparent; margin-bottom:-2px;">
         🌾 Ingredients
       </button>
-      <button class="edit-recipe-tab" onclick="showEditRecipeTab('templates')" id="tabTemplates" style="flex:1; padding:14px; border:none; background:transparent; cursor:pointer; font-weight:500; color:#666; border-bottom:3px solid transparent; margin-bottom:-2px;">
-        📋 Task Templates
-      </button>
       <button class="edit-recipe-tab" onclick="showEditRecipeTab('history')" id="tabHistory" style="flex:1; padding:14px; border:none; background:transparent; cursor:pointer; font-weight:500; color:#666; border-bottom:3px solid transparent; margin-bottom:-2px;">
         📜 Change History
       </button>
@@ -7993,22 +6583,6 @@ renderBatches = function(batches) {
         
       </div>
       
-      <!-- Task Templates Tab -->
-      <div id="editTemplatesTab" style="display:none;">
-        <div style="margin-bottom:20px;">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
-            <h4 style="color:#1D3557; margin:0;">📋 Default Task Templates</h4>
-            <button onclick="addRecipeTaskTemplate()" style="background:#10B981; color:white; border:none; padding:8px 16px; border-radius:6px; font-size:13px; cursor:pointer; font-weight:600;">+ Add Template</button>
-          </div>
-          <div id="taskTemplatesContainer" style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;padding:16px;min-height:200px;">
-            <p style="color:#9ca3af; text-align:center; padding:40px;">Loading task templates...</p>
-          </div>
-          <div style="margin-top:16px;padding:12px;background:#fef3c7;border-radius:6px;border-left:4px solid #f59e0b;font-size:13px;color:#92400e;">
-            💡 <strong>Task Templates</strong> automatically create tasks when you start a new batch. Set day offsets (0 = brew day, 7 = day 7, etc.) and default materials/notes.
-          </div>
-        </div>
-      </div>
-      
       <!-- History Tab -->
       <div id="editHistoryTab" style="display:none;">
         <div id="changeHistoryContainer">
@@ -8103,7 +6677,6 @@ function showEditRecipeTab(tabName) {
   // Hide all tabs
   document.getElementById('editDetailsTab').style.display = 'none';
   document.getElementById('editIngredientsTab').style.display = 'none';
-  document.getElementById('editTemplatesTab').style.display = 'none';
   document.getElementById('editHistoryTab').style.display = 'none';
   document.getElementById('reasonSection').style.display = 'none';
   document.getElementById('saveRecipeBtn').style.display = 'inline-block';
@@ -8128,13 +6701,6 @@ function showEditRecipeTab(tabName) {
     document.getElementById('tabIngredients').style.fontWeight = '600';
     document.getElementById('tabIngredients').style.color = '#1D3557';
     document.getElementById('tabIngredients').style.borderBottom = '3px solid #E63946';
-  } else if (tabName === 'templates') {
-    document.getElementById('editTemplatesTab').style.display = 'block';
-    document.getElementById('saveRecipeBtn').style.display = 'none';
-    document.getElementById('tabTemplates').style.fontWeight = '600';
-    document.getElementById('tabTemplates').style.color = '#1D3557';
-    document.getElementById('tabTemplates').style.borderBottom = '3px solid #E63946';
-    loadRecipeTaskTemplates();
   } else if (tabName === 'history') {
     document.getElementById('editHistoryTab').style.display = 'block';
     document.getElementById('saveRecipeBtn').style.display = 'none';
@@ -8288,9 +6854,9 @@ function addIngredientRow(type) {
   
   const newRowHtml = `
     <div id="row_${rowId}" data-row-index="" data-type="${type}" data-new="true" style="display:flex; gap:10px; margin-bottom:8px; align-items:center; background:#ECFDF5; padding:10px; border-radius:6px; border:2px dashed #10B981;">
-      <input type="text" id="ingredient_name_${rowId}" placeholder="${typeLabel} Name" value="" style="flex:2; padding:8px; border:1px solid #d1d5db; border-radius:4px;" data-field="Ingredient Name" data-original="">
-      <input type="number" id="ingredient_amount_${rowId}" placeholder="Amount" step="0.01" value="" style="flex:1; padding:8px; border:1px solid #d1d5db; border-radius:4px;" data-field="Amount" data-original="">
-      <input type="text" id="ingredient_uom_${rowId}" placeholder="UOM" value="" style="width:80px; padding:8px; border:1px solid #d1d5db; border-radius:4px;" data-field="UOM" data-original="">
+      <input type="text" placeholder="${typeLabel} Name" style="flex:2; padding:8px; border:1px solid #d1d5db; border-radius:4px;" data-field="Ingredient Name" data-original="">
+      <input type="number" placeholder="Amount" step="0.01" style="flex:1; padding:8px; border:1px solid #d1d5db; border-radius:4px;" data-field="Amount" data-original="">
+      <input type="text" placeholder="UOM" style="width:80px; padding:8px; border:1px solid #d1d5db; border-radius:4px;" data-field="UOM" data-original="">
       <button onclick="removeNewIngredientRow('${rowId}')" style="background:#6B7280; color:white; border:none; padding:8px 12px; border-radius:4px; cursor:pointer;">✕</button>
     </div>
   `;
@@ -8337,338 +6903,6 @@ function removeNewIngredientRow(rowId) {
 /**
  * Load recipe change history
  */
-function loadRecipeTaskTemplates() {
-  if (!currentEditRecipe) return;
-  
-  google.script.run
-    .withSuccessHandler(function(result) {
-      var container = document.getElementById('taskTemplatesContainer');
-      if (!container) return;
-      
-      if (!result.success || !result.templates || result.templates.length === 0) {
-        container.innerHTML = '<p style="color:#9ca3af; text-align:center; padding:40px;">No task templates. Click "+ Add Template" to create default tasks for this recipe.</p>';
-        return;
-      }
-      
-      var html = '<div style="display:flex;flex-direction:column;gap:12px;">';
-      result.templates.forEach(function(template) {
-        var materials = template.defaultMaterials ? JSON.parse(template.defaultMaterials) : [];
-        var materialsText = materials.length > 0 ? materials.map(function(m) { return m.item + ' (' + m.qty + ' ' + m.unit + ')'; }).join(', ') : 'None';
-        
-        html += '<div style="background:white;border:1px solid #e5e7eb;border-radius:6px;padding:16px;">' +
-          '<div style="display:flex;justify-content:space-between;align-items:start;margin-bottom:12px;">' +
-            '<div style="flex:1;">' +
-              '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">' +
-                '<span style="font-weight:600;color:#1D3557;">' + escapeHtml(template.taskName || template.taskType) + '</span>' +
-                '<span style="background:#e0e7ff;color:#4f46e5;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600;">' + escapeHtml(template.taskType) + '</span>' +
-              '</div>' +
-              '<div style="font-size:12px;color:#6b7280;margin-bottom:4px;">Day Offset: <strong>' + (template.dayOffset || 0) + '</strong> days after brew day</div>' +
-              '<div style="font-size:12px;color:#6b7280;margin-bottom:4px;">Assigned To: <strong>' + (template.defaultAssignedTo || 'Unassigned') + '</strong></div>' +
-              '<div style="font-size:12px;color:#6b7280;margin-bottom:4px;">Materials: <strong>' + materialsText + '</strong></div>' +
-              (template.defaultNotes ? '<div style="font-size:12px;color:#6b7280;margin-top:8px;padding:8px;background:#f9fafb;border-radius:4px;">' + escapeHtml(template.defaultNotes) + '</div>' : '') +
-            '</div>' +
-            '<div style="display:flex;gap:6px;">' +
-              '<button onclick="editRecipeTaskTemplate(\'' + (template.templateId || '').replace(/'/g, "\\'") + '\')" style="padding:6px 12px;background:#6366f1;color:white;border:none;border-radius:4px;cursor:pointer;font-size:12px;">✏️ Edit</button>' +
-              '<button onclick="deleteRecipeTaskTemplate(\'' + (template.templateId || '').replace(/'/g, "\\'") + '\')" style="padding:6px 12px;background:#ef4444;color:white;border:none;border-radius:4px;cursor:pointer;font-size:12px;">🗑️ Delete</button>' +
-            '</div>' +
-          '</div>' +
-        '</div>';
-      });
-      html += '</div>';
-      container.innerHTML = html;
-    })
-    .withFailureHandler(function(err) {
-      document.getElementById('taskTemplatesContainer').innerHTML = '<p style="color:#dc2626; text-align:center; padding:40px;">Error loading templates: ' + err + '</p>';
-    })
-    .getRecipeTaskTemplates(currentEditRecipe);
-}
-
-function addRecipeTaskTemplate() {
-  if (!currentEditRecipe) {
-    showToast('No recipe selected', 'error');
-    return;
-  }
-  openTaskTemplateModal(null);
-}
-
-function editRecipeTaskTemplate(templateId) {
-  if (!currentEditRecipe || !templateId) return;
-  
-  google.script.run
-    .withSuccessHandler(function(result) {
-      if (result.success && result.templates) {
-        var template = result.templates.find(function(t) { return t.templateId === templateId; });
-        if (template) {
-          openTaskTemplateModal(template);
-        }
-      }
-    })
-    .getRecipeTaskTemplates(currentEditRecipe);
-}
-
-function deleteRecipeTaskTemplate(templateId) {
-  if (!currentEditRecipe || !templateId) {
-    showToast('Invalid template', 'error');
-    return;
-  }
-  
-  if (!confirm('Delete this task template? It will not affect existing batches.')) return;
-  
-  google.script.run
-    .withSuccessHandler(function(result) {
-      if (result.success) {
-        showToast('Template deleted', 'success');
-        loadRecipeTaskTemplates();
-      } else {
-        showToast('Error: ' + result.error, 'error');
-      }
-    })
-    .withFailureHandler(function(err) {
-      showToast('Error: ' + err, 'error');
-    })
-    .deleteRecipeTaskTemplate(templateId);
-}
-
-function openTaskTemplateModal(template) {
-  // Get task types and staff for dropdowns
-  var taskTypes = ['Turn 1 Brew', 'Turn 2 Brew', 'Transfer to FV', 'Yeast Pitch', 'Dry Hop', 'Fining/Additions', 'Gravity Reading', 'pH Reading', 'Transfer to BT/SV', 'Filtering', 'Carbonation', 'Packaging', 'Custom'];
-  
-  google.script.run
-    .withSuccessHandler(function(staffResult) {
-      var staff = staffResult.staff || [];
-      var staffOptions = '<option value="">-- Unassigned --</option>';
-      staff.forEach(function(s) {
-        staffOptions += '<option value="' + escapeHtml(s) + '">' + escapeHtml(s) + '</option>';
-      });
-      
-      var materialsOptions = '<option value="">-- Select Material --</option>';
-      google.script.run
-        .withSuccessHandler(function(materialsResult) {
-          if (materialsResult.success && materialsResult.materials) {
-            materialsResult.materials.forEach(function(m) {
-              materialsOptions += '<option value="' + escapeHtml(m.item) + '" data-unit="' + escapeHtml(m.unit || 'lb') + '">' + escapeHtml(m.item) + ' (' + escapeHtml(m.category || '') + ')</option>';
-            });
-          }
-          buildTaskTemplateModal(template, taskTypes, staffOptions, materialsOptions);
-        })
-        .getRawMaterialsInventory({});
-    })
-    .getBreweryStaff();
-}
-
-function buildTaskTemplateModal(template, taskTypes, staffOptions, materialsOptions) {
-  var taskTypeOptions = taskTypes.map(function(t) {
-    return '<option value="' + escapeHtml(t) + '"' + (template && template.taskType === t ? ' selected' : '') + '>' + escapeHtml(t) + '</option>';
-  }).join('');
-  
-  var materialsHtml = '';
-  if (template && template.defaultMaterials) {
-    try {
-      var materials = JSON.parse(template.defaultMaterials);
-      materials.forEach(function(m, idx) {
-        var uomOptions = '<option value="lb"' + (m.unit === 'lb' ? ' selected' : '') + '>lb</option>' +
-          '<option value="oz"' + (m.unit === 'oz' ? ' selected' : '') + '>oz</option>' +
-          '<option value="kg"' + (m.unit === 'kg' ? ' selected' : '') + '>kg</option>' +
-          '<option value="g"' + (m.unit === 'g' ? ' selected' : '') + '>g</option>' +
-          '<option value="ea"' + (m.unit === 'ea' ? ' selected' : '') + '>ea</option>' +
-          '<option value="gal"' + (m.unit === 'gal' ? ' selected' : '') + '>gal</option>' +
-          '<option value="ml"' + (m.unit === 'ml' ? ' selected' : '') + '>ml</option>' +
-          '<option value="L"' + (m.unit === 'L' ? ' selected' : '') + '>L</option>' +
-          '<option value="case"' + (m.unit === 'case' ? ' selected' : '') + '>case</option>' +
-          '<option value="pack"' + (m.unit === 'pack' ? ' selected' : '') + '>pack</option>' +
-          '<option value="roll"' + (m.unit === 'roll' ? ' selected' : '') + '>roll</option>' +
-          '<option value="sheet"' + (m.unit === 'sheet' ? ' selected' : '') + '>sheet</option>';
-        materialsHtml += '<div class="template-material-row" style="display:grid;grid-template-columns:2fr 1fr 1fr auto;gap:8px;padding:8px;background:white;border:1px solid #e5e7eb;border-radius:4px;margin-bottom:8px;">' +
-          '<select class="template-material" onchange="updateTemplateMaterialUnit(this)" style="padding:6px;border:1px solid #d1d5db;border-radius:4px;font-size:12px;">' + materialsOptions + '</select>' +
-          '<input type="number" class="template-material-qty" step="0.01" value="' + (m.qty || '') + '" placeholder="0" style="padding:6px;border:1px solid #d1d5db;border-radius:4px;font-size:12px;">' +
-          '<select class="template-material-unit" style="padding:6px;border:1px solid #d1d5db;border-radius:4px;font-size:12px;">' + uomOptions + '</select>' +
-          '<button onclick="removeTemplateMaterialRow(this)" style="padding:6px 10px;background:#ef4444;color:white;border:none;border-radius:4px;cursor:pointer;font-size:11px;">✕</button>' +
-        '</div>';
-      });
-    } catch (e) {
-      // Invalid JSON, start fresh
-    }
-  }
-  
-  if (!materialsHtml) {
-    materialsHtml = '<div style="padding:8px;color:#9ca3af;font-size:12px;text-align:center;border:1px dashed #d1d5db;border-radius:4px;">No materials. Click "+ Add Material" to add.</div>';
-  }
-  
-  var modalHtml = '<div id="taskTemplateModal" style="position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.6);z-index:11000;display:flex;justify-content:center;align-items:center;overflow:auto;padding:20px;box-sizing:border-box;">' +
-    '<div style="position:relative;background:white;border-radius:12px;max-width:600px;width:100%;max-width:90vw;max-height:90vh;overflow-y:auto;margin:auto;box-sizing:border-box;">' +
-      '<div style="background:linear-gradient(135deg,#6366f1,#4f46e5);color:white;padding:20px;border-radius:12px 12px 0 0;">' +
-        '<div style="display:flex;justify-content:space-between;align-items:center;">' +
-          '<h3 style="margin:0;">' + (template ? 'Edit' : 'Add') + ' Task Template</h3>' +
-          '<button onclick="closeTaskTemplateModal()" style="background:rgba(255,255,255,0.2);border:none;color:white;width:32px;height:32px;border-radius:50%;cursor:pointer;">✕</button>' +
-        '</div>' +
-      '</div>' +
-      '<div style="padding:24px;">' +
-        '<div style="margin-bottom:16px;">' +
-          '<label style="display:block;font-weight:600;margin-bottom:6px;color:#374151;">Task Type *</label>' +
-          '<select id="templateTaskType" style="width:100%;padding:10px;border:1px solid #d1d5db;border-radius:6px;font-size:14px;">' + taskTypeOptions + '</select>' +
-        '</div>' +
-        '<div style="margin-bottom:16px;">' +
-          '<label style="display:block;font-weight:600;margin-bottom:6px;color:#374151;">Task Name *</label>' +
-          '<input type="text" id="templateTaskName" value="' + (template ? escapeHtml(template.taskName || '') : '') + '" placeholder="Enter task name" style="width:100%;padding:10px;border:1px solid #d1d5db;border-radius:6px;font-size:14px;">' +
-        '</div>' +
-        '<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;">' +
-          '<div>' +
-            '<label style="display:block;font-weight:600;margin-bottom:6px;color:#374151;">Day Offset</label>' +
-            '<input type="number" id="templateDayOffset" value="' + (template ? (template.dayOffset || 0) : 0) + '" min="0" placeholder="0" style="width:100%;padding:10px;border:1px solid #d1d5db;border-radius:6px;font-size:14px;">' +
-            '<small style="color:#6b7280;font-size:11px;">Days after brew day (0 = brew day)</small>' +
-          '</div>' +
-          '<div>' +
-            '<label style="display:block;font-weight:600;margin-bottom:6px;color:#374151;">Default Assigned To</label>' +
-            '<select id="templateAssignedTo" style="width:100%;padding:10px;border:1px solid #d1d5db;border-radius:6px;font-size:14px;">' + staffOptions + '</select>' +
-          '</div>' +
-        '</div>' +
-        '<div style="margin-bottom:16px;">' +
-          '<label style="display:block;font-weight:600;margin-bottom:6px;color:#374151;">Default Notes</label>' +
-          '<textarea id="templateNotes" rows="3" placeholder="Task instructions, notes..." style="width:100%;padding:10px;border:1px solid #d1d5db;border-radius:6px;font-size:14px;">' + (template ? escapeHtml(template.defaultNotes || '') : '') + '</textarea>' +
-        '</div>' +
-        '<div style="margin-bottom:16px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;padding:16px;">' +
-          '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">' +
-            '<label style="font-weight:600;color:#374151;">Default Materials</label>' +
-            '<button type="button" onclick="addTemplateMaterialRow()" style="padding:6px 12px;background:#6366f1;color:white;border:none;border-radius:4px;cursor:pointer;font-size:12px;font-weight:600;">+ Add Material</button>' +
-          '</div>' +
-          '<div id="templateMaterialsList">' + materialsHtml + '</div>' +
-        '</div>' +
-        '<div style="display:flex;gap:12px;justify-content:flex-end;margin-top:24px;">' +
-          '<button onclick="closeTaskTemplateModal()" style="padding:10px 20px;background:#e9ecef;border:none;border-radius:6px;cursor:pointer;">Cancel</button>' +
-          '<button onclick="saveTaskTemplate(\'' + (template ? (template.templateId || '').replace(/'/g, "\\'") : '') + '\')" style="padding:10px 24px;background:#6366f1;color:white;border:none;border-radius:6px;cursor:pointer;font-weight:bold;">Save</button>' +
-        '</div>' +
-      '</div>' +
-    '</div>' +
-  '</div>';
-  
-  var existing = document.getElementById('taskTemplateModal');
-  if (existing) existing.remove();
-  document.body.insertAdjacentHTML('beforeend', modalHtml);
-  
-  // Store materials options for adding new rows
-  window.templateMaterialsOptions = materialsOptions;
-}
-
-function closeTaskTemplateModal() {
-  var modal = document.getElementById('taskTemplateModal');
-  if (modal) modal.remove();
-}
-
-function addTemplateMaterialRow() {
-  var container = document.getElementById('templateMaterialsList');
-  if (!container) return;
-  
-  if (container.children.length === 1 && container.children[0].textContent.indexOf('No materials') !== -1) {
-    container.innerHTML = '';
-  }
-  
-  var uomOptions = '<option value="lb" selected>lb</option>' +
-    '<option value="oz">oz</option>' +
-    '<option value="kg">kg</option>' +
-    '<option value="g">g</option>' +
-    '<option value="ea">ea</option>' +
-    '<option value="gal">gal</option>' +
-    '<option value="ml">ml</option>' +
-    '<option value="L">L</option>' +
-    '<option value="case">case</option>' +
-    '<option value="pack">pack</option>' +
-    '<option value="roll">roll</option>' +
-    '<option value="sheet">sheet</option>';
-  var rowHtml = '<div class="template-material-row" style="display:grid;grid-template-columns:2fr 1fr 1fr auto;gap:8px;padding:8px;background:white;border:1px solid #e5e7eb;border-radius:4px;margin-bottom:8px;">' +
-    '<select class="template-material" onchange="updateTemplateMaterialUnit(this)" style="padding:6px;border:1px solid #d1d5db;border-radius:4px;font-size:12px;">' + (window.templateMaterialsOptions || '<option>Loading...</option>') + '</select>' +
-    '<input type="number" class="template-material-qty" step="0.01" placeholder="0" style="padding:6px;border:1px solid #d1d5db;border-radius:4px;font-size:12px;">' +
-    '<select class="template-material-unit" style="padding:6px;border:1px solid #d1d5db;border-radius:4px;font-size:12px;">' + uomOptions + '</select>' +
-    '<button onclick="removeTemplateMaterialRow(this)" style="padding:6px 10px;background:#ef4444;color:white;border:none;border-radius:4px;cursor:pointer;font-size:11px;">✕</button>' +
-  '</div>';
-  
-  container.insertAdjacentHTML('beforeend', rowHtml);
-}
-
-function updateTemplateMaterialUnit(select) {
-  var row = select.closest('.template-material-row');
-  if (!row) return;
-  
-  var option = select.options[select.selectedIndex];
-  var unit = option ? option.getAttribute('data-unit') : '';
-  var unitSelect = row.querySelector('.template-material-unit');
-  if (unitSelect && unit) {
-    // Set the dropdown value to match the material's unit
-    unitSelect.value = unit;
-  }
-}
-
-function removeTemplateMaterialRow(button) {
-  var row = button.closest('.template-material-row');
-  if (row) {
-    row.remove();
-    
-    var container = document.getElementById('templateMaterialsList');
-    if (container && container.children.length === 0) {
-      container.innerHTML = '<div style="padding:8px;color:#9ca3af;font-size:12px;text-align:center;border:1px dashed #d1d5db;border-radius:4px;">No materials. Click "+ Add Material" to add.</div>';
-    }
-  }
-}
-
-function saveTaskTemplate(templateId) {
-  if (!currentEditRecipe) {
-    showToast('No recipe selected', 'error');
-    return;
-  }
-  
-  var taskType = document.getElementById('templateTaskType').value;
-  var taskName = document.getElementById('templateTaskName').value.trim();
-  var dayOffset = parseInt(document.getElementById('templateDayOffset').value) || 0;
-  var assignedTo = document.getElementById('templateAssignedTo').value;
-  var notes = document.getElementById('templateNotes').value.trim();
-  
-  if (!taskType || !taskName) {
-    showToast('Task Type and Task Name are required', 'error');
-    return;
-  }
-  
-  // Collect materials
-  var materials = [];
-  document.querySelectorAll('.template-material-row').forEach(function(row) {
-    var material = row.querySelector('.template-material').value;
-    var qty = parseFloat(row.querySelector('.template-material-qty').value) || 0;
-    var unit = row.querySelector('.template-material-unit').value.trim() || 'lb';
-    
-    if (material && qty > 0) {
-      materials.push({
-        item: material,
-        qty: qty,
-        unit: unit
-      });
-    }
-  });
-  
-  var templateData = {
-    taskType: taskType,
-    taskName: taskName,
-    dayOffset: dayOffset,
-    defaultAssignedTo: assignedTo || '',
-    defaultMaterials: materials.length > 0 ? JSON.stringify(materials) : '',
-    defaultNotes: notes
-  };
-  
-  var func = templateId ? 'updateRecipeTaskTemplate' : 'addRecipeTaskTemplate';
-  var args = templateId ? [templateId, templateData] : [currentEditRecipe, templateData];
-  
-  google.script.run
-    .withSuccessHandler(function(result) {
-      if (result.success) {
-        showToast('Task template ' + (templateId ? 'updated' : 'created') + '!', 'success');
-        closeTaskTemplateModal();
-        loadRecipeTaskTemplates();
-      } else {
-        showToast('Error: ' + result.error, 'error');
-      }
-    })
-    .withFailureHandler(function(err) {
-      handleScriptError(err, templateId ? 'updateRecipeTaskTemplate' : 'addRecipeTaskTemplate');
-    })[func].apply(null, args);
-}
-
 function loadRecipeHistory(recipeName) {
   google.script.run
     .withSuccessHandler(function(result) {
@@ -8751,24 +6985,10 @@ function saveRecipeChanges() {
       });
     } else if (isNew) {
       // Add new ingredient
-      const nameInput = row.querySelector('input[data-field="Ingredient Name"]');
-      const amountInput = row.querySelector('input[data-field="Amount"]');
-      const uomInput = row.querySelector('input[data-field="UOM"]');
-      
-      const name = nameInput ? nameInput.value.trim() : '';
-      const amount = amountInput ? amountInput.value : '';
-      const uom = uomInput ? uomInput.value.trim() : '';
-      
-      // Skip if name is empty or matches placeholder text exactly
-      if (!name || name.trim() === '' || 
-          name.toLowerCase() === 'ingredient name' || 
-          name.toLowerCase() === 'other name' ||
-          name.toLowerCase() === 'grain/malt name' ||
-          name.toLowerCase() === 'hop name' ||
-          name.toLowerCase() === 'yeast name') {
-        // Skip empty or placeholder-only entries
-        return;
-      }
+      const inputs = row.querySelectorAll('input');
+      const name = inputs[0].value.trim();
+      const amount = inputs[1].value;
+      const uom = inputs[2].value.trim();
       
       if (name && amount) {
         ingredientUpdates.push({
@@ -8776,8 +6996,8 @@ function saveRecipeChanges() {
           data: {
             'Ingredient Name': name,
             'Ingredient Type': type === 'grain' ? 'Grain' : type === 'hop' ? 'Hop' : type === 'yeast' ? 'Yeast' : 'Other',
-            'Amount': parseFloat(amount) || 0,
-            'UOM': uom || 'lb'
+            'Amount': parseFloat(amount),
+            'UOM': uom
           }
         });
       }
