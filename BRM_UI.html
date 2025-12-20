@@ -450,6 +450,7 @@
       box-shadow: 0 4px 12px rgba(0,0,0,0.15);
     }
     @keyframes slideIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+    @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
     
     /* ═══ RESPONSIVE ═══ */
     @media (max-width: 768px) {
@@ -478,13 +479,15 @@
     .panel-toggle.open {
       transform: rotate(180deg);
     }
-    <!-- 
+  </style>
+
+  <!--
   ═══════════════════════════════════════════════════════════════════════════════
   RED LEG BREWING - MULTI-ENTRY BREW LABOR UI
   Updated Brewer's Sheet to support multiple brew labor entries
   Replace the brew labor section in BRM_Labor_HTML_Additions.html with this
   ═══════════════════════════════════════════════════════════════════════════════
--->
+  -->
 
 <style>
   /* Multi-entry brew labor styles */
@@ -2329,6 +2332,32 @@
       setTimeout(function() { toast.remove(); }, 4000);
     }
     
+    function showLoading(message) {
+      var overlay = document.getElementById('loadingOverlay');
+      if (overlay) {
+        var messageEl = overlay.querySelector('.loading-message');
+        if (messageEl) messageEl.textContent = message || 'Loading...';
+        overlay.style.display = 'flex';
+      } else {
+        // Create overlay if it doesn't exist
+        overlay = document.createElement('div');
+        overlay.id = 'loadingOverlay';
+        overlay.style.cssText = 'display:flex;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:9999;justify-content:center;align-items:center;';
+        overlay.innerHTML = '<div style="background:white;padding:24px;border-radius:8px;text-align:center;box-shadow:0 4px 20px rgba(0,0,0,0.3);">' +
+          '<div class="spinner" style="width:40px;height:40px;border:4px solid #f3f3f3;border-top:4px solid #8B0000;border-radius:50%;animation:spin 1s linear infinite;margin:0 auto 16px;"></div>' +
+          '<p class="loading-message" style="margin:0;font-size:16px;color:#333;">' + (message || 'Loading...') + '</p>' +
+          '</div>';
+        document.body.appendChild(overlay);
+      }
+    }
+    
+    function hideLoading() {
+      var overlay = document.getElementById('loadingOverlay');
+      if (overlay) {
+        overlay.style.display = 'none';
+      }
+    }
+    
     function handleError(err) {
       console.error('Error:', err);
       showToast('Error: ' + err, 'error');
@@ -4160,7 +4189,871 @@ function renderOpExCategories(categories) {
         .getBrewerSheet(window.currentBrewerSheet.recipeName, newSize);
     }
 
+    // ═══════════════════════════════════════════════════════════════════════════════
+    // PHASE 2B: NEW BREWER'S SHEET - COMPLETE REDESIGN
+    // ═══════════════════════════════════════════════════════════════════════════════
+
+    // Global state for Brewer's Sheet
+    var brewerSheetState = {
+      batchNumber: null,
+      batchData: null,
+      turn1TimerStart: null,
+      turn1TimerInterval: null,
+      turn1Seconds: 0,
+      turn2TimerStart: null,
+      turn2TimerInterval: null,
+      turn2Seconds: 0
+    };
+
+    // Open Brewer's Sheet from Production tab
+    function openBrewerSheet(batchNumber) {
+      brewerSheetState.batchNumber = batchNumber;
+      
+      showLoading('Loading Brewer\'s Sheet...');
+      
+      google.script.run
+        .withSuccessHandler(function(data) {
+          hideLoading();
+          if (data.success) {
+            brewerSheetState.batchData = data;
+            renderBrewerSheet(data);
+            document.getElementById('brewerSheetModal').style.display = 'flex';
+          } else {
+            showToast('Error: ' + data.error, 'error');
+          }
+        })
+        .withFailureHandler(function(error) {
+          hideLoading();
+          showToast('Error loading batch: ' + error.message, 'error');
+        })
+        .getBrewerSheetData(batchNumber);
+    }
+
+    // Render Brewer's Sheet
+    function renderBrewerSheet(data) {
+      // Section 1: Batch Info
+      document.getElementById('batchNumber').textContent = data.batchNumber || 'TBD';
+      document.getElementById('batchBeerName').textContent = data.beerName || 'Unknown';
+      document.getElementById('batchSize').textContent = data.batchSize + ' BBL';
+      document.getElementById('batchBrewDate').textContent = formatDate(data.brewDate);
+      document.getElementById('batchCurrentVessel').textContent = data.currentVessel || '--';
+      var statusEl = document.getElementById('batchStatus');
+      statusEl.textContent = data.status || 'PLANNED';
+      statusEl.className = 'batch-value status-badge status-' + (data.status || 'planned').toLowerCase().replace(' ', '-');
+      document.getElementById('batchRunningCOGS').textContent = '$' + (data.runningCOGS || 0).toFixed(2);
+      
+      // Load brewers dropdown
+      loadBrewersDropdown();
+      
+      // Load available vessels
+      loadAvailableVessels();
+      
+      // Section 2: Turn 1
+      renderTurn1(data);
+      
+      // Section 3: Turn 2
+      renderTurn2(data);
+      
+      // Update section visibility based on workflow state
+      updateSectionVisibility(data);
+    }
+
+    // Render Turn 1
+    function renderTurn1(data) {
+      var tbody = document.getElementById('turn1IngredientsBody');
+      if (!tbody) return;
+      
+      tbody.innerHTML = '';
+      
+      if (data.turn1Ingredients && data.turn1Ingredients.length > 0) {
+        data.turn1Ingredients.forEach(function(ing, index) {
+          var scaledQty = ing.quantity * (data.batchSize / 2 / data.recipeBaseBatchSize); // Half batch for Turn 1
+          var row = '<tr>' +
+            '<td>' + escapeHtml(ing.name) + '</td>' +
+            '<td>' + escapeHtml(ing.category) + '</td>' +
+            '<td>' + ing.quantity.toFixed(2) + '</td>' +
+            '<td><input type="number" id="turn1Actual_' + index + '" value="' + scaledQty.toFixed(2) + '" step="0.01" class="actual-input"></td>' +
+            '<td>' + escapeHtml(ing.unit) + '</td>' +
+            '<td class="' + (ing.onHand < scaledQty ? 'low-inventory' : '') + '">' + (ing.onHand || 0).toFixed(2) + '</td>' +
+            '</tr>';
+          tbody.innerHTML += row;
+        });
+      } else {
+        tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:20px;color:#999;">No Turn 1 ingredients found</td></tr>';
+      }
+      
+      // Show completed info if Turn 1 is done
+      if (data.turn1Complete) {
+        var statusEl = document.getElementById('turn1Status');
+        statusEl.textContent = 'Complete ✅';
+        statusEl.className = 'turn-status complete';
+        var content = document.getElementById('turn1Content');
+        if (content) {
+          var controls = content.querySelector('.turn-controls');
+          var ingredients = content.querySelector('.ingredients-section');
+          var completeBtn = content.querySelector('.turn-complete-section');
+          if (controls) controls.style.display = 'none';
+          if (ingredients) ingredients.style.display = 'none';
+          if (completeBtn) completeBtn.style.display = 'none';
+        }
+        var completedInfo = document.getElementById('turn1CompletedInfo');
+        if (completedInfo) {
+          completedInfo.style.display = 'block';
+          var brewerEl = document.getElementById('turn1CompletedBrewer');
+          var hoursEl = document.getElementById('turn1CompletedHours');
+          var vesselEl = document.getElementById('turn1CompletedVessel');
+          var timeEl = document.getElementById('turn1CompletedTime');
+          if (brewerEl) brewerEl.textContent = data.turn1CompletedBy || 'Unknown';
+          if (hoursEl) hoursEl.textContent = data.turn1LaborHours + ' hrs';
+          if (vesselEl) vesselEl.textContent = data.turn1Vessel || '--';
+          if (timeEl) timeEl.textContent = formatDateTime(data.turn1CompleteDate);
+        }
+      }
+    }
+
+    // Render Turn 2
+    function renderTurn2(data) {
+      var tbody = document.getElementById('turn2IngredientsBody');
+      if (!tbody) return;
+      
+      tbody.innerHTML = '';
+      
+      // Disable Turn 2 section until Turn 1 is complete
+      var turn2Section = document.getElementById('turn2Section');
+      if (!data.turn1Complete) {
+        if (turn2Section) turn2Section.classList.add('locked');
+        var statusEl = document.getElementById('turn2Status');
+        if (statusEl) statusEl.textContent = 'Waiting for Turn 1';
+        return;
+      }
+      
+      if (turn2Section) turn2Section.classList.remove('locked');
+      var statusEl = document.getElementById('turn2Status');
+      if (statusEl) statusEl.textContent = 'Ready';
+      
+      var vesselDisplay = document.getElementById('turn2VesselDisplay');
+      if (vesselDisplay) vesselDisplay.textContent = data.turn1Vessel || 'Same as Turn 1';
+      
+      if (data.turn2Ingredients && data.turn2Ingredients.length > 0) {
+        data.turn2Ingredients.forEach(function(ing, index) {
+          var scaledQty = ing.quantity * (data.batchSize / 2 / data.recipeBaseBatchSize); // Half batch for Turn 2
+          var row = '<tr>' +
+            '<td>' + escapeHtml(ing.name) + '</td>' +
+            '<td>' + escapeHtml(ing.category) + '</td>' +
+            '<td>' + ing.quantity.toFixed(2) + '</td>' +
+            '<td><input type="number" id="turn2Actual_' + index + '" value="' + scaledQty.toFixed(2) + '" step="0.01" class="actual-input"></td>' +
+            '<td>' + escapeHtml(ing.unit) + '</td>' +
+            '<td class="' + (ing.onHand < scaledQty ? 'low-inventory' : '') + '">' + (ing.onHand || 0).toFixed(2) + '</td>' +
+            '</tr>';
+          tbody.innerHTML += row;
+        });
+      }
+      
+      // Handle No Turn 2
+      if (data.noTurn2) {
+        var checkbox = document.getElementById('noTurn2Checkbox');
+        if (checkbox) checkbox.checked = true;
+        toggleNoTurn2();
+        var noTurn2Info = document.getElementById('noTurn2CompletedInfo');
+        if (noTurn2Info) noTurn2Info.style.display = 'block';
+      }
+      
+      // Show completed info if Turn 2 is done
+      if (data.turn2Complete) {
+        var statusEl = document.getElementById('turn2Status');
+        if (statusEl) {
+          statusEl.textContent = 'Complete ✅';
+          statusEl.className = 'turn-status complete';
+        }
+        var controls = document.getElementById('turn2Controls');
+        if (controls) controls.style.display = 'none';
+        var completedInfo = document.getElementById('turn2CompletedInfo');
+        if (completedInfo) {
+          completedInfo.style.display = 'block';
+          var brewerEl = document.getElementById('turn2CompletedBrewer');
+          var hoursEl = document.getElementById('turn2CompletedHours');
+          var timeEl = document.getElementById('turn2CompletedTime');
+          if (brewerEl) brewerEl.textContent = data.turn2CompletedBy || 'Unknown';
+          if (hoursEl) hoursEl.textContent = data.turn2LaborHours + ' hrs';
+          if (timeEl) timeEl.textContent = formatDateTime(data.turn2CompleteDate);
+        }
+      }
+    }
+
+    // Timer Functions
+    function startTurn1Timer() {
+      if (brewerSheetState.turn1TimerInterval) return;
+      
+      brewerSheetState.turn1TimerStart = new Date();
+      var startBtn = document.getElementById('turn1StartBtn');
+      var stopBtn = document.getElementById('turn1StopBtn');
+      var statusEl = document.getElementById('turn1Status');
+      if (startBtn) startBtn.style.display = 'none';
+      if (stopBtn) stopBtn.style.display = 'inline-block';
+      if (statusEl) {
+        statusEl.textContent = 'In Progress';
+        statusEl.className = 'turn-status in-progress';
+      }
+      
+      brewerSheetState.turn1TimerInterval = setInterval(function() {
+        brewerSheetState.turn1Seconds++;
+        var timerEl = document.getElementById('turn1Timer');
+        if (timerEl) timerEl.textContent = formatTimer(brewerSheetState.turn1Seconds);
+      }, 1000);
+      
+      updateTurn1ButtonState();
+    }
+
+    function stopTurn1Timer() {
+      if (brewerSheetState.turn1TimerInterval) {
+        clearInterval(brewerSheetState.turn1TimerInterval);
+        brewerSheetState.turn1TimerInterval = null;
+      }
+      var startBtn = document.getElementById('turn1StartBtn');
+      var stopBtn = document.getElementById('turn1StopBtn');
+      if (startBtn) startBtn.style.display = 'inline-block';
+      if (stopBtn) stopBtn.style.display = 'none';
+    }
+
+    function startTurn2Timer() {
+      if (brewerSheetState.turn2TimerInterval) return;
+      
+      brewerSheetState.turn2TimerStart = new Date();
+      var startBtn = document.getElementById('turn2StartBtn');
+      var stopBtn = document.getElementById('turn2StopBtn');
+      var statusEl = document.getElementById('turn2Status');
+      if (startBtn) startBtn.style.display = 'none';
+      if (stopBtn) stopBtn.style.display = 'inline-block';
+      if (statusEl) {
+        statusEl.textContent = 'In Progress';
+        statusEl.className = 'turn-status in-progress';
+      }
+      
+      brewerSheetState.turn2TimerInterval = setInterval(function() {
+        brewerSheetState.turn2Seconds++;
+        var timerEl = document.getElementById('turn2Timer');
+        if (timerEl) timerEl.textContent = formatTimer(brewerSheetState.turn2Seconds);
+      }, 1000);
+      
+      updateTurn2ButtonState();
+    }
+
+    function stopTurn2Timer() {
+      if (brewerSheetState.turn2TimerInterval) {
+        clearInterval(brewerSheetState.turn2TimerInterval);
+        brewerSheetState.turn2TimerInterval = null;
+      }
+      var startBtn = document.getElementById('turn2StartBtn');
+      var stopBtn = document.getElementById('turn2StopBtn');
+      if (startBtn) startBtn.style.display = 'inline-block';
+      if (stopBtn) stopBtn.style.display = 'none';
+    }
+
+    function formatTimer(totalSeconds) {
+      var hours = Math.floor(totalSeconds / 3600);
+      var minutes = Math.floor((totalSeconds % 3600) / 60);
+      var seconds = totalSeconds % 60;
+      return String(hours).padStart(2, '0') + ':' + 
+             String(minutes).padStart(2, '0') + ':' + 
+             String(seconds).padStart(2, '0');
+    }
+
+    // Complete Turn Functions
+    function completeTurn1() {
+      var brewer = document.getElementById('turn1Brewer').value;
+      var vessel = document.getElementById('turn1Vessel').value;
+      var laborHours = brewerSheetState.turn1Seconds / 3600;
+      
+      if (!brewer) {
+        showToast('Please select a brewer', 'warning');
+        return;
+      }
+      if (!vessel) {
+        showToast('Please select a vessel', 'warning');
+        return;
+      }
+      if (laborHours < 0.01) {
+        showToast('Please start the timer before completing', 'warning');
+        return;
+      }
+      
+      var actualIngredients = collectActualIngredients('turn1');
+      
+      if (!confirm('Complete Turn 1 and transfer to ' + vessel + '?\n\nThis will:\n- Deplete Turn 1 materials\n- Log ' + laborHours.toFixed(2) + ' labor hours\n- Mark ' + vessel + ' as In Use')) {
+        return;
+      }
+      
+      stopTurn1Timer();
+      showLoading('Completing Turn 1...');
+      
+      google.script.run
+        .withSuccessHandler(function(result) {
+          hideLoading();
+          if (result.success) {
+            showToast('Turn 1 complete!', 'success');
+            openBrewerSheet(brewerSheetState.batchNumber); // Refresh
+          } else {
+            showToast('Error: ' + result.error, 'error');
+          }
+        })
+        .withFailureHandler(function(error) {
+          hideLoading();
+          showToast('Error: ' + error.message, 'error');
+        })
+        .completeTurn(brewerSheetState.batchNumber, 1, brewer, laborHours, vessel, actualIngredients);
+    }
+
+    function completeTurn2() {
+      var brewer = document.getElementById('turn2Brewer').value;
+      var vessel = brewerSheetState.batchData.turn1Vessel;
+      var laborHours = brewerSheetState.turn2Seconds / 3600;
+      
+      if (!brewer) {
+        showToast('Please select a brewer', 'warning');
+        return;
+      }
+      if (laborHours < 0.01) {
+        showToast('Please start the timer before completing', 'warning');
+        return;
+      }
+      
+      var actualIngredients = collectActualIngredients('turn2');
+      
+      if (!confirm('Complete Turn 2?\n\nThis will:\n- Deplete Turn 2 materials\n- Log ' + laborHours.toFixed(2) + ' labor hours\n- Set batch status to Fermenting')) {
+        return;
+      }
+      
+      stopTurn2Timer();
+      showLoading('Completing Turn 2...');
+      
+      google.script.run
+        .withSuccessHandler(function(result) {
+          hideLoading();
+          if (result.success) {
+            showToast('Turn 2 complete! Batch now fermenting.', 'success');
+            openBrewerSheet(brewerSheetState.batchNumber); // Refresh
+          } else {
+            showToast('Error: ' + result.error, 'error');
+          }
+        })
+        .withFailureHandler(function(error) {
+          hideLoading();
+          showToast('Error: ' + error.message, 'error');
+        })
+        .completeTurn(brewerSheetState.batchNumber, 2, brewer, laborHours, vessel, actualIngredients);
+    }
+
+    function collectActualIngredients(turn) {
+      var actuals = { grains: [], hops: [], other: [] };
+      var inputs = document.querySelectorAll('[id^="' + turn + 'Actual_"]');
+      var batchData = brewerSheetState.batchData;
+      var ingredients = turn === 'turn1' ? batchData.turn1Ingredients : batchData.turn2Ingredients;
+      
+      inputs.forEach(function(input, index) {
+        if (ingredients && ingredients[index]) {
+          var ing = ingredients[index];
+          var actualAmount = parseFloat(input.value) || 0;
+          var category = (ing.category || '').toLowerCase();
+          
+          var item = {
+            ingredient: ing.name,
+            amount: actualAmount,
+            uom: ing.unit
+          };
+          
+          if (category.indexOf('grain') !== -1) {
+            actuals.grains.push(item);
+          } else if (category.indexOf('hop') !== -1) {
+            actuals.hops.push(item);
+          } else {
+            actuals.other.push(item);
+          }
+        }
+      });
+      
+      return actuals;
+    }
+
+    // No Turn 2 Handling
+    function toggleNoTurn2() {
+      var checked = document.getElementById('noTurn2Checkbox').checked;
+      var controls = document.getElementById('turn2Controls');
+      if (controls) controls.style.display = checked ? 'none' : 'block';
+      
+      if (checked && brewerSheetState.batchData && brewerSheetState.batchData.turn1Complete) {
+        showLoading('Marking as single-turn brew...');
+        google.script.run
+          .withSuccessHandler(function(result) {
+            hideLoading();
+            if (result.success) {
+              showToast('Marked as single-turn brew', 'success');
+              openBrewerSheet(brewerSheetState.batchNumber);
+            } else {
+              showToast('Error: ' + result.error, 'error');
+            }
+          })
+          .withFailureHandler(function(error) {
+            hideLoading();
+            showToast('Error: ' + error.message, 'error');
+          })
+          .markNoTurn2(brewerSheetState.batchNumber);
+      }
+    }
+
+    // Button State Updates
+    function updateTurn1ButtonState() {
+      var brewer = document.getElementById('turn1Brewer');
+      var vessel = document.getElementById('turn1Vessel');
+      var btn = document.getElementById('turn1CompleteBtn');
+      
+      if (!brewer || !vessel || !btn) return;
+      
+      var hasBrewer = brewer.value && brewer.value !== '';
+      var hasVessel = vessel.value && vessel.value !== '';
+      var timerStarted = brewerSheetState.turn1Seconds > 0;
+      
+      btn.disabled = !(hasBrewer && hasVessel && timerStarted);
+    }
+
+    function updateTurn2ButtonState() {
+      var brewer = document.getElementById('turn2Brewer');
+      var btn = document.getElementById('turn2CompleteBtn');
+      
+      if (!brewer || !btn) return;
+      
+      var hasBrewer = brewer.value && brewer.value !== '';
+      var timerStarted = brewerSheetState.turn2Seconds > 0;
+      
+      btn.disabled = !(hasBrewer && timerStarted);
+    }
+
+    // Load Dropdowns
+    function loadBrewersDropdown() {
+      google.script.run
+        .withSuccessHandler(function(brewers) {
+          var html = '<option value="">-- Select Brewer --</option>';
+          if (Array.isArray(brewers)) {
+            brewers.forEach(function(b) {
+              var name = typeof b === 'string' ? b : (b.name || b);
+              html += '<option value="' + escapeHtml(name) + '">' + escapeHtml(name) + '</option>';
+            });
+          }
+          var turn1Select = document.getElementById('turn1Brewer');
+          var turn2Select = document.getElementById('turn2Brewer');
+          if (turn1Select) {
+            turn1Select.innerHTML = html;
+            turn1Select.addEventListener('change', updateTurn1ButtonState);
+          }
+          if (turn2Select) {
+            turn2Select.innerHTML = html;
+            turn2Select.addEventListener('change', updateTurn2ButtonState);
+          }
+        })
+        .withFailureHandler(function(err) {
+          console.error('Error loading brewers:', err);
+        })
+        .getBrewersList();
+    }
+
+    function loadAvailableVessels() {
+      google.script.run
+        .withSuccessHandler(function(result) {
+          if (result.success && result.vessels) {
+            var html = '<option value="">-- Select FV/LT --</option>';
+            // Filter for FV/LT vessels only
+            result.vessels.forEach(function(v) {
+              var type = (v.type || '').toLowerCase();
+              if (v.available && (type.indexOf('fermenter') !== -1 || type === 'lt' || type === 'fv')) {
+                html += '<option value="' + escapeHtml(v.name) + '">' + escapeHtml(v.name) + ' (' + (v.capacity || 60) + ' BBL)</option>';
+              }
+            });
+            var select = document.getElementById('turn1Vessel');
+            if (select) {
+              select.innerHTML = html;
+              select.addEventListener('change', updateTurn1ButtonState);
+            }
+          }
+        })
+        .withFailureHandler(function(err) {
+          console.error('Error loading vessels:', err);
+        })
+        .getAvailableVessels();
+    }
+
+    // Helper Functions
+    function toggleSection(contentId) {
+      var content = document.getElementById(contentId);
+      if (content) {
+        content.style.display = content.style.display === 'none' ? 'block' : 'none';
+        var header = content.previousElementSibling;
+        if (header) {
+          var icon = header.querySelector('.collapse-icon');
+          if (icon) {
+            icon.textContent = content.style.display === 'none' ? '▶' : '▼';
+          }
+        }
+      }
+    }
+
+    function updateSectionVisibility(data) {
+      // Cellar tasks unlock after both turns complete (or Turn 1 + No Turn 2)
+      var cellarSection = document.getElementById('cellarTasksSection');
+      if (cellarSection && ((data.turn1Complete && data.turn2Complete) || (data.turn1Complete && data.noTurn2))) {
+        cellarSection.classList.remove('locked');
+      }
+    }
+
+    function closeBrewerSheet() {
+      // Stop any running timers
+      stopTurn1Timer();
+      stopTurn2Timer();
+      brewerSheetState.turn1Seconds = 0;
+      brewerSheetState.turn2Seconds = 0;
+      
+      var modal = document.getElementById('brewerSheetModal');
+      if (modal) modal.style.display = 'none';
+    }
+
+    function formatDateTime(dateStr) {
+      if (!dateStr) return '--';
+      var d = new Date(dateStr);
+      return formatDate(dateStr) + ' ' + d.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+    }
+
   </script>
+
+  <!-- ═══════════════════════════════════════════════════════════════════════════════
+       PHASE 2B: BREWER'S SHEET STYLES
+       ═══════════════════════════════════════════════════════════════════════════════ -->
+  <style>
+    /* Brewer's Sheet Modal */
+    .brewer-sheet-modal {
+      max-width: 1000px;
+      max-height: 90vh;
+      overflow-y: auto;
+    }
+
+    .brewer-sheet-body {
+      padding: 0;
+    }
+
+    .brewer-section {
+      border: 1px solid #ddd;
+      border-radius: 8px;
+      margin-bottom: 16px;
+      overflow: hidden;
+      background: white;
+    }
+
+    .brewer-section.locked {
+      opacity: 0.6;
+      pointer-events: none;
+    }
+
+    .section-header {
+      background: #8B0000;
+      color: white;
+      padding: 12px 16px;
+      cursor: pointer;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .section-header h3 {
+      margin: 0;
+      font-size: 16px;
+    }
+
+    .section-content {
+      padding: 16px;
+      background: #fafafa;
+    }
+
+    .batch-info-section {
+      background: linear-gradient(135deg, #8B0000 0%, #5C0000 100%);
+      color: white;
+    }
+
+    .batch-info-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 16px;
+      padding: 16px;
+    }
+
+    .batch-info-item {
+      display: flex;
+      flex-direction: column;
+    }
+
+    .batch-info-item label {
+      font-size: 11px;
+      opacity: 0.8;
+      display: block;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 4px;
+    }
+
+    .batch-info-item .batch-value {
+      font-size: 16px;
+      font-weight: bold;
+    }
+
+    .cogs-value {
+      color: #FFD700;
+    }
+
+    .turn-status {
+      padding: 4px 12px;
+      border-radius: 12px;
+      font-size: 12px;
+      font-weight: bold;
+      background: #E0E0E0;
+      color: #666;
+    }
+
+    .turn-status.complete {
+      background: #4CAF50;
+      color: white;
+    }
+
+    .turn-status.in-progress {
+      background: #FF9800;
+      color: white;
+    }
+
+    .turn-controls {
+      display: flex;
+      gap: 24px;
+      flex-wrap: wrap;
+      margin-bottom: 16px;
+      padding: 12px;
+      background: white;
+      border-radius: 8px;
+      border: 1px solid #e5e7eb;
+    }
+
+    .control-group {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .control-group label {
+      font-weight: bold;
+      font-size: 13px;
+      min-width: 80px;
+    }
+
+    .timer-display {
+      font-family: 'Courier New', monospace;
+      font-size: 24px;
+      font-weight: bold;
+      color: #8B0000;
+      min-width: 100px;
+      text-align: center;
+    }
+
+    .ingredients-section {
+      margin: 16px 0;
+    }
+
+    .ingredients-section h4 {
+      margin: 0 0 12px 0;
+      font-size: 14px;
+      color: #374151;
+    }
+
+    .ingredients-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-bottom: 16px;
+      background: white;
+    }
+
+    .ingredients-table th,
+    .ingredients-table td {
+      padding: 8px 12px;
+      text-align: left;
+      border-bottom: 1px solid #ddd;
+    }
+
+    .ingredients-table th {
+      background: #8B0000;
+      color: white;
+      font-size: 12px;
+      font-weight: 600;
+    }
+
+    .ingredients-table tr:hover {
+      background: #f9fafb;
+    }
+
+    .actual-input {
+      width: 80px;
+      padding: 4px 8px;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      text-align: right;
+    }
+
+    .low-inventory {
+      color: #F44336;
+      font-weight: bold;
+    }
+
+    .turn-complete-section {
+      text-align: center;
+      padding: 16px;
+      border-top: 1px solid #ddd;
+      margin-top: 16px;
+    }
+
+    .help-text {
+      font-size: 12px;
+      color: #666;
+      margin-top: 8px;
+    }
+
+    .completed-info {
+      background: #E8F5E9;
+      border: 2px solid #4CAF50;
+      border-radius: 8px;
+      padding: 16px;
+      text-align: center;
+    }
+
+    .completed-badge {
+      font-size: 18px;
+      font-weight: bold;
+      color: #2E7D32;
+      margin-bottom: 8px;
+    }
+
+    .completed-details {
+      display: flex;
+      justify-content: center;
+      gap: 24px;
+      font-size: 14px;
+      flex-wrap: wrap;
+    }
+
+    .completed-details span {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .no-turn2-option {
+      padding: 12px;
+      background: #FFF3E0;
+      border-radius: 8px;
+      margin-bottom: 16px;
+      border: 1px solid #FFB74D;
+    }
+
+    .no-turn2-option label {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      cursor: pointer;
+      font-weight: 500;
+    }
+
+    .lock-message {
+      font-size: 12px;
+      opacity: 0.8;
+    }
+
+    .status-badge {
+      padding: 4px 8px;
+      border-radius: 4px;
+      font-size: 12px;
+      font-weight: 600;
+      text-transform: uppercase;
+    }
+
+    .status-planned { background: #E0E0E0; color: #424242; }
+    .status-brewing { background: #FFF3E0; color: #E65100; }
+    .status-fermenting { background: #E3F2FD; color: #1565C0; }
+    .status-conditioning { background: #F3E5F5; color: #7B1FA2; }
+    .status-ready-to-package { background: #E8F5E9; color: #2E7D32; }
+    .status-packaged { background: #4CAF50; color: white; }
+
+    .collapse-icon {
+      font-size: 12px;
+      transition: transform 0.2s;
+    }
+
+    .btn {
+      padding: 8px 16px;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 500;
+      transition: all 0.2s;
+    }
+
+    .btn-primary {
+      background: #8B0000;
+      color: white;
+    }
+
+    .btn-primary:hover {
+      background: #5C0000;
+    }
+
+    .btn-primary:disabled {
+      background: #ccc;
+      cursor: not-allowed;
+    }
+
+    .btn-lg {
+      padding: 12px 24px;
+      font-size: 16px;
+    }
+
+    .btn-sm {
+      padding: 6px 12px;
+      font-size: 12px;
+    }
+
+    .btn-success {
+      background: #4CAF50;
+      color: white;
+    }
+
+    .btn-warning {
+      background: #FF9800;
+      color: white;
+    }
+
+    .btn-secondary {
+      background: #6c757d;
+      color: white;
+    }
+
+    .close-btn {
+      background: rgba(255,255,255,0.2);
+      border: none;
+      color: white;
+      width: 36px;
+      height: 36px;
+      border-radius: 50%;
+      cursor: pointer;
+      font-size: 20px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .close-btn:hover {
+      background: rgba(255,255,255,0.3);
+    }
+  </style>
 
   <!-- ═══════════════════════════════════════════════════════════════════════════════
        CELLAR WORKFLOW STYLES
@@ -5958,16 +6851,16 @@ var currentBatchData = null;
 var currentBatchNumber = null;
 
 function openBatchSheet(batchNumber) {
-  currentBatchNumber = batchNumber;
-  document.getElementById('batchSheetModal').style.display = 'flex';
-  document.getElementById('batchSheetTitle').textContent = 'Batch ' + batchNumber;
-  document.getElementById('batchSheetSubtitle').textContent = 'Loading...';
+  // Phase 2B: Use new Brewer's Sheet
+  openBrewerSheet(batchNumber);
   
-  // Reset tabs
-  switchBatchTab('ingredients');
-  
-  // Load batch data
-  loadBatchSheet(batchNumber);
+  // Keep old modal as fallback for now
+  // currentBatchNumber = batchNumber;
+  // document.getElementById('batchSheetModal').style.display = 'flex';
+  // document.getElementById('batchSheetTitle').textContent = 'Batch ' + batchNumber;
+  // document.getElementById('batchSheetSubtitle').textContent = 'Loading...';
+  // switchBatchTab('ingredients');
+  // loadBatchSheet(batchNumber);
 }
 
 function closeBatchSheetModal() {
@@ -6079,29 +6972,6 @@ function renderIngredientsTab(batch, ingredients) {
             '<td style="text-align:right;">' + formatNumber(i.amount || i.qty || 0) + '</td>' +
             '<td>' + (i.uom || i.unit || '') + '</td>' +
             '<td style="text-align:right;">$' + formatNumber(i.totalCost || i.cost || 0) + '</td></tr>';
-        }).join('') + '</tbody>' +
-      '</table></div>';
-  }
-  
-  html += renderCategory('Grains', '🌾', grains);
-  html += renderCategory('Hops', '🌿', hops);
-  html += renderCategory('Other', '🍯', other);
-  
-  content.innerHTML = html;
-}
-  
-  function renderCategory(title, emoji, items) {
-    if (!items || items.length === 0) return '';
-    var total = items.reduce(function(sum, i) { return sum + (i.totalCost || 0); }, 0);
-    return '<div style="margin-bottom:20px;">' +
-      '<h4 style="margin:0 0 10px 0;border-bottom:2px solid #d4af37;padding-bottom:5px;">' + emoji + ' ' + title + ' ($' + formatNumber(total) + ')</h4>' +
-      '<table class="ingredient-table">' +
-        '<thead><tr><th>Ingredient</th><th style="text-align:right;">Amount</th><th>Unit</th><th style="text-align:right;">Cost</th></tr></thead>' +
-        '<tbody>' + items.map(function(i) {
-          return '<tr><td>' + escapeHtml(i.ingredient || i.item) + '</td>' +
-            '<td style="text-align:right;">' + formatNumber(i.amount || i.qty || 0) + '</td>' +
-            '<td>' + (i.uom || i.unit || '') + '</td>' +
-            '<td style="text-align:right;">$' + formatNumber(i.totalCost || 0) + '</td></tr>';
         }).join('') + '</tbody>' +
       '</table></div>';
   }
@@ -6462,6 +7332,9 @@ renderBatches = function(batches) {
       <button class="edit-recipe-tab" onclick="showEditRecipeTab('ingredients')" id="tabIngredients" style="flex:1; padding:14px; border:none; background:transparent; cursor:pointer; font-weight:500; color:#666; border-bottom:3px solid transparent; margin-bottom:-2px;">
         🌾 Ingredients
       </button>
+      <button class="edit-recipe-tab" onclick="showEditRecipeTab('tasks')" id="tabTasks" style="flex:1; padding:14px; border:none; background:transparent; cursor:pointer; font-weight:500; color:#666; border-bottom:3px solid transparent; margin-bottom:-2px;">
+        📋 Task Templates
+      </button>
       <button class="edit-recipe-tab" onclick="showEditRecipeTab('history')" id="tabHistory" style="flex:1; padding:14px; border:none; background:transparent; cursor:pointer; font-weight:500; color:#666; border-bottom:3px solid transparent; margin-bottom:-2px;">
         📜 Change History
       </button>
@@ -6583,6 +7456,22 @@ renderBatches = function(batches) {
         
       </div>
       
+      <!-- Task Templates Tab -->
+      <div id="editTasksTab" style="display:none;">
+        <div style="margin-bottom:20px;">
+          <p style="color:#666; font-size:14px; margin-bottom:16px;">
+            Task templates define cellar tasks that will be created for each batch of this recipe. 
+            Tasks are automatically created from "Other" ingredients with Usage = "Fermentation Addition" or "Post-Fermentation Addition".
+          </p>
+          <button onclick="addTaskTemplate()" style="background:#10B981; color:white; border:none; padding:8px 16px; border-radius:6px; font-size:13px; cursor:pointer; font-weight:600;">
+            + Add Task Template
+          </button>
+        </div>
+        <div id="taskTemplatesContainer">
+          <p style="color:#999; text-align:center; padding:40px;">Loading task templates...</p>
+        </div>
+      </div>
+      
       <!-- History Tab -->
       <div id="editHistoryTab" style="display:none;">
         <div id="changeHistoryContainer">
@@ -6677,6 +7566,7 @@ function showEditRecipeTab(tabName) {
   // Hide all tabs
   document.getElementById('editDetailsTab').style.display = 'none';
   document.getElementById('editIngredientsTab').style.display = 'none';
+  document.getElementById('editTasksTab').style.display = 'none';
   document.getElementById('editHistoryTab').style.display = 'none';
   document.getElementById('reasonSection').style.display = 'none';
   document.getElementById('saveRecipeBtn').style.display = 'inline-block';
@@ -6701,12 +7591,20 @@ function showEditRecipeTab(tabName) {
     document.getElementById('tabIngredients').style.fontWeight = '600';
     document.getElementById('tabIngredients').style.color = '#1D3557';
     document.getElementById('tabIngredients').style.borderBottom = '3px solid #E63946';
+  } else if (tabName === 'tasks') {
+    document.getElementById('editTasksTab').style.display = 'block';
+    document.getElementById('reasonSection').style.display = 'none';
+    document.getElementById('tabTasks').style.fontWeight = '600';
+    document.getElementById('tabTasks').style.color = '#1D3557';
+    document.getElementById('tabTasks').style.borderBottom = '3px solid #E63946';
+    loadTaskTemplates(currentEditRecipe);
   } else if (tabName === 'history') {
     document.getElementById('editHistoryTab').style.display = 'block';
     document.getElementById('saveRecipeBtn').style.display = 'none';
     document.getElementById('tabHistory').style.fontWeight = '600';
     document.getElementById('tabHistory').style.color = '#1D3557';
     document.getElementById('tabHistory').style.borderBottom = '3px solid #E63946';
+    loadRecipeHistory(currentEditRecipe);
   }
 }
 
@@ -6820,13 +7718,61 @@ function createIngredientRowHtml(ing, type, idx) {
   const name = ing['Ingredient Name'] || ing['Name'] || '';
   const amount = ing['Amount'] || '';
   const uom = ing['UOM'] || ing['Unit'] || '';
+  const turn = ing['Turn'] || ing['Turn Number'] || '';
+  const usage = ing['Usage'] || ing['Hop Usage'] || (type === 'hop' ? 'Boil' : '');
   const rowIndex = ing._rowIndex || '';
+  
+  // Turn dropdown options
+  const turnOptions = ['', '1', '2'];
+  const turnSelected = turnOptions.includes(turn.toString()) ? turn.toString() : '';
+  
+  // Usage dropdown (hops and other ingredients)
+  let usageOptions = [];
+  let usageSelected = '';
+  
+  if (type === 'hop') {
+    usageOptions = ['Boil', 'Whirlpool', 'First Wort', 'Dry Hop'];
+    usageSelected = usageOptions.includes(usage) ? usage : 'Boil';
+  } else if (type === 'other') {
+    usageOptions = ['Brewing', 'Fermentation Addition', 'Post-Fermentation Addition'];
+    usageSelected = usageOptions.includes(usage) ? usage : 'Brewing';
+  }
+  
+  let turnSelect = `
+    <select class="ingredient-turn" data-field="Turn" data-original="${turnSelected}" style="width:100px; padding:8px; border:1px solid #d1d5db; border-radius:4px; font-size:13px;">
+      <option value="">Both</option>
+      <option value="1" ${turnSelected === '1' ? 'selected' : ''}>Turn 1</option>
+      <option value="2" ${turnSelected === '2' ? 'selected' : ''}>Turn 2</option>
+    </select>
+  `;
+  
+  let usageSelect = '';
+  if (type === 'hop') {
+    usageSelect = `
+      <select class="hop-usage" data-field="Usage" data-original="${usageSelected}" style="width:140px; padding:8px; border:1px solid #d1d5db; border-radius:4px; font-size:13px;">
+        <option value="Boil" ${usageSelected === 'Boil' ? 'selected' : ''}>Boil</option>
+        <option value="Whirlpool" ${usageSelected === 'Whirlpool' ? 'selected' : ''}>Whirlpool</option>
+        <option value="First Wort" ${usageSelected === 'First Wort' ? 'selected' : ''}>First Wort</option>
+        <option value="Dry Hop" ${usageSelected === 'Dry Hop' ? 'selected' : ''}>Dry Hop</option>
+      </select>
+    `;
+  } else if (type === 'other') {
+    usageSelect = `
+      <select class="other-usage" data-field="Usage" data-original="${usageSelected}" style="width:180px; padding:8px; border:1px solid #d1d5db; border-radius:4px; font-size:13px;">
+        <option value="Brewing" ${usageSelected === 'Brewing' ? 'selected' : ''}>Brewing</option>
+        <option value="Fermentation Addition" ${usageSelected === 'Fermentation Addition' ? 'selected' : ''}>Fermentation Addition</option>
+        <option value="Post-Fermentation Addition" ${usageSelected === 'Post-Fermentation Addition' ? 'selected' : ''}>Post-Fermentation Addition</option>
+      </select>
+    `;
+  }
   
   return `
     <div id="row_${rowId}" data-row-index="${rowIndex}" data-type="${type}" style="display:flex; gap:10px; margin-bottom:8px; align-items:center; background:#f8fafc; padding:10px; border-radius:6px;">
       <input type="text" value="${name}" placeholder="Ingredient Name" style="flex:2; padding:8px; border:1px solid #d1d5db; border-radius:4px;" data-field="Ingredient Name" data-original="${name}">
       <input type="number" value="${amount}" placeholder="Amount" step="0.01" style="flex:1; padding:8px; border:1px solid #d1d5db; border-radius:4px;" data-field="Amount" data-original="${amount}">
       <input type="text" value="${uom}" placeholder="UOM" style="width:80px; padding:8px; border:1px solid #d1d5db; border-radius:4px;" data-field="UOM" data-original="${uom}">
+      ${turnSelect}
+      ${usageSelect}
       <button onclick="markIngredientDeleted('${rowId}')" style="background:#EF4444; color:white; border:none; padding:8px 12px; border-radius:4px; cursor:pointer;">🗑️</button>
     </div>
   `;
@@ -6852,11 +7798,43 @@ function addIngredientRow(type) {
                     type === 'hop' ? 'Hop' : 
                     type === 'yeast' ? 'Yeast' : 'Other';
   
+  // Turn dropdown for all types
+  const turnSelect = `
+    <select class="ingredient-turn" data-field="Turn" data-original="" style="width:100px; padding:8px; border:1px solid #d1d5db; border-radius:4px; font-size:13px;">
+      <option value="" selected>Both</option>
+      <option value="1">Turn 1</option>
+      <option value="2">Turn 2</option>
+    </select>
+  `;
+  
+  // Usage dropdown for hops and other ingredients
+  let usageSelect = '';
+  if (type === 'hop') {
+    usageSelect = `
+      <select class="hop-usage" data-field="Usage" data-original="" style="width:140px; padding:8px; border:1px solid #d1d5db; border-radius:4px; font-size:13px;">
+        <option value="Boil" selected>Boil</option>
+        <option value="Whirlpool">Whirlpool</option>
+        <option value="First Wort">First Wort</option>
+        <option value="Dry Hop">Dry Hop</option>
+      </select>
+    `;
+  } else if (type === 'other') {
+    usageSelect = `
+      <select class="other-usage" data-field="Usage" data-original="" style="width:180px; padding:8px; border:1px solid #d1d5db; border-radius:4px; font-size:13px;">
+        <option value="Brewing" selected>Brewing</option>
+        <option value="Fermentation Addition">Fermentation Addition</option>
+        <option value="Post-Fermentation Addition">Post-Fermentation Addition</option>
+      </select>
+    `;
+  }
+  
   const newRowHtml = `
     <div id="row_${rowId}" data-row-index="" data-type="${type}" data-new="true" style="display:flex; gap:10px; margin-bottom:8px; align-items:center; background:#ECFDF5; padding:10px; border-radius:6px; border:2px dashed #10B981;">
       <input type="text" placeholder="${typeLabel} Name" style="flex:2; padding:8px; border:1px solid #d1d5db; border-radius:4px;" data-field="Ingredient Name" data-original="">
       <input type="number" placeholder="Amount" step="0.01" style="flex:1; padding:8px; border:1px solid #d1d5db; border-radius:4px;" data-field="Amount" data-original="">
       <input type="text" placeholder="UOM" style="width:80px; padding:8px; border:1px solid #d1d5db; border-radius:4px;" data-field="UOM" data-original="">
+      ${turnSelect}
+      ${usageSelect}
       <button onclick="removeNewIngredientRow('${rowId}')" style="background:#6B7280; color:white; border:none; padding:8px 12px; border-radius:4px; cursor:pointer;">✕</button>
     </div>
   `;
@@ -6898,6 +7876,62 @@ function unmarkIngredientDeleted(rowId) {
 function removeNewIngredientRow(rowId) {
   const row = document.getElementById('row_' + rowId);
   if (row) row.remove();
+}
+
+/**
+ * Load task templates for recipe
+ */
+function loadTaskTemplates(recipeName) {
+  // Get ingredients with Usage = Fermentation Addition or Post-Fermentation Addition
+  const otherIngredients = originalRecipeData?.ingredients?.other || [];
+  const taskIngredients = otherIngredients.filter(ing => {
+    const usage = ing['Usage'] || '';
+    return usage === 'Fermentation Addition' || usage === 'Post-Fermentation Addition';
+  });
+  
+  let html = '';
+  
+  if (taskIngredients.length > 0) {
+    html = '<div style="margin-bottom:20px;">';
+    html += '<h4 style="color:#1D3557; margin:0 0 12px 0;">Auto-Generated Tasks from Ingredients</h4>';
+    html += '<p style="color:#666; font-size:13px; margin-bottom:16px;">These tasks are automatically created from "Other" ingredients with Usage = "Fermentation Addition" or "Post-Fermentation Addition".</p>';
+    
+    taskIngredients.forEach((ing, idx) => {
+      const usage = ing['Usage'] || '';
+      const name = ing['Ingredient Name'] || '';
+      const amount = ing['Amount'] || '';
+      const uom = ing['UOM'] || '';
+      
+      html += `
+        <div style="background:#f8fafc; padding:12px; border-radius:6px; margin-bottom:8px; border-left:4px solid #10B981;">
+          <div style="display:flex; justify-content:space-between; align-items:center;">
+            <div>
+              <strong style="color:#1D3557;">${escapeHtml(name)}</strong>
+              <span style="color:#666; margin-left:8px;">${amount} ${uom}</span>
+              <span style="background:#E3F2FD; color:#1565C0; padding:2px 8px; border-radius:12px; font-size:11px; margin-left:8px;">${usage}</span>
+            </div>
+          </div>
+        </div>
+      `;
+    });
+    
+    html += '</div>';
+  }
+  
+  // Add manual task templates section
+  html += '<div style="margin-top:24px; padding-top:20px; border-top:2px solid #e5e7eb;">';
+  html += '<h4 style="color:#1D3557; margin:0 0 12px 0;">Manual Task Templates</h4>';
+  html += '<p style="color:#999; text-align:center; padding:20px; font-size:13px;">Manual task templates coming soon. For now, use "Other" ingredients with Usage = "Fermentation Addition" or "Post-Fermentation Addition" to create tasks.</p>';
+  html += '</div>';
+  
+  document.getElementById('taskTemplatesContainer').innerHTML = html || '<p style="color:#999; text-align:center; padding:40px;">No task templates defined. Add "Other" ingredients with Usage = "Fermentation Addition" or "Post-Fermentation Addition" to create tasks.</p>';
+}
+
+/**
+ * Add a manual task template (placeholder for future)
+ */
+function addTaskTemplate() {
+  alert('Manual task templates coming soon. For now, add "Other" ingredients with Usage = "Fermentation Addition" or "Post-Fermentation Addition" in the Ingredients tab.');
 }
 
 /**
@@ -6986,23 +8020,44 @@ function saveRecipeChanges() {
     } else if (isNew) {
       // Add new ingredient
       const inputs = row.querySelectorAll('input');
+      const selects = row.querySelectorAll('select');
       const name = inputs[0].value.trim();
       const amount = inputs[1].value;
       const uom = inputs[2].value.trim();
       
+      // Get Turn value
+      const turnSelect = row.querySelector('.ingredient-turn');
+      const turn = turnSelect ? turnSelect.value : '';
+      
+      // Get Usage value (hops only)
+      const usageSelect = row.querySelector('.hop-usage');
+      const usage = usageSelect ? usageSelect.value : '';
+      
       if (name && amount) {
+        const newData = {
+          'Ingredient Name': name,
+          'Ingredient Type': type === 'grain' ? 'Grain' : type === 'hop' ? 'Hop' : type === 'yeast' ? 'Yeast' : 'Other',
+          'Amount': parseFloat(amount),
+          'UOM': uom
+        };
+        
+        // Add Turn if specified
+        if (turn) {
+          newData['Turn'] = turn;
+        }
+        
+        // Add Usage for hops and other ingredients
+        if ((type === 'hop' || type === 'other') && usage) {
+          newData['Usage'] = usage;
+        }
+        
         ingredientUpdates.push({
           action: 'add',
-          data: {
-            'Ingredient Name': name,
-            'Ingredient Type': type === 'grain' ? 'Grain' : type === 'hop' ? 'Hop' : type === 'yeast' ? 'Yeast' : 'Other',
-            'Amount': parseFloat(amount),
-            'UOM': uom
-          }
+          data: newData
         });
       }
     } else if (rowIndex) {
-      // Check for updates to existing
+      // Check for updates to existing - inputs
       const inputs = row.querySelectorAll('input');
       inputs.forEach(input => {
         const field = input.getAttribute('data-field');
@@ -7019,6 +8074,49 @@ function saveRecipeChanges() {
           });
         }
       });
+      
+      // Check for updates to existing - selects (Turn and Usage)
+      const selects = row.querySelectorAll('select');
+      selects.forEach(select => {
+        const field = select.getAttribute('data-field');
+        const original = select.getAttribute('data-original');
+        const current = select.value;
+        
+        if (original !== current) {
+          ingredientUpdates.push({
+            action: 'update',
+            rowIndex: parseInt(rowIndex),
+            field: field,
+            newValue: current,
+            ingredientName: inputs[0].value
+          });
+        }
+      });
+      
+      // If "Other" ingredient with Usage = Fermentation Addition or Post-Fermentation Addition,
+      // automatically create/update task template
+      if (type === 'other' && rowIndex) {
+        const usageSelect = row.querySelector('.other-usage');
+        if (usageSelect) {
+          const usage = usageSelect.value;
+          if (usage === 'Fermentation Addition' || usage === 'Post-Fermentation Addition') {
+            const ingredientName = inputs[0].value.trim();
+            const amount = inputs[1].value;
+            const uom = inputs[2].value.trim();
+            
+            // This will be handled by backend - create task template
+            // For now, we'll add it to ingredientUpdates with a special flag
+            ingredientUpdates.push({
+              action: 'create_task',
+              ingredientName: ingredientName,
+              amount: amount,
+              uom: uom,
+              usage: usage,
+              rowIndex: parseInt(rowIndex)
+            });
+          }
+        }
+      }
     }
   });
   
@@ -7546,5 +8644,245 @@ document.getElementById('editRecipeModal').addEventListener('click', function(e)
       }
     };
 </script>
+
+<!-- ═══════════════════════════════════════════════════════════════════════════════
+     PHASE 2B: NEW BREWER'S SHEET MODAL
+     ═══════════════════════════════════════════════════════════════════════════════ -->
+<div id="brewerSheetModal" class="modal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.6);z-index:2000;justify-content:center;align-items:flex-start;padding:20px;overflow-y:auto;">
+  <div class="modal-content brewer-sheet-modal" style="background:white;border-radius:12px;max-width:1000px;width:100%;margin:20px auto;box-shadow:0 20px 60px rgba(0,0,0,0.3);">
+    <div class="modal-header" style="background:linear-gradient(135deg,#8B0000,#a50000);color:white;padding:20px;border-radius:12px 12px 0 0;display:flex;justify-content:space-between;align-items:center;">
+      <h2 style="margin:0;">🍺 Brewer's Sheet</h2>
+      <span class="close-btn" onclick="closeBrewerSheet()">&times;</span>
+    </div>
+    <div class="modal-body brewer-sheet-body">
+      
+      <!-- SECTION 1: BATCH INFO -->
+      <div id="batchInfoSection" class="brewer-section batch-info-section">
+        <div class="batch-info-grid">
+          <div class="batch-info-item">
+            <label>Batch #</label>
+            <span id="batchNumber" class="batch-value">--</span>
+          </div>
+          <div class="batch-info-item">
+            <label>Beer</label>
+            <span id="batchBeerName" class="batch-value">--</span>
+          </div>
+          <div class="batch-info-item">
+            <label>Total BBL</label>
+            <span id="batchSize" class="batch-value">--</span>
+          </div>
+          <div class="batch-info-item">
+            <label>Brew Date</label>
+            <span id="batchBrewDate" class="batch-value">--</span>
+          </div>
+          <div class="batch-info-item">
+            <label>Current Vessel</label>
+            <span id="batchCurrentVessel" class="batch-value">--</span>
+          </div>
+          <div class="batch-info-item">
+            <label>Status</label>
+            <span id="batchStatus" class="batch-value status-badge">--</span>
+          </div>
+          <div class="batch-info-item">
+            <label>Running COGS</label>
+            <span id="batchRunningCOGS" class="batch-value cogs-value">$0.00</span>
+          </div>
+        </div>
+      </div>
+      
+      <!-- SECTION 2: TURN 1 -->
+      <div id="turn1Section" class="brewer-section turn-section">
+        <div class="section-header" onclick="toggleSection('turn1Content')">
+          <h3>🍺 TURN 1</h3>
+          <span id="turn1Status" class="turn-status">Not Started</span>
+          <span class="collapse-icon">▼</span>
+        </div>
+        
+        <div id="turn1Content" class="section-content">
+          <!-- Turn 1 Controls -->
+          <div class="turn-controls">
+            <div class="control-group">
+              <label>Brewer:</label>
+              <select id="turn1Brewer" onchange="updateTurn1ButtonState()" style="padding:8px;border:1px solid #ddd;border-radius:4px;min-width:150px;">
+                <option value="">-- Select Brewer --</option>
+              </select>
+            </div>
+            <div class="control-group">
+              <label>Timer:</label>
+              <span id="turn1Timer" class="timer-display">00:00:00</span>
+              <button id="turn1StartBtn" onclick="startTurn1Timer()" class="btn btn-sm btn-success">▶ Start</button>
+              <button id="turn1StopBtn" onclick="stopTurn1Timer()" class="btn btn-sm btn-warning" style="display:none;">⏸ Pause</button>
+            </div>
+            <div class="control-group">
+              <label>Transfer To:</label>
+              <select id="turn1Vessel" onchange="updateTurn1ButtonState()" style="padding:8px;border:1px solid #ddd;border-radius:4px;min-width:150px;">
+                <option value="">-- Select FV/LT --</option>
+              </select>
+            </div>
+          </div>
+          
+          <!-- Turn 1 Ingredients -->
+          <div class="ingredients-section">
+            <h4>Turn 1 Ingredients</h4>
+            <table class="ingredients-table">
+              <thead>
+                <tr>
+                  <th>Ingredient</th>
+                  <th>Category</th>
+                  <th>Recipe</th>
+                  <th>Actual</th>
+                  <th>Unit</th>
+                  <th>On Hand</th>
+                </tr>
+              </thead>
+              <tbody id="turn1IngredientsBody">
+                <tr><td colspan="6" style="text-align:center;padding:20px;color:#999;">Loading...</td></tr>
+              </tbody>
+            </table>
+          </div>
+          
+          <!-- Turn 1 Complete Button -->
+          <div class="turn-complete-section">
+            <button id="turn1CompleteBtn" onclick="completeTurn1()" class="btn btn-primary btn-lg" disabled>
+              ✅ Complete Turn 1 + Transfer to FV/LT
+            </button>
+            <p class="help-text">Depletes Turn 1 materials, logs labor, updates vessel status</p>
+          </div>
+          
+          <!-- Turn 1 Completed Info -->
+          <div id="turn1CompletedInfo" class="completed-info" style="display:none;">
+            <div class="completed-badge">✅ TURN 1 COMPLETE</div>
+            <div class="completed-details">
+              <span>Brewer: <strong id="turn1CompletedBrewer"></strong></span>
+              <span>Hours: <strong id="turn1CompletedHours"></strong></span>
+              <span>Vessel: <strong id="turn1CompletedVessel"></strong></span>
+              <span>Time: <strong id="turn1CompletedTime"></strong></span>
+            </div>
+          </div>
+        </div>
+      </div>
+      
+      <!-- SECTION 3: TURN 2 -->
+      <div id="turn2Section" class="brewer-section turn-section">
+        <div class="section-header" onclick="toggleSection('turn2Content')">
+          <h3>🍺 TURN 2</h3>
+          <span id="turn2Status" class="turn-status">Waiting for Turn 1</span>
+          <span class="collapse-icon">▼</span>
+        </div>
+        
+        <div id="turn2Content" class="section-content">
+          <!-- No Turn 2 Option -->
+          <div class="no-turn2-option">
+            <label>
+              <input type="checkbox" id="noTurn2Checkbox" onchange="toggleNoTurn2()">
+              No Turn 2 for this batch (single turn brew)
+            </label>
+          </div>
+          
+          <!-- Turn 2 Controls -->
+          <div id="turn2Controls">
+            <div class="turn-controls">
+              <div class="control-group">
+                <label>Brewer:</label>
+                <select id="turn2Brewer" onchange="updateTurn2ButtonState()" style="padding:8px;border:1px solid #ddd;border-radius:4px;min-width:150px;">
+                  <option value="">-- Select Brewer --</option>
+                </select>
+              </div>
+              <div class="control-group">
+                <label>Timer:</label>
+                <span id="turn2Timer" class="timer-display">00:00:00</span>
+                <button id="turn2StartBtn" onclick="startTurn2Timer()" class="btn btn-sm btn-success">▶ Start</button>
+                <button id="turn2StopBtn" onclick="stopTurn2Timer()" class="btn btn-sm btn-warning" style="display:none;">⏸ Pause</button>
+              </div>
+              <div class="control-group">
+                <label>Transfer To:</label>
+                <span id="turn2VesselDisplay">Same as Turn 1</span>
+              </div>
+            </div>
+            
+            <!-- Turn 2 Ingredients -->
+            <div class="ingredients-section">
+              <h4>Turn 2 Ingredients</h4>
+              <table class="ingredients-table">
+                <thead>
+                  <tr>
+                    <th>Ingredient</th>
+                    <th>Category</th>
+                    <th>Recipe</th>
+                    <th>Actual</th>
+                    <th>Unit</th>
+                    <th>On Hand</th>
+                  </tr>
+                </thead>
+                <tbody id="turn2IngredientsBody">
+                  <tr><td colspan="6" style="text-align:center;padding:20px;color:#999;">Waiting for Turn 1...</td></tr>
+                </tbody>
+              </table>
+            </div>
+            
+            <!-- Turn 2 Complete Button -->
+            <div class="turn-complete-section">
+              <button id="turn2CompleteBtn" onclick="completeTurn2()" class="btn btn-primary btn-lg" disabled>
+                ✅ Complete Turn 2 + Transfer to FV/LT
+              </button>
+              <p class="help-text">Depletes Turn 2 materials, logs labor, status → Fermenting</p>
+            </div>
+          </div>
+          
+          <!-- Turn 2 Completed Info -->
+          <div id="turn2CompletedInfo" class="completed-info" style="display:none;">
+            <div class="completed-badge">✅ TURN 2 COMPLETE</div>
+            <div class="completed-details">
+              <span>Brewer: <strong id="turn2CompletedBrewer"></strong></span>
+              <span>Hours: <strong id="turn2CompletedHours"></strong></span>
+              <span>Time: <strong id="turn2CompletedTime"></strong></span>
+            </div>
+          </div>
+          
+          <!-- No Turn 2 Completed Info -->
+          <div id="noTurn2CompletedInfo" class="completed-info" style="display:none;">
+            <div class="completed-badge">ℹ️ SINGLE TURN BREW</div>
+            <p>This batch was brewed in a single turn.</p>
+          </div>
+        </div>
+      </div>
+      
+      <!-- SECTION 4: CELLAR TASKS (Phase 2C - placeholder) -->
+      <div id="cellarTasksSection" class="brewer-section locked">
+        <div class="section-header">
+          <h3>📋 Cellar Tasks</h3>
+          <span class="lock-message">🔒 Unlocks after brewing complete</span>
+        </div>
+      </div>
+      
+      <!-- SECTION 5: PACKAGING (Phase 2E - placeholder) -->
+      <div id="packagingSection" class="brewer-section locked">
+        <div class="section-header">
+          <h3>📦 Packaging</h3>
+          <span class="lock-message">🔒 Unlocks after all cellar tasks complete</span>
+        </div>
+      </div>
+      
+      <!-- SECTION 6: SEND IT (Phase 2F - placeholder) -->
+      <div id="sendItSection" class="brewer-section locked" style="display:none;">
+        <!-- Only renders when ready -->
+      </div>
+      
+    </div>
+    <div class="modal-footer" style="padding:16px;border-top:1px solid #e5e7eb;display:flex;justify-content:flex-end;gap:12px;">
+      <button onclick="printBrewerSheet()" class="btn btn-secondary">🖨️ Print</button>
+      <button onclick="closeBrewerSheet()" class="btn btn-secondary">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- Loading Overlay -->
+<div id="loadingOverlay" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:9999;justify-content:center;align-items:center;">
+  <div style="background:white;padding:24px;border-radius:8px;text-align:center;box-shadow:0 4px 20px rgba(0,0,0,0.3);">
+    <div class="spinner" style="width:40px;height:40px;border:4px solid #f3f3f3;border-top:4px solid #8B0000;border-radius:50%;animation:spin 1s linear infinite;margin:0 auto 16px;"></div>
+    <p class="loading-message" style="margin:0;font-size:16px;color:#333;">Loading...</p>
+  </div>
+</div>
+
 </body>
 </html>
