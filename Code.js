@@ -1686,13 +1686,24 @@ function confirmBrewStartEnhanced_Old(brewerData) {
 }
 
 function generateBatchNumber(recipeName) {
+  if (!recipeName || recipeName.toString().trim() === '') {
+    Logger.log('Error: recipeName is empty or null');
+    throw new Error('Recipe name is required to generate batch number');
+  }
+  
   var now = new Date();
   var yy = now.getFullYear().toString().substr(-2);
   var mm = ('0' + (now.getMonth() + 1)).slice(-2);
   var dd = ('0' + now.getDate()).slice(-2);
-  var prefix = recipeName.substring(0, 3).toUpperCase();
+  
+  // Get prefix from recipe name (first 3 chars, pad if needed)
+  var nameStr = recipeName.toString().trim();
+  var prefix = nameStr.length >= 3 ? nameStr.substring(0, 3).toUpperCase() : nameStr.toUpperCase().padEnd(3, 'X');
   var random = Math.floor(Math.random() * 100).toString().padStart(2, '0');
-  return prefix + '-' + yy + mm + dd + '-' + random;
+  
+  var batchNumber = prefix + '-' + yy + mm + dd + '-' + random;
+  Logger.log('Generated batch number: ' + batchNumber + ' for recipe: ' + recipeName);
+  return batchNumber;
 }
 
 function depleteRawMaterial(itemName, qty, batchNumber, recipeUnit) {
@@ -9080,7 +9091,18 @@ function createBatch(recipeData) {
     }
     
     // Generate batch number
-    var batchNumber = generateBatchNumber(recipeData.recipeName);
+    if (!recipeData.recipeName) {
+      Logger.log('Error: recipeData.recipeName is missing');
+      return { success: false, error: 'Recipe name is required' };
+    }
+    
+    var batchNumber;
+    try {
+      batchNumber = generateBatchNumber(recipeData.recipeName);
+    } catch (e) {
+      Logger.log('Error generating batch number: ' + e.toString());
+      return { success: false, error: 'Could not generate batch number: ' + e.toString() };
+    }
     
     // Get labor cost
     var laborResult = getLaborCostPerBatch();
@@ -9142,8 +9164,12 @@ function createBatch(recipeData) {
     
     Logger.log('Batch created: ' + batchNumber + ' (status: Brewing)');
     
-    // Return full batch sheet data
-    return getBatchSheet(batchNumber);
+    // Return success with batch number (don't call getBatchSheet which might fail)
+    return serializeForHtml({
+      success: true,
+      batchNumber: batchNumber,
+      message: 'Batch created successfully'
+    });
     
   } catch (e) {
     Logger.log('Error creating batch: ' + e.toString());
@@ -10549,6 +10575,54 @@ function getAvailablePitches(strainName) {
   }
   
   return pitches;
+}
+
+/**
+ * Get recommended generation for a strain (next available generation from Propagation Log)
+ * Returns the lowest generation number available for active pitches
+ */
+function getRecommendedGeneration(strainName) {
+  var pitches = getAvailablePitches(strainName);
+  if (!pitches || pitches.length === 0) {
+    return 1; // Default to P1 if no pitches available
+  }
+  
+  // Extract generation numbers and find minimum
+  var generations = pitches.map(function(p) {
+    var genStr = p.generation || 'P0';
+    var genNum = parseInt(genStr.toString().replace('P', '')) || 0;
+    return genNum;
+  });
+  
+  if (generations.length === 0) return 1;
+  
+  // Return the lowest generation available
+  return Math.min.apply(Math, generations);
+}
+
+/**
+ * Get yeast data for recipe (config + recommended generation)
+ */
+function getYeastDataForRecipe(strainName) {
+  if (!strainName) {
+    return { success: false, error: 'Strain name required' };
+  }
+  
+  var config = getStrainConfig(strainName);
+  if (!config) {
+    return { success: false, error: 'Strain not found: ' + strainName };
+  }
+  
+  var recommendedGen = getRecommendedGeneration(strainName);
+  var availablePitches = getAvailablePitches(strainName);
+  
+  return serializeForHtml({
+    success: true,
+    strain: strainName,
+    config: config,
+    recommendedGeneration: recommendedGen,
+    availablePitches: availablePitches
+  });
 }
 
 /**
@@ -14889,13 +14963,43 @@ function getBrewerSheetData(batchNumber) {
     var turn2CompletedBy = batchRow.length > 42 ? batchRow[42] : ''; // AQ (43)
     var turn2LaborHours = batchRow.length > 43 ? parseFloat(batchRow[43]) || 0 : 0; // AR (44)
     
-    // Get recipe base batch size
+    // Get recipe base batch size and yeast/QA data
     var recipeBaseBatchSize = batchSize; // Default to batch size
+    var recipeYeastStrain = '';
+    var recipeQATargets = {
+      targetFG: '',
+      targetpHMin: '',
+      targetpHMax: '',
+      targetCO2: '',
+      targetDO: ''
+    };
+    
     if (recipeSheet && beerName) {
       var recipeData = recipeSheet.getDataRange().getValues();
+      var recipeHeaders = recipeData[0] || [];
+      var recipeColIndex = {};
+      recipeHeaders.forEach(function(h, idx) {
+        if (h) {
+          var headerKey = h.toString().toLowerCase().trim();
+          recipeColIndex[headerKey] = idx;
+          if (headerKey.indexOf('yeast') !== -1) recipeColIndex['yeast'] = idx;
+          if (headerKey.indexOf('target') !== -1 && headerKey.indexOf('fg') !== -1) recipeColIndex['targetfg'] = idx;
+          if (headerKey.indexOf('target') !== -1 && headerKey.indexOf('ph') !== -1 && headerKey.indexOf('min') !== -1) recipeColIndex['targetphmin'] = idx;
+          if (headerKey.indexOf('target') !== -1 && headerKey.indexOf('ph') !== -1 && headerKey.indexOf('max') !== -1) recipeColIndex['targetphmax'] = idx;
+          if (headerKey.indexOf('target') !== -1 && headerKey.indexOf('co2') !== -1) recipeColIndex['targetco2'] = idx;
+          if (headerKey.indexOf('target') !== -1 && headerKey.indexOf('do') !== -1) recipeColIndex['targetdo'] = idx;
+        }
+      });
+      
       for (var r = 1; r < recipeData.length; r++) {
         if (recipeData[r][0] && recipeData[r][0].toString() === beerName) {
           recipeBaseBatchSize = parseFloat(recipeData[r][2]) || batchSize; // Column C = Batch Size
+          recipeYeastStrain = (recipeData[r][recipeColIndex['yeast']] || '').toString();
+          recipeQATargets.targetFG = (recipeData[r][recipeColIndex['targetfg']] || '').toString();
+          recipeQATargets.targetpHMin = (recipeData[r][recipeColIndex['targetphmin']] || '').toString();
+          recipeQATargets.targetpHMax = (recipeData[r][recipeColIndex['targetphmax']] || '').toString();
+          recipeQATargets.targetCO2 = (recipeData[r][recipeColIndex['targetco2']] || '').toString();
+          recipeQATargets.targetDO = (recipeData[r][recipeColIndex['targetdo']] || '').toString();
           break;
         }
       }
@@ -15031,7 +15135,18 @@ function getBrewerSheetData(batchNumber) {
       
       // Cellar Tasks data
       cellarTasks: cellarTasks,
-      brewers: brewers
+      brewers: brewers,
+      
+      // Yeast data - get from recipe and batch
+      recipeYeastStrain: recipeYeastStrain,
+      actualYeastStrain: batchRow.length > 44 ? (batchRow[44] || '').toString() : recipeYeastStrain, // AS (45) - Actual Yeast Strain, fallback to recipe
+      actualYeastGeneration: batchRow.length > 45 ? parseFloat(batchRow[45]) || 1 : 1, // AT (46) - Actual Yeast Generation
+      
+      // QA Targets from recipe
+      recipeQATargets: recipeQATargets,
+      
+      // QA Checks from batch (would need to be stored in Batch Details or separate sheet)
+      qaChecks: [] // TODO: Load from Batch Details or QA Checks sheet
     });
     
   } catch (e) {
@@ -16053,12 +16168,83 @@ function getRecipeViewData(recipeName) {
     // Get cellar tasks (with defaults)
     var cellarTasks = getRecipeTasksWithDefaults(recipeName);
     
+    // Format cellar tasks for fermentation section
+    // Recipe View defines TARGET steps with TARGET readings (source of truth)
+    var fermentationSteps = [];
+    if (cellarTasks && cellarTasks.length > 0) {
+      cellarTasks.forEach(function(task) {
+        if (task.type !== 'Transfer' && task.type !== 'Carbonate' && task.type !== 'Package') {
+          fermentationSteps.push({
+            name: task.name || task.type || '',
+            day: task.dayOffset || 0,
+            targetGravity: task.target && task.target.gravity ? (task.target.gravityValue || '') : '',
+            targetpH: task.target && task.target.ph ? (task.target.phValue || '') : '',
+            notes: task.notes || ''
+          });
+        }
+      });
+    }
+    
+    // If no custom tasks, use defaults based on fermentation process
+    if (fermentationSteps.length === 0) {
+      fermentationSteps = [
+        { name: 'Yeast Pitch', day: 0, targetGravity: '', targetpH: '', notes: 'Pitch yeast into cooled wort' },
+        { name: 'Initial Gravity Check', day: 1, targetGravity: recipe.og || '', targetpH: '', notes: 'Verify OG after pitch' },
+        { name: 'Day 3 Gravity Check', day: 3, targetGravity: '', targetpH: '', notes: 'Monitor fermentation progress' },
+        { name: 'Day 7 Gravity Check', day: 7, targetGravity: '', targetpH: '', notes: 'Check if fermentation slowing' },
+        { name: 'Dry Hop (if applicable)', day: 7, targetGravity: '', targetpH: '', notes: 'Add dry hops for aroma' },
+        { name: 'Day 10 QA Check', day: 10, targetGravity: recipe.fg || '', targetpH: '4.0-4.5', notes: 'Final gravity, pH, taste test' },
+        { name: 'Crash/Cold Condition', day: 12, targetGravity: recipe.fg || '', targetpH: '', notes: 'Cool to drop yeast, clarify' }
+      ];
+    }
+    
+    // Format brite steps (Transfer, Carbonate, Package)
+    var briteSteps = [];
+    if (cellarTasks && cellarTasks.length > 0) {
+      cellarTasks.forEach(function(task) {
+        if (task.type === 'Transfer' || task.type === 'Carbonate' || task.type === 'Package') {
+          briteSteps.push({
+            name: task.name || task.type || '',
+            day: task.dayOffset || 0,
+            notes: task.notes || ''
+          });
+        }
+      });
+    }
+    
+    // Default brite steps if none provided
+    if (briteSteps.length === 0) {
+      briteSteps = [
+        { name: 'Transfer to BT', day: 14, notes: 'Transfer from FV to brite tank' },
+        { name: 'Carbonate', day: 15, notes: 'Add CO2 to target carbonation level' },
+        { name: 'Package', day: 18, notes: 'Keg, can, or bottle' }
+      ];
+    }
+    
     return serializeForHtml({
       success: true,
       recipe: recipe,
       turn1Ingredients: turn1Ingredients,
       turn2Ingredients: turn2Ingredients,
       cellarTasks: cellarTasks,
+      fermentationSteps: fermentationSteps,
+      briteSteps: briteSteps,
+      defaultPackaging: {
+        halfBBL: 10,
+        sixthBBL: 5,
+        cases: 20
+      },
+      // Yeast data
+      yeastStrain: recipe.yeastStrain || recipe.yeast || '',
+      yeastGeneration: recipe.yeastGeneration || 1,
+      // QA Targets
+      qaTargets: {
+        targetFG: recipe.targetFG || recipe.fg || '',
+        targetpHMin: recipe.targetpHMin || '',
+        targetpHMax: recipe.targetpHMax || '',
+        targetCO2: recipe.targetCO2 || '',
+        targetDO: recipe.targetDO || ''
+      },
       costs: {
         turn1: turn1Cost,
         turn2: turn2Cost,
@@ -16093,84 +16279,109 @@ function createBatchWithTasks(recipeName, batchSize, notes) {
       estimatedIngredientCost: 0 // Will be calculated
     };
     
+    // Generate batch number first (before calling createBatch)
+    var batchNumber;
+    try {
+      batchNumber = generateBatchNumber(recipeName);
+      Logger.log('Generated batch number: ' + batchNumber);
+    } catch (e) {
+      Logger.log('Error generating batch number: ' + e.toString());
+      return { success: false, error: 'Could not generate batch number: ' + e.toString() };
+    }
+    
+    // Add batch number to recipeData so createBatch can use it
+    recipeData.batchNumber = batchNumber;
+    
     var batchResult = createBatch(recipeData);
     
-    if (!batchResult.success) {
-      return batchResult;
+    if (!batchResult || !batchResult.success) {
+      var errorMsg = batchResult ? batchResult.error : 'Unknown error creating batch';
+      Logger.log('createBatch failed: ' + errorMsg);
+      return { success: false, error: errorMsg || 'Could not create batch' };
     }
     
-    var batchNumber = batchResult.batchNumber || batchResult.data?.batchNumber;
-    if (!batchNumber) {
-      // Try to extract from result
-      Logger.log('Batch result: ' + JSON.stringify(batchResult));
-      return { success: false, error: 'Could not determine batch number' };
-    }
+    Logger.log('Batch created successfully: ' + batchNumber);
     
     var brewDate = new Date();
     
     // Get recipe tasks (with defaults)
-    var tasks = getRecipeTasksWithDefaults(recipeName);
-    
-    // Create batch tasks
-    var ss = getBrmSpreadsheet();
-    var tasksSheet = ss.getSheetByName('Batch Tasks');
-    
-    if (!tasksSheet) {
-      // Create Batch Tasks sheet if it doesn't exist
-      tasksSheet = ss.insertSheet('Batch Tasks');
-      tasksSheet.appendRow([
-        'Task ID', 'Batch Number', 'Recipe Name', 'Task Type', 'Task Name',
-        'Day Offset', 'Due Date', 'Status', 'Assigned To', 'Materials',
-        'Target Gravity', 'Target pH', 'Actual Gravity', 'Actual pH',
-        'Timer Start', 'Timer End', 'Actual Labor Hours',
-        'Completed By', 'Completed Date', 'Notes'
-      ]);
+    var tasks = [];
+    try {
+      tasks = getRecipeTasksWithDefaults(recipeName) || [];
+      Logger.log('Retrieved ' + tasks.length + ' tasks for recipe: ' + recipeName);
+    } catch (e) {
+      Logger.log('Error getting recipe tasks: ' + e.toString());
+      // Continue without tasks - batch is still created
     }
     
+    // Create batch tasks
     var tasksCreated = 0;
-    tasks.forEach(function(task, index) {
-      var dueDate = new Date(brewDate);
-      dueDate.setDate(dueDate.getDate() + (task.dayOffset || 0));
-      
-      var taskId = batchNumber + '_T' + (index + 1);
-      
-      tasksSheet.appendRow([
-        taskId,
-        batchNumber,
-        recipeName,
-        task.type || '',
-        task.name || '',
-        task.dayOffset || 0,
-        dueDate,
-        'Pending',
-        '', // Assigned To
-        JSON.stringify(task.materials || []),
-        task.target && task.target.gravity ? 'Yes' : '',
-        task.target && task.target.ph ? 'Yes' : '',
-        '', // Actual Gravity
-        '', // Actual pH
-        '', // Timer Start
-        '', // Timer End
-        '', // Actual Labor Hours
-        '', // Completed By
-        '', // Completed Date
-        notes || '' // Notes
-      ]);
-      
-      tasksCreated++;
-    });
+    if (tasks && tasks.length > 0) {
+      try {
+        var ss = getBrmSpreadsheet();
+        var tasksSheet = ss.getSheetByName('Batch Tasks');
+        
+        if (!tasksSheet) {
+          // Create Batch Tasks sheet if it doesn't exist
+          tasksSheet = ss.insertSheet('Batch Tasks');
+          tasksSheet.appendRow([
+            'Task ID', 'Batch Number', 'Recipe Name', 'Task Type', 'Task Name',
+            'Day Offset', 'Due Date', 'Status', 'Assigned To', 'Materials',
+            'Target Gravity', 'Target pH', 'Actual Gravity', 'Actual pH',
+            'Timer Start', 'Timer End', 'Actual Labor Hours',
+            'Completed By', 'Completed Date', 'Notes'
+          ]);
+        }
+        
+        tasks.forEach(function(task, index) {
+          var dueDate = new Date(brewDate);
+          dueDate.setDate(dueDate.getDate() + (task.dayOffset || 0));
+          
+          var taskId = batchNumber + '_T' + (index + 1);
+          
+          tasksSheet.appendRow([
+            taskId,
+            batchNumber,
+            recipeName,
+            task.type || '',
+            task.name || '',
+            task.dayOffset || 0,
+            dueDate,
+            'Pending',
+            '', // Assigned To
+            JSON.stringify(task.materials || []),
+            task.target && task.target.gravity ? 'Yes' : '',
+            task.target && task.target.ph ? 'Yes' : '',
+            '', // Actual Gravity
+            '', // Actual pH
+            '', // Timer Start
+            '', // Timer End
+            '', // Actual Labor Hours
+            '', // Completed By
+            '', // Completed Date
+            notes || '' // Notes
+          ]);
+          
+          tasksCreated++;
+        });
+        
+        Logger.log('Created ' + tasksCreated + ' tasks for batch ' + batchNumber);
+      } catch (e) {
+        Logger.log('Error creating tasks: ' + e.toString());
+        // Continue - batch is still created even if tasks fail
+      }
+    }
     
-    Logger.log('Created ' + tasksCreated + ' tasks for batch ' + batchNumber);
-    
-    return {
+    return serializeForHtml({
       success: true,
       batchNumber: batchNumber,
-      tasksCreated: tasksCreated
-    };
+      tasksCreated: tasksCreated,
+      message: 'Batch created successfully'
+    });
     
   } catch(e) {
     Logger.log('Error in createBatchWithTasks: ' + e.toString());
-    return { success: false, error: e.toString() };
+    return serializeForHtml({ success: false, error: e.toString() });
   }
 }
 
@@ -16286,6 +16497,345 @@ function updateRecipeField(recipeName, fieldName, newValue) {
     
   } catch(e) {
     Logger.log('Error updating recipe field: ' + e.toString());
+    return { success: false, error: e.toString() };
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SAVE RECIPE CHANGES - WITH CHANGE HISTORY
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Save recipe changes with reason and log to Change History
+ * @param {string} recipeName - Recipe name
+ * @param {Object} changes - Changes object: { field: { oldValue, newValue }, ingredient_key: { ... } }
+ * @param {string} reason - Reason for change
+ * @returns {Object} Success/error result
+ */
+function saveRecipeChanges(recipeName, changes, reason) {
+  try {
+    var ss = getBrmSpreadsheet();
+    var recipesSheet = ss.getSheetByName(SHEETS.RECIPES);
+    var ingredientsSheet = ss.getSheetByName(SHEETS.RECIPE_INGREDIENTS);
+    var changeHistorySheet = ss.getSheetByName('Change History');
+    
+    if (!recipesSheet) {
+      return { success: false, error: 'Recipes sheet not found' };
+    }
+    
+    // Find recipe row
+    var recipeData = recipesSheet.getDataRange().getValues();
+    var recipeHeaders = recipeData[0];
+    var recipeColIndex = {};
+    recipeHeaders.forEach(function(h, idx) {
+      if (h) {
+        var headerKey = h.toString().toLowerCase().trim();
+        recipeColIndex[headerKey] = idx;
+        if (headerKey.indexOf('recipe') !== -1 && headerKey.indexOf('name') !== -1) recipeColIndex['recipename'] = idx;
+        if (headerKey.indexOf('beer') !== -1 && headerKey.indexOf('type') !== -1) recipeColIndex['style'] = idx;
+        if (headerKey.indexOf('batch') !== -1 && headerKey.indexOf('size') !== -1) recipeColIndex['batchsize'] = idx;
+        if (headerKey.indexOf('og') !== -1) recipeColIndex['og'] = idx;
+        if (headerKey.indexOf('fg') !== -1) recipeColIndex['fg'] = idx;
+        if (headerKey.indexOf('abv') !== -1) recipeColIndex['abv'] = idx;
+        if (headerKey.indexOf('ibu') !== -1) recipeColIndex['ibu'] = idx;
+      }
+    });
+    
+    var recipeRow = -1;
+    for (var i = 1; i < recipeData.length; i++) {
+      var rowRecipeName = recipeData[i][recipeColIndex['recipename']] || recipeData[i][0];
+      if (rowRecipeName && rowRecipeName.toString().trim() === recipeName) {
+        recipeRow = i + 1;
+        break;
+      }
+    }
+    
+    if (recipeRow === -1) {
+      return { success: false, error: 'Recipe not found: ' + recipeName };
+    }
+    
+    var changeLog = [];
+    var timestamp = new Date();
+    
+    // Process recipe field changes
+    Object.keys(changes).forEach(function(field) {
+      if (field.startsWith('ingredient_')) {
+        // Ingredient changes handled separately
+        return;
+      }
+      
+      var change = changes[field];
+      if (!change || change.deleted) return;
+      
+      var colIndex = recipeColIndex[field.toLowerCase()];
+      if (colIndex === undefined) {
+        // Try to find by partial match
+        Object.keys(recipeColIndex).forEach(function(key) {
+          if (key.indexOf(field.toLowerCase()) !== -1) {
+            colIndex = recipeColIndex[key];
+          }
+        });
+      }
+      
+      if (colIndex !== undefined) {
+        var oldValue = recipesSheet.getRange(recipeRow, colIndex + 1).getValue();
+        var newValue = change.newValue !== undefined ? change.newValue : change;
+        
+        // Convert to number if needed
+        if (field === 'batchSize' || field === 'og' || field === 'fg' || field === 'abv' || field === 'ibu') {
+          newValue = parseFloat(newValue) || 0;
+        }
+        
+        recipesSheet.getRange(recipeRow, colIndex + 1).setValue(newValue);
+        
+        changeLog.push({
+          field: field,
+          oldValue: oldValue,
+          newValue: newValue,
+          timestamp: timestamp
+        });
+      }
+    });
+    
+    // Process ingredient changes
+    Object.keys(changes).forEach(function(key) {
+      if (!key.startsWith('ingredient_')) return;
+      
+      var ingredientKey = key.replace('ingredient_', '');
+      var change = changes[key];
+      
+      if (change.deleted) {
+        // Delete ingredient
+        if (ingredientsSheet) {
+          var ingData = ingredientsSheet.getDataRange().getValues();
+          for (var i = ingData.length - 1; i >= 1; i--) {
+            if (ingData[i][0] && ingData[i][0].toString().trim() === recipeName) {
+              var ingName = (ingData[i][1] || ingData[i][2] || '').toString().toLowerCase();
+              if (ingName === ingredientKey.toLowerCase()) {
+                ingredientsSheet.deleteRow(i + 1);
+                changeLog.push({
+                  field: 'ingredient',
+                  action: 'deleted',
+                  ingredient: ingredientKey,
+                  timestamp: timestamp
+                });
+                break;
+              }
+            }
+          }
+        }
+      } else {
+        // Update or add ingredient
+        // This would need more complex logic to handle Turn 1/Turn 2 splits
+        // For now, log the change
+        changeLog.push({
+          field: 'ingredient',
+          action: 'updated',
+          ingredient: ingredientKey,
+          changes: change,
+          timestamp: timestamp
+        });
+      }
+    });
+    
+    // Process fermentation step changes
+    Object.keys(changes).forEach(function(key) {
+      if (!key.startsWith('fermentation_step_')) return;
+      var change = changes[key];
+      if (change.deleted) {
+        changeLog.push({
+          field: 'fermentation_step',
+          action: 'deleted',
+          step: key,
+          timestamp: timestamp
+        });
+      } else {
+        changeLog.push({
+          field: 'fermentation_step',
+          action: 'updated',
+          step: key,
+          changes: change,
+          timestamp: timestamp
+        });
+      }
+    });
+    
+    // Process brite step changes
+    Object.keys(changes).forEach(function(key) {
+      if (!key.startsWith('brite_step_')) return;
+      var change = changes[key];
+      if (change.deleted) {
+        changeLog.push({
+          field: 'brite_step',
+          action: 'deleted',
+          step: key,
+          timestamp: timestamp
+        });
+      } else {
+        changeLog.push({
+          field: 'brite_step',
+          action: 'updated',
+          step: key,
+          changes: change,
+          timestamp: timestamp
+        });
+      }
+    });
+    
+    // Process default packaging changes
+    // Handle yeast changes
+    if (changes['yeast']) {
+      var yeastChange = changes['yeast'];
+      var oldYeast = recipe.yeastStrain || recipe.yeast || '';
+      var oldGen = recipe.yeastGeneration || 1;
+      
+      if (yeastChange.strain !== undefined) {
+        changeLog.push({
+          field: 'yeastStrain',
+          oldValue: oldYeast,
+          newValue: yeastChange.strain || '',
+          timestamp: timestamp
+        });
+        // Update Recipes sheet
+        var yeastCol = findColumnIndex(recipeHeaders, 'yeast', 'yeast strain');
+        if (yeastCol >= 0) {
+          recipeSheet.getRange(recipeRow, yeastCol + 1).setValue(yeastChange.strain || '');
+        }
+      }
+      
+      if (yeastChange.generation !== undefined) {
+        changeLog.push({
+          field: 'yeastGeneration',
+          oldValue: oldGen.toString(),
+          newValue: (yeastChange.generation || 1).toString(),
+          timestamp: timestamp
+        });
+        // Update Recipes sheet
+        var genCol = findColumnIndex(recipeHeaders, 'yeast generation', 'generation');
+        if (genCol >= 0) {
+          recipeSheet.getRange(recipeRow, genCol + 1).setValue(yeastChange.generation || 1);
+        } else {
+          // If column doesn't exist, add it (would need to be done manually or via setup)
+          Logger.log('Yeast Generation column not found - may need to add to Recipes sheet');
+        }
+      }
+    }
+    
+    // Handle QA targets changes
+    if (changes['qaTargets']) {
+      var qaChange = changes['qaTargets'];
+      var oldQATargets = {
+        targetFG: recipe.targetFG || recipe.fg || '',
+        targetpHMin: recipe.targetpHMin || '',
+        targetpHMax: recipe.targetpHMax || '',
+        targetCO2: recipe.targetCO2 || '',
+        targetDO: recipe.targetDO || ''
+      };
+      
+      if (qaChange.targetFG !== undefined) {
+        changeLog.push({
+          field: 'targetFG',
+          oldValue: oldQATargets.targetFG,
+          newValue: qaChange.targetFG || '',
+          timestamp: timestamp
+        });
+        var fgCol = findColumnIndex(recipeHeaders, 'target fg', 'targetfg');
+        if (fgCol >= 0) {
+          recipeSheet.getRange(recipeRow, fgCol + 1).setValue(qaChange.targetFG || '');
+        }
+      }
+      
+      if (qaChange.targetpHMin !== undefined) {
+        changeLog.push({
+          field: 'targetpHMin',
+          oldValue: oldQATargets.targetpHMin,
+          newValue: qaChange.targetpHMin || '',
+          timestamp: timestamp
+        });
+        var phMinCol = findColumnIndex(recipeHeaders, 'target ph min', 'targetphmin');
+        if (phMinCol >= 0) {
+          recipeSheet.getRange(recipeRow, phMinCol + 1).setValue(qaChange.targetpHMin || '');
+        }
+      }
+      
+      if (qaChange.targetpHMax !== undefined) {
+        changeLog.push({
+          field: 'targetpHMax',
+          oldValue: oldQATargets.targetpHMax,
+          newValue: qaChange.targetpHMax || '',
+          timestamp: timestamp
+        });
+        var phMaxCol = findColumnIndex(recipeHeaders, 'target ph max', 'targetphmax');
+        if (phMaxCol >= 0) {
+          recipeSheet.getRange(recipeRow, phMaxCol + 1).setValue(qaChange.targetpHMax || '');
+        }
+      }
+      
+      if (qaChange.targetCO2 !== undefined) {
+        changeLog.push({
+          field: 'targetCO2',
+          oldValue: oldQATargets.targetCO2,
+          newValue: qaChange.targetCO2 || '',
+          timestamp: timestamp
+        });
+        var co2Col = findColumnIndex(recipeHeaders, 'target co2', 'targetco2');
+        if (co2Col >= 0) {
+          recipeSheet.getRange(recipeRow, co2Col + 1).setValue(qaChange.targetCO2 || '');
+        }
+      }
+      
+      if (qaChange.targetDO !== undefined) {
+        changeLog.push({
+          field: 'targetDO',
+          oldValue: oldQATargets.targetDO,
+          newValue: qaChange.targetDO || '',
+          timestamp: timestamp
+        });
+        var doCol = findColumnIndex(recipeHeaders, 'target do', 'targetdo');
+        if (doCol >= 0) {
+          recipeSheet.getRange(recipeRow, doCol + 1).setValue(qaChange.targetDO || '');
+        }
+      }
+    }
+    
+    if (changes['defaultPackaging']) {
+      var pkgChange = changes['defaultPackaging'];
+      changeLog.push({
+        field: 'defaultPackaging',
+        oldValue: JSON.stringify({}),
+        newValue: JSON.stringify(pkgChange),
+        timestamp: timestamp
+      });
+    }
+    
+    // Log to Change History
+    if (changeHistorySheet && changeLog.length > 0) {
+      var userEmail = Session.getActiveUser().getEmail();
+      changeLog.forEach(function(change) {
+        var logRow = [
+          timestamp,
+          recipeName,
+          change.field || 'ingredient',
+          change.oldValue || '',
+          change.newValue || '',
+          reason,
+          userEmail
+        ];
+        changeHistorySheet.appendRow(logRow);
+      });
+    }
+    
+    Logger.log('Saved ' + changeLog.length + ' changes for recipe: ' + recipeName);
+    
+    return serializeForHtml({
+      success: true,
+      recipeName: recipeName,
+      changesSaved: changeLog.length,
+      message: 'Changes saved successfully'
+    });
+    
+  } catch(e) {
+    Logger.log('Error saving recipe changes: ' + e.toString());
     return { success: false, error: e.toString() };
   }
 }

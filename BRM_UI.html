@@ -2882,17 +2882,22 @@
     // RECIPE VIEW FUNCTIONS - Phase 2D
     // ═══════════════════════════════════════════════════════════════
     var currentRecipeData = null;
+    var recipeChanges = {}; // Track changes: { field: { oldValue, newValue } }
+    var recipeOriginalData = null; // Store original data for comparison
 
     function openRecipeView(recipeName) {
       showLoading('Loading recipe...');
+      recipeChanges = {}; // Reset changes
       
       google.script.run
         .withSuccessHandler(function(data) {
           hideLoading();
           if (data && data.success) {
             currentRecipeData = data;
+            recipeOriginalData = JSON.parse(JSON.stringify(data)); // Deep copy
             renderRecipeView(data);
             document.getElementById('recipeViewModal').style.display = 'flex';
+            document.getElementById('recipeSaveBtn').style.display = 'none'; // Hide save button initially
           } else {
             showToast('Error: ' + (data ? data.error : 'Unknown error'), 'error');
           }
@@ -2907,25 +2912,200 @@
     function renderRecipeView(data) {
       var recipe = data.recipe;
       
-      // Header
+      // Header - Make editable
       document.getElementById('recipeViewName').textContent = recipe.name;
-      document.getElementById('recipeViewBatchSizeHeader').textContent = recipe.batchSize || 60;
-      document.getElementById('recipeViewStyleHeader').textContent = recipe.style || '--';
+      updateEditableField('recipeViewBatchSizeHeader', recipe.batchSize || 60, 'batchSize', 'number', ' BBL');
+      updateEditableField('recipeViewStyleHeader', recipe.style || '--', 'style', 'text', '');
       document.getElementById('recipeViewCOGSHeader').textContent = (data.costs.perBBL || 0).toFixed(0);
-      document.getElementById('recipeViewOGHeader').textContent = recipe.og || '--';
-      document.getElementById('recipeViewFGHeader').textContent = recipe.fg || '--';
-      document.getElementById('recipeViewABVHeader').textContent = recipe.abv || '--';
-      document.getElementById('recipeViewIBUHeader').textContent = recipe.ibu || '--';
+      updateEditableField('recipeViewOGHeader', recipe.og || '--', 'og', 'number', '°P');
+      updateEditableField('recipeViewFGHeader', recipe.fg || '--', 'fg', 'number', '°P');
+      updateEditableField('recipeViewABVHeader', recipe.abv || '--', 'abv', 'number', '%');
+      updateEditableField('recipeViewIBUHeader', recipe.ibu || '--', 'ibu', 'number', '');
       
-      // Ingredients - Combined table
+      // Ingredients - Combined table (editable)
       renderRecipeIngredientsCombined(data.turn1Ingredients, data.turn2Ingredients);
       
-      // Brew Day
-      document.getElementById('recipeViewEfficiency').textContent = '85'; // Default, can be made editable
-      document.getElementById('recipeViewPreBoilGravity').textContent = '12'; // Default
+      // Brew Day - Make editable
+      updateEditableField('recipeViewEfficiency', '85', 'targetEfficiency', 'number', '%');
+      updateEditableField('recipeViewPreBoilGravity', '12', 'targetPreBoilGravity', 'number', '°P');
       
-      // Default Packaging
-      document.getElementById('recipeViewDefaultPackaging').textContent = '10 Half BBL, 5 Sixth BBL, 20 Cases';
+      // Fermentation & Cellar - Render editable table
+      renderFermentationSteps(data.cellarTasks || []);
+      
+      // Load yeast strains dropdown and config
+      loadYeastStrainsDropdown('recipeViewYeastStrain', data.yeastStrain || '');
+      if (data.yeastStrain) {
+        loadYeastConfig(data.yeastStrain);
+      }
+      
+      // Load QA targets
+      if (data.qaTargets) {
+        document.getElementById('recipeViewTargetFG').value = data.qaTargets.targetFG || '';
+        document.getElementById('recipeViewTargetpHMin').value = data.qaTargets.targetpHMin || '';
+        document.getElementById('recipeViewTargetpHMax').value = data.qaTargets.targetpHMax || '';
+        document.getElementById('recipeViewTargetCO2').value = data.qaTargets.targetCO2 || '';
+        document.getElementById('recipeViewTargetDO').value = data.qaTargets.targetDO || '';
+      }
+      
+      // Brite & Packaging - Render editable table
+      renderBriteSteps(data.briteSteps || []);
+      
+      // Default Packaging - Set values
+      document.getElementById('pkgHalfBBL').value = data.defaultPackaging ? (data.defaultPackaging.halfBBL || 10) : 10;
+      document.getElementById('pkgSixthBBL').value = data.defaultPackaging ? (data.defaultPackaging.sixthBBL || 5) : 5;
+      document.getElementById('pkgCases').value = data.defaultPackaging ? (data.defaultPackaging.cases || 20) : 20;
+    }
+    
+    function renderFermentationSteps(steps) {
+      var tbody = document.getElementById('recipeViewFermentationBody');
+      tbody.innerHTML = '';
+      
+      // Default steps if none provided - based on actual fermentation process
+      if (!steps || steps.length === 0) {
+        steps = [
+          { name: 'Yeast Pitch', day: 0, targetGravity: '', targetpH: '', notes: 'Pitch yeast into cooled wort' },
+          { name: 'Initial Gravity Check', day: 1, targetGravity: '', targetpH: '', notes: 'Verify OG after pitch' },
+          { name: 'Day 3 Gravity Check', day: 3, targetGravity: '', targetpH: '', notes: 'Monitor fermentation progress' },
+          { name: 'Day 7 Gravity Check', day: 7, targetGravity: '', targetpH: '', notes: 'Check if fermentation slowing' },
+          { name: 'Dry Hop (if applicable)', day: 7, targetGravity: '', targetpH: '', notes: 'Add dry hops for aroma' },
+          { name: 'Day 10 QA Check', day: 10, targetGravity: '', targetpH: '', notes: 'Final gravity, pH, taste test' },
+          { name: 'Crash/Cold Condition', day: 12, targetGravity: '', targetpH: '', notes: 'Cool to drop yeast, clarify' }
+        ];
+      }
+      
+      steps.forEach(function(step, index) {
+        var stepKey = 'ferm_' + index;
+        var targetGravity = step.targetGravity || step.target && step.target.gravity ? 'Yes' : '';
+        var targetpH = step.targetpH || step.target && step.target.ph ? 'Yes' : '';
+        var row = '<tr id="ferm_row_' + index + '" data-step-key="' + stepKey + '">' +
+          '<td style="padding:10px;"><input type="text" class="step-name-input" value="' + escapeHtml(step.name || '') + '" data-field="name" style="width:100%;padding:4px;border:1px solid #ddd;border-radius:4px;" onblur="updateStepField(this, \'' + stepKey + '\', \'fermentation\')"></td>' +
+          '<td style="padding:10px;text-align:center;">Day <input type="number" class="step-day-input" value="' + (step.day || step.dayOffset || 0) + '" data-field="day" min="0" style="width:60px;padding:4px;border:1px solid #ddd;border-radius:4px;text-align:center;" onblur="updateStepField(this, \'' + stepKey + '\', \'fermentation\')"></td>' +
+          '<td style="padding:10px;text-align:center;"><input type="text" class="step-target-input" value="' + escapeHtml(targetGravity) + '" data-field="targetGravity" placeholder="Target °P" style="width:70px;padding:4px;border:1px solid #ddd;border-radius:4px;text-align:center;" onblur="updateStepField(this, \'' + stepKey + '\', \'fermentation\')"> °P</td>' +
+          '<td style="padding:10px;text-align:center;"><input type="text" class="step-target-input" value="' + escapeHtml(targetpH) + '" data-field="targetpH" placeholder="Target pH" style="width:70px;padding:4px;border:1px solid #ddd;border-radius:4px;text-align:center;" onblur="updateStepField(this, \'' + stepKey + '\', \'fermentation\')"> pH</td>' +
+          '<td style="padding:10px;"><input type="text" class="step-notes-input" value="' + escapeHtml(step.notes || '') + '" data-field="notes" placeholder="Notes" style="width:100%;padding:4px;border:1px solid #ddd;border-radius:4px;" onblur="updateStepField(this, \'' + stepKey + '\', \'fermentation\')"></td>' +
+          '<td style="padding:10px;text-align:center;"><button onclick="deleteStep(\'' + stepKey + '\', \'fermentation\')" style="background:#dc3545;color:white;border:none;border-radius:4px;padding:4px 8px;cursor:pointer;font-size:12px;">X</button></td>' +
+          '</tr>';
+        tbody.innerHTML += row;
+      });
+    }
+    
+    function renderBriteSteps(steps) {
+      var tbody = document.getElementById('recipeViewBriteBody');
+      tbody.innerHTML = '';
+      
+      // Default steps if none provided
+      if (!steps || steps.length === 0) {
+        steps = [
+          { name: 'Transfer to BT', day: 14, notes: '' },
+          { name: 'Carbonate', day: 15, notes: '' },
+          { name: 'Package', day: 18, notes: '' }
+        ];
+      }
+      
+      steps.forEach(function(step, index) {
+        var stepKey = 'brite_' + index;
+        var row = '<tr id="brite_row_' + index + '" data-step-key="' + stepKey + '">' +
+          '<td style="padding:10px;"><input type="text" class="step-name-input" value="' + escapeHtml(step.name || '') + '" data-field="name" style="width:100%;padding:4px;border:1px solid #ddd;border-radius:4px;" onblur="updateStepField(this, \'' + stepKey + '\', \'brite\')"></td>' +
+          '<td style="padding:10px;text-align:center;">Day <input type="number" class="step-day-input" value="' + (step.day || step.dayOffset || 0) + '" data-field="day" min="0" style="width:60px;padding:4px;border:1px solid #ddd;border-radius:4px;text-align:center;" onblur="updateStepField(this, \'' + stepKey + '\', \'brite\')"></td>' +
+          '<td style="padding:10px;"><input type="text" class="step-notes-input" value="' + escapeHtml(step.notes || '') + '" data-field="notes" placeholder="Notes" style="width:100%;padding:4px;border:1px solid #ddd;border-radius:4px;" onblur="updateStepField(this, \'' + stepKey + '\', \'brite\')"></td>' +
+          '<td style="padding:10px;text-align:center;"><button onclick="deleteStep(\'' + stepKey + '\', \'brite\')" style="background:#dc3545;color:white;border:none;border-radius:4px;padding:4px 8px;cursor:pointer;font-size:12px;">X</button></td>' +
+          '</tr>';
+        tbody.innerHTML += row;
+      });
+    }
+    
+    function updateStepField(input, stepKey, section) {
+      var field = input.getAttribute('data-field');
+      var value = input.value;
+      
+      // Track change
+      var changeKey = section + '_step_' + stepKey;
+      if (!recipeChanges[changeKey]) {
+        recipeChanges[changeKey] = {};
+      }
+      recipeChanges[changeKey][field] = value;
+      
+      showSaveButton();
+    }
+    
+    function addFermentationStep() {
+      var tbody = document.getElementById('recipeViewFermentationBody');
+      var newIndex = tbody.querySelectorAll('tr').length;
+      var stepKey = 'ferm_new_' + newIndex;
+      var row = '<tr id="ferm_row_new_' + newIndex + '" data-step-key="' + stepKey + '">' +
+        '<td style="padding:10px;"><input type="text" class="step-name-input" value="" data-field="name" placeholder="Step name" style="width:100%;padding:4px;border:1px solid #ddd;border-radius:4px;" onblur="updateStepField(this, \'' + stepKey + '\', \'fermentation\')"></td>' +
+        '<td style="padding:10px;text-align:center;">Day <input type="number" class="step-day-input" value="0" data-field="day" min="0" style="width:60px;padding:4px;border:1px solid #ddd;border-radius:4px;text-align:center;" onblur="updateStepField(this, \'' + stepKey + '\', \'fermentation\')"></td>' +
+        '<td style="padding:10px;text-align:center;"><input type="text" class="step-target-input" value="" data-field="targetGravity" placeholder="Target °P" style="width:70px;padding:4px;border:1px solid #ddd;border-radius:4px;text-align:center;" onblur="updateStepField(this, \'' + stepKey + '\', \'fermentation\')"> °P</td>' +
+        '<td style="padding:10px;text-align:center;"><input type="text" class="step-target-input" value="" data-field="targetpH" placeholder="Target pH" style="width:70px;padding:4px;border:1px solid #ddd;border-radius:4px;text-align:center;" onblur="updateStepField(this, \'' + stepKey + '\', \'fermentation\')"> pH</td>' +
+        '<td style="padding:10px;"><input type="text" class="step-notes-input" value="" data-field="notes" placeholder="Notes" style="width:100%;padding:4px;border:1px solid #ddd;border-radius:4px;" onblur="updateStepField(this, \'' + stepKey + '\', \'fermentation\')"></td>' +
+        '<td style="padding:10px;text-align:center;"><button onclick="deleteStep(\'' + stepKey + '\', \'fermentation\')" style="background:#dc3545;color:white;border:none;border-radius:4px;padding:4px 8px;cursor:pointer;font-size:12px;">X</button></td>' +
+        '</tr>';
+      tbody.innerHTML += row;
+      showSaveButton();
+    }
+    
+    function addBriteStep() {
+      var tbody = document.getElementById('recipeViewBriteBody');
+      var newIndex = tbody.querySelectorAll('tr').length;
+      var stepKey = 'brite_new_' + newIndex;
+      var row = '<tr id="brite_row_new_' + newIndex + '" data-step-key="' + stepKey + '">' +
+        '<td style="padding:10px;"><input type="text" class="step-name-input" value="" data-field="name" placeholder="Step name" style="width:100%;padding:4px;border:1px solid #ddd;border-radius:4px;" onblur="updateStepField(this, \'' + stepKey + '\', \'brite\')"></td>' +
+        '<td style="padding:10px;text-align:center;">Day <input type="number" class="step-day-input" value="0" data-field="day" min="0" style="width:60px;padding:4px;border:1px solid #ddd;border-radius:4px;text-align:center;" onblur="updateStepField(this, \'' + stepKey + '\', \'brite\')"></td>' +
+        '<td style="padding:10px;"><input type="text" class="step-notes-input" value="" data-field="notes" placeholder="Notes" style="width:100%;padding:4px;border:1px solid #ddd;border-radius:4px;" onblur="updateStepField(this, \'' + stepKey + '\', \'brite\')"></td>' +
+        '<td style="padding:10px;text-align:center;"><button onclick="deleteStep(\'' + stepKey + '\', \'brite\')" style="background:#dc3545;color:white;border:none;border-radius:4px;padding:4px 8px;cursor:pointer;font-size:12px;">X</button></td>' +
+        '</tr>';
+      tbody.innerHTML += row;
+      showSaveButton();
+    }
+    
+    function deleteStep(stepKey, section) {
+      var row = document.querySelector('[data-step-key="' + stepKey + '"]');
+      if (row) {
+        row.remove();
+        var changeKey = section + '_step_' + stepKey;
+        if (!recipeChanges[changeKey]) {
+          recipeChanges[changeKey] = {};
+        }
+        recipeChanges[changeKey].deleted = true;
+        showSaveButton();
+      }
+    }
+    
+    function updatePackagingDefault() {
+      var halfBBL = document.getElementById('pkgHalfBBL').value;
+      var sixthBBL = document.getElementById('pkgSixthBBL').value;
+      var cases = document.getElementById('pkgCases').value;
+      
+      if (!recipeChanges['defaultPackaging']) {
+        recipeChanges['defaultPackaging'] = {};
+      }
+      recipeChanges['defaultPackaging'].halfBBL = parseInt(halfBBL) || 0;
+      recipeChanges['defaultPackaging'].sixthBBL = parseInt(sixthBBL) || 0;
+      recipeChanges['defaultPackaging'].cases = parseInt(cases) || 0;
+      
+      showSaveButton();
+    }
+    
+    function updateEditableField(elementId, value, field, type, suffix) {
+      var element = document.getElementById(elementId);
+      if (!element) return;
+      
+      element.className = 'recipe-editable';
+      element.setAttribute('data-field', field);
+      element.setAttribute('data-type', type);
+      element.setAttribute('data-suffix', suffix);
+      element.onclick = function() { startRecipeEdit(this); };
+      
+      var displayValue = value;
+      if (suffix && type === 'number') {
+        displayValue = value + suffix;
+      } else if (suffix) {
+        displayValue = value + ' ' + suffix;
+      }
+      element.textContent = displayValue;
+      element.style.cssText = 'cursor:pointer;padding:2px 4px;border-radius:3px;';
+      element.onmouseover = function() { this.style.background = 'rgba(255,255,255,0.2)'; };
+      element.onmouseout = function() { this.style.background = ''; };
     }
     
     function renderRecipeIngredientsCombined(turn1Ingredients, turn2Ingredients) {
@@ -2934,10 +3114,15 @@
       
       // Combine ingredients by name
       var ingredientMap = {};
+      var ingredientIndex = 0;
       
-      // Process Turn 1
+      // Process Turn 1 - FILTER OUT YEAST (yeast is in its own block)
       if (turn1Ingredients) {
         turn1Ingredients.forEach(function(ing) {
+          var category = (ing.category || '').toLowerCase();
+          // Skip yeast - it's handled in the YEAST block
+          if (category.indexOf('yeast') !== -1) return;
+          
           var name = (ing.name || ing.ingredient || '').toString();
           var key = name.toLowerCase();
           if (!ingredientMap[key]) {
@@ -2945,7 +3130,9 @@
               name: name,
               turn1: 0,
               turn2: 0,
-              unit: ing.unit || 'lb'
+              unit: ing.unit || 'lb',
+              category: ing.category || '',
+              index: ingredientIndex++
             };
           }
           ingredientMap[key].turn1 = (ing.quantity || 0);
@@ -2953,9 +3140,13 @@
         });
       }
       
-      // Process Turn 2
+      // Process Turn 2 - FILTER OUT YEAST (yeast is in its own block)
       if (turn2Ingredients) {
         turn2Ingredients.forEach(function(ing) {
+          var category = (ing.category || '').toLowerCase();
+          // Skip yeast - it's handled in the YEAST block
+          if (category.indexOf('yeast') !== -1) return;
+          
           var name = (ing.name || ing.ingredient || '').toString();
           var key = name.toLowerCase();
           if (!ingredientMap[key]) {
@@ -2963,7 +3154,9 @@
               name: name,
               turn1: 0,
               turn2: 0,
-              unit: ing.unit || 'lb'
+              unit: ing.unit || 'lb',
+              category: ing.category || '',
+              index: ingredientIndex++
             };
           }
           ingredientMap[key].turn2 = (ing.quantity || 0);
@@ -2971,22 +3164,413 @@
         });
       }
       
-      // Render table
+      // Render table with editable cells
       Object.keys(ingredientMap).forEach(function(key) {
         var ing = ingredientMap[key];
         var total = ing.turn1 + ing.turn2;
-        var row = '<tr style="border-bottom:1px solid #eee;">' +
-          '<td style="padding:10px;">' + escapeHtml(ing.name) + '</td>' +
-          '<td style="padding:10px;text-align:right;">' + (ing.turn1 > 0 ? ing.turn1.toFixed(2) + ' ' + ing.unit : '--') + '</td>' +
-          '<td style="padding:10px;text-align:right;">' + (ing.turn2 > 0 ? ing.turn2.toFixed(2) + ' ' + ing.unit : '--') + '</td>' +
-          '<td style="padding:10px;text-align:right;font-weight:600;">' + total.toFixed(2) + ' ' + ing.unit + '</td>' +
+        var rowId = 'ing_row_' + ing.index;
+        var row = '<tr id="' + rowId + '" style="border-bottom:1px solid #eee;" data-ingredient-key="' + escapeHtml(key) + '">' +
+          '<td style="padding:10px;"><input type="text" class="ingredient-name-input" value="' + escapeHtml(ing.name) + '" data-field="name" style="width:100%;padding:4px;border:1px solid #ddd;border-radius:4px;" onblur="updateIngredientField(this, \'' + key + '\')"></td>' +
+          '<td style="padding:10px;text-align:right;"><input type="number" class="ingredient-qty-input" value="' + ing.turn1.toFixed(2) + '" data-field="turn1" data-unit="' + escapeHtml(ing.unit) + '" step="0.01" style="width:80px;padding:4px;border:1px solid #ddd;border-radius:4px;text-align:right;" onblur="updateIngredientField(this, \'' + key + '\')"> ' + escapeHtml(ing.unit) + '</td>' +
+          '<td style="padding:10px;text-align:right;"><input type="number" class="ingredient-qty-input" value="' + ing.turn2.toFixed(2) + '" data-field="turn2" data-unit="' + escapeHtml(ing.unit) + '" step="0.01" style="width:80px;padding:4px;border:1px solid #ddd;border-radius:4px;text-align:right;" onblur="updateIngredientField(this, \'' + key + '\')"> ' + escapeHtml(ing.unit) + '</td>' +
+          '<td style="padding:10px;text-align:right;font-weight:600;" class="ingredient-total" data-unit="' + escapeHtml(ing.unit) + '">' + total.toFixed(2) + ' ' + escapeHtml(ing.unit) + '</td>' +
+          '<td style="padding:10px;text-align:center;"><button onclick="deleteIngredientRow(\'' + key + '\')" style="background:#dc3545;color:white;border:none;border-radius:4px;padding:4px 8px;cursor:pointer;font-size:12px;">X</button></td>' +
           '</tr>';
         tbody.innerHTML += row;
       });
       
       if (tbody.innerHTML === '') {
-        tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;padding:20px;color:#999;">No ingredients</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;padding:20px;color:#999;">No ingredients</td></tr>';
       }
+    }
+    
+    function updateIngredientField(input, key) {
+      var field = input.getAttribute('data-field');
+      var value = input.value;
+      var row = input.closest('tr');
+      var totalCell = row.querySelector('.ingredient-total');
+      
+      if (field === 'turn1' || field === 'turn2') {
+        var turn1Input = row.querySelector('[data-field="turn1"]');
+        var turn2Input = row.querySelector('[data-field="turn2"]');
+        var turn1 = parseFloat(turn1Input.value) || 0;
+        var turn2 = parseFloat(turn2Input.value) || 0;
+        var total = turn1 + turn2;
+        var unit = input.getAttribute('data-unit') || 'lb';
+        totalCell.textContent = total.toFixed(2) + ' ' + unit;
+        
+        // Track change
+        if (!recipeChanges['ingredient_' + key]) {
+          recipeChanges['ingredient_' + key] = {};
+        }
+        recipeChanges['ingredient_' + key][field] = parseFloat(value) || 0;
+      } else if (field === 'name') {
+        if (!recipeChanges['ingredient_' + key]) {
+          recipeChanges['ingredient_' + key] = {};
+        }
+        recipeChanges['ingredient_' + key].name = value;
+      }
+      
+      // Show save button when ingredient changes
+      showSaveButton();
+    }
+    
+    function addIngredientRow() {
+      var tbody = document.getElementById('recipeViewIngredientsBody');
+      var newIndex = tbody.querySelectorAll('tr').length;
+      var key = 'new_' + newIndex;
+      var row = '<tr id="ing_row_' + newIndex + '" style="border-bottom:1px solid #eee;" data-ingredient-key="' + key + '">' +
+        '<td style="padding:10px;"><input type="text" class="ingredient-name-input" value="" data-field="name" placeholder="Ingredient name" style="width:100%;padding:4px;border:1px solid #ddd;border-radius:4px;" onblur="updateIngredientField(this, \'' + key + '\')"></td>' +
+        '<td style="padding:10px;text-align:right;"><input type="number" class="ingredient-qty-input" value="0" data-field="turn1" data-unit="lb" step="0.01" style="width:80px;padding:4px;border:1px solid #ddd;border-radius:4px;text-align:right;" onblur="updateIngredientField(this, \'' + key + '\')"> lb</td>' +
+        '<td style="padding:10px;text-align:right;"><input type="number" class="ingredient-qty-input" value="0" data-field="turn2" data-unit="lb" step="0.01" style="width:80px;padding:4px;border:1px solid #ddd;border-radius:4px;text-align:right;" onblur="updateIngredientField(this, \'' + key + '\')"> lb</td>' +
+        '<td style="padding:10px;text-align:right;font-weight:600;" class="ingredient-total" data-unit="lb">0.00 lb</td>' +
+        '<td style="padding:10px;text-align:center;"><button onclick="deleteIngredientRow(\'' + key + '\')" style="background:#dc3545;color:white;border:none;border-radius:4px;padding:4px 8px;cursor:pointer;font-size:12px;">X</button></td>' +
+        '</tr>';
+      tbody.innerHTML += row;
+      showSaveButton();
+    }
+    
+    function deleteIngredientRow(key) {
+      var row = document.querySelector('[data-ingredient-key="' + key + '"]');
+      if (row) {
+        row.remove();
+        if (!recipeChanges['ingredient_' + key]) {
+          recipeChanges['ingredient_' + key] = {};
+        }
+        recipeChanges['ingredient_' + key].deleted = true;
+        showSaveButton();
+      }
+    }
+    
+    function startRecipeEdit(element) {
+      if (element.tagName === 'INPUT') return;
+      
+      var field = element.getAttribute('data-field');
+      var type = element.getAttribute('data-type') || 'text';
+      var suffix = element.getAttribute('data-suffix') || '';
+      var currentValue = element.textContent.trim();
+      
+      // Remove suffix for editing
+      if (suffix && currentValue.endsWith(suffix)) {
+        currentValue = currentValue.slice(0, -suffix.length).trim();
+      }
+      
+      var input = document.createElement('input');
+      input.type = type === 'number' ? 'number' : 'text';
+      input.value = currentValue;
+      input.className = 'recipe-edit-input';
+      input.setAttribute('data-field', field);
+      input.setAttribute('data-type', type);
+      input.setAttribute('data-suffix', suffix);
+      input.setAttribute('data-original-value', currentValue);
+      input.setAttribute('data-element-id', element.id);
+      input.style.cssText = 'padding:2px 6px;border:2px solid #8B0000;border-radius:4px;background:white;color:#333;font-size:inherit;width:80px;';
+      
+      input.addEventListener('blur', function() { saveRecipeFieldEdit(input); });
+      input.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter') input.blur();
+        else if (e.key === 'Escape') cancelRecipeFieldEdit(input);
+      });
+      
+      element.parentNode.replaceChild(input, element);
+      input.focus();
+      input.select();
+    }
+    
+    function saveRecipeFieldEdit(input) {
+      var field = input.getAttribute('data-field');
+      var type = input.getAttribute('data-type');
+      var suffix = input.getAttribute('data-suffix') || '';
+      var elementId = input.getAttribute('data-element-id');
+      var originalValue = input.getAttribute('data-original-value');
+      var newValue = input.value.trim();
+      
+      // Convert to number if needed
+      if (type === 'number') {
+        newValue = parseFloat(newValue) || 0;
+      }
+      
+      // Check if changed
+      var oldValue = originalValue;
+      if (type === 'number') {
+        oldValue = parseFloat(oldValue) || 0;
+      }
+      
+      if (newValue.toString() !== oldValue.toString()) {
+        // Track change
+        recipeChanges[field] = {
+          oldValue: oldValue,
+          newValue: newValue
+        };
+        showSaveButton();
+      }
+      
+      // Update display
+      var span = document.createElement('span');
+      span.id = elementId;
+      span.className = 'recipe-editable';
+      span.setAttribute('data-field', field);
+      span.setAttribute('data-type', type);
+      span.setAttribute('data-suffix', suffix);
+      span.onclick = function() { startRecipeEdit(this); };
+      
+      var displayValue = newValue;
+      if (suffix && type === 'number') {
+        displayValue = newValue + suffix;
+      } else if (suffix) {
+        displayValue = newValue + ' ' + suffix;
+      }
+      span.textContent = displayValue;
+      span.style.cssText = 'cursor:pointer;padding:2px 4px;border-radius:3px;';
+      span.onmouseover = function() { this.style.background = 'rgba(255,255,255,0.2)'; };
+      span.onmouseout = function() { this.style.background = ''; };
+      
+      input.parentNode.replaceChild(span, input);
+      
+      // Update currentRecipeData
+      if (currentRecipeData && currentRecipeData.recipe) {
+        currentRecipeData.recipe[field] = newValue;
+      }
+    }
+    
+    function cancelRecipeFieldEdit(input) {
+      var elementId = input.getAttribute('data-element-id');
+      var originalValue = input.getAttribute('data-original-value');
+      var field = input.getAttribute('data-field');
+      var type = input.getAttribute('data-type');
+      var suffix = input.getAttribute('data-suffix') || '';
+      
+      var span = document.createElement('span');
+      span.id = elementId;
+      span.className = 'recipe-editable';
+      span.setAttribute('data-field', field);
+      span.setAttribute('data-type', type);
+      span.setAttribute('data-suffix', suffix);
+      span.onclick = function() { startRecipeEdit(this); };
+      span.textContent = originalValue + (suffix ? (type === 'number' ? suffix : ' ' + suffix) : '');
+      span.style.cssText = 'cursor:pointer;padding:2px 4px;border-radius:3px;';
+      span.onmouseover = function() { this.style.background = 'rgba(255,255,255,0.2)'; };
+      span.onmouseout = function() { this.style.background = ''; };
+      
+      input.parentNode.replaceChild(span, input);
+    }
+    
+    function showSaveButton() {
+      var saveBtn = document.getElementById('recipeSaveBtn');
+      if (saveBtn && Object.keys(recipeChanges).length > 0) {
+        saveBtn.style.display = 'inline-block';
+      }
+    }
+    
+    function saveRecipeChanges() {
+      // Check if there are any changes
+      var hasChanges = false;
+      for (var key in recipeChanges) {
+        if (recipeChanges.hasOwnProperty(key)) {
+          hasChanges = true;
+          break;
+        }
+      }
+      
+      if (!hasChanges) {
+        showToast('No changes to save', 'info');
+        return;
+      }
+      
+      // Show "Reason for Change" modal
+      showReasonForChangeModal();
+    }
+    
+    function showReasonForChangeModal() {
+      // Remove existing modal if present
+      var existing = document.getElementById('reasonForChangeModal');
+      if (existing) {
+        existing.remove();
+      }
+      
+      // Create modal HTML
+      var modalHtml = '<div id="reasonForChangeModal" style="position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);display:flex;justify-content:center;align-items:center;z-index:20000;">' +
+        '<div style="background:white;padding:24px;border-radius:8px;max-width:500px;width:90%;box-shadow:0 4px 20px rgba(0,0,0,0.3);">' +
+        '<h3 style="margin-top:0;margin-bottom:10px;color:#8B0000;font-size:18px;">Reason for Change (Required)</h3>' +
+        '<p style="margin:0 0 15px 0;color:#666;font-size:14px;">Please explain why you\'re making this change. This is required for tracking.</p>' +
+        '<textarea id="changeReasonInput" rows="3" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:4px;font-size:14px;box-sizing:border-box;resize:vertical;min-height:80px;" placeholder="e.g., Adjusted grain bill per Richard\'s recommendation"></textarea>' +
+        '<div style="margin-top:16px;text-align:right;">' +
+        '<button onclick="cancelSaveRecipeChanges()" style="padding:8px 16px;margin-right:8px;border:1px solid #ddd;background:white;border-radius:4px;cursor:pointer;font-size:14px;">Cancel</button>' +
+        '<button onclick="confirmSaveRecipeChanges()" style="padding:8px 16px;background:#8B0000;color:white;border:none;border-radius:4px;cursor:pointer;font-size:14px;font-weight:600;">Save Changes</button>' +
+        '</div>' +
+        '</div>' +
+        '</div>';
+      
+      // Add modal to page
+      document.body.insertAdjacentHTML('beforeend', modalHtml);
+      
+      // Focus the input
+      setTimeout(function() {
+        var input = document.getElementById('changeReasonInput');
+        if (input) {
+          input.focus();
+        }
+      }, 100);
+    }
+
+    function cancelSaveRecipeChanges() {
+      var modal = document.getElementById('reasonForChangeModal');
+      if (modal) {
+        modal.remove();
+      }
+    }
+
+    function confirmSaveRecipeChanges() {
+      var reasonInput = document.getElementById('changeReasonInput');
+      if (!reasonInput) {
+        showToast('Error: Reason input not found', 'error');
+        return;
+      }
+
+      var reason = reasonInput.value.trim();
+      if (!reason) {
+        // Show error and keep modal open
+        reasonInput.style.borderColor = '#dc3545';
+        reasonInput.focus();
+        showToast('Please enter a reason for the change.', 'error');
+        return;
+      }
+      
+      // Remove error styling
+      reasonInput.style.borderColor = '#ddd';
+      
+      // Close modal
+      var modal = document.getElementById('reasonForChangeModal');
+      if (modal) {
+        modal.remove();
+      }
+      
+      // Save changes with reason
+      showLoading('Saving changes...');
+      
+      google.script.run
+        .withSuccessHandler(function(result) {
+          hideLoading();
+          if (result && result.success) {
+            showToast('Changes saved successfully', 'success');
+            // Reset changes
+            recipeChanges = {};
+            var saveBtn = document.getElementById('recipeSaveBtn');
+            if (saveBtn) {
+              saveBtn.style.display = 'none';
+            }
+            // Refresh the view
+            if (currentRecipeData && currentRecipeData.recipe) {
+              openRecipeView(currentRecipeData.recipe.name);
+            }
+          } else {
+            showToast('Error: ' + (result ? result.error : 'Unknown error'), 'error');
+          }
+        })
+        .withFailureHandler(function(error) {
+          hideLoading();
+          showToast('Error: ' + (error.message || error.toString()), 'error');
+        })
+        .saveRecipeChanges(currentRecipeData.recipe.name, recipeChanges, reason);
+    }
+    
+    // Legacy function name for compatibility
+    function showChangeReasonModal(callback) {
+      showReasonForChangeModal();
+      // Store callback if provided (for future use)
+      if (callback) {
+        window.changeReasonCallback = callback;
+      }
+    }
+    
+    function submitChangeReason() {
+      confirmSaveRecipeChanges();
+    }
+    
+    function cancelChangeReason() {
+      cancelSaveRecipeChanges();
+    }
+    
+    // Modal for Edit Recipe modal (different context)
+    function showReasonForChangeModalForEditRecipe() {
+      // Remove existing modal if present
+      var existing = document.getElementById('reasonForChangeModalEditRecipe');
+      if (existing) {
+        existing.remove();
+      }
+      
+      // Create modal HTML
+      var modalHtml = '<div id="reasonForChangeModalEditRecipe" style="position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);display:flex;justify-content:center;align-items:center;z-index:20000;">' +
+        '<div style="background:white;padding:24px;border-radius:8px;max-width:500px;width:90%;box-shadow:0 4px 20px rgba(0,0,0,0.3);">' +
+        '<h3 style="margin-top:0;margin-bottom:10px;color:#8B0000;font-size:18px;">Reason for Change (Required)</h3>' +
+        '<p style="margin:0 0 15px 0;color:#666;font-size:14px;">Please explain why you\'re making this change. This is required for tracking.</p>' +
+        '<textarea id="changeReasonInputEditRecipe" rows="3" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:4px;font-size:14px;box-sizing:border-box;resize:vertical;min-height:80px;" placeholder="e.g., Adjusted grain bill per Richard\'s recommendation"></textarea>' +
+        '<div style="margin-top:16px;text-align:right;">' +
+        '<button onclick="cancelSaveRecipeChangesEditRecipe()" style="padding:8px 16px;margin-right:8px;border:1px solid #ddd;background:white;border-radius:4px;cursor:pointer;font-size:14px;">Cancel</button>' +
+        '<button onclick="confirmSaveRecipeChangesEditRecipe()" style="padding:8px 16px;background:#8B0000;color:white;border:none;border-radius:4px;cursor:pointer;font-size:14px;font-weight:600;">Save Changes</button>' +
+        '</div>' +
+        '</div>' +
+        '</div>';
+      
+      // Add modal to page
+      document.body.insertAdjacentHTML('beforeend', modalHtml);
+      
+      // Focus the input
+      setTimeout(function() {
+        var input = document.getElementById('changeReasonInputEditRecipe');
+        if (input) {
+          input.focus();
+        }
+      }, 100);
+    }
+    
+    function cancelSaveRecipeChangesEditRecipe() {
+      var modal = document.getElementById('reasonForChangeModalEditRecipe');
+      if (modal) {
+        modal.remove();
+      }
+    }
+    
+    function confirmSaveRecipeChangesEditRecipe() {
+      var reasonInput = document.getElementById('changeReasonInputEditRecipe');
+      if (!reasonInput) {
+        showToast('Error: Reason input not found', 'error');
+        return;
+      }
+
+      var reason = reasonInput.value.trim();
+      if (!reason) {
+        // Show error and keep modal open
+        reasonInput.style.borderColor = '#dc3545';
+        reasonInput.focus();
+        showToast('Please enter a reason for the change.', 'error');
+        return;
+      }
+      
+      // Remove error styling
+      reasonInput.style.borderColor = '#ddd';
+      
+      // Close modal
+      var modal = document.getElementById('reasonForChangeModalEditRecipe');
+      if (modal) {
+        modal.remove();
+      }
+      
+      // Set the reason in the editChangeReason field and continue with save
+      var editReasonField = document.getElementById('editChangeReason');
+      if (editReasonField) {
+        editReasonField.value = reason;
+      }
+      
+      // Now call the actual save function
+      saveRecipeChangesFromEditModal(reason);
+    }
+    
+    function viewRecipeChangeHistory() {
+      if (!currentRecipeData) return;
+      var recipeName = currentRecipeData.recipe.name;
+      // Open change history - would need to implement this
+      showToast('Change History for ' + recipeName, 'info');
     }
 
     function brewThisFromRecipe() {
@@ -3004,29 +3588,30 @@
         .withSuccessHandler(function(result) {
           hideLoading();
           if (result && result.success) {
-            showToast('Batch ' + result.batchNumber + ' created!', 'success');
+            var batchNum = result.batchNumber || result.data?.batchNumber || 'Unknown';
+            showToast('Batch ' + batchNum + ' created!', 'success');
             closeRecipeView();
             // Open Brewer's Sheet
             setTimeout(function() {
-              openBrewerSheet(result.batchNumber);
+              openBrewerSheet(batchNum);
             }, 500);
           } else {
-            showToast('Error: ' + (result ? result.error : 'Unknown error'), 'error');
+            var errorMsg = result ? (result.error || 'Unknown error') : 'Failed to create batch';
+            showToast('Error: ' + errorMsg, 'error');
+            console.error('Batch creation error:', result);
           }
         })
         .withFailureHandler(function(error) {
           hideLoading();
-          showToast('Error: ' + error.message, 'error');
+          var errorMsg = error.message || error.toString() || 'Unknown error';
+          showToast('Error creating batch: ' + errorMsg, 'error');
+          console.error('Batch creation failure:', error);
         })
         .createBatchWithTasks(recipeName, batchSize, 'Created from Recipe View');
     }
     
-    function openEditRecipeSimple() {
-      if (!currentRecipeData) return;
-      var recipeName = currentRecipeData.recipe.name;
-      closeRecipeView();
-      openEditRecipe(recipeName);
-    }
+    // DEPRECATED: Edit Recipe modal removed - Recipe View is now fully editable
+    // function openEditRecipeSimple() removed - no longer needed
 
     function closeRecipeView() {
       document.getElementById('recipeViewModal').style.display = 'none';
@@ -4728,9 +5313,13 @@ function renderOpExCategories(categories) {
       // Combine Turn 1 and Turn 2 ingredients
       var ingredientMap = {};
       
-      // Process Turn 1
+      // Process Turn 1 - FILTER OUT YEAST (yeast is in its own block)
       if (data.turn1Ingredients) {
         data.turn1Ingredients.forEach(function(ing) {
+          var category = (ing.category || '').toLowerCase();
+          // Skip yeast - it's handled in the YEAST block
+          if (category.indexOf('yeast') !== -1) return;
+          
           var name = (ing.name || ing.ingredient || '').toString();
           var key = name.toLowerCase();
           if (!ingredientMap[key]) {
@@ -4753,9 +5342,13 @@ function renderOpExCategories(categories) {
         });
       }
       
-      // Process Turn 2
+      // Process Turn 2 - FILTER OUT YEAST (yeast is in its own block)
       if (data.turn2Ingredients) {
         data.turn2Ingredients.forEach(function(ing) {
+          var category = (ing.category || '').toLowerCase();
+          // Skip yeast - it's handled in the YEAST block
+          if (category.indexOf('yeast') !== -1) return;
+          
           var name = (ing.name || ing.ingredient || '').toString();
           var key = name.toLowerCase();
           if (!ingredientMap[key]) {
@@ -4896,8 +5489,308 @@ function renderOpExCategories(categories) {
       // Set FV
       document.getElementById('fermentationFV').textContent = data.currentVessel || '--';
       
+      // Load yeast data
+      var recipeYeast = data.recipeYeastStrain || '';
+      var actualYeast = data.actualYeastStrain || recipeYeast;
+      
+      if (actualYeast) {
+        document.getElementById('brewerSheetYeastStrainDisplay').textContent = actualYeast;
+        
+        // Load yeast config
+        google.script.run
+          .withSuccessHandler(function(yeastData) {
+            if (yeastData && yeastData.success) {
+              var config = yeastData.config;
+              document.getElementById('brewerSheetYeastCellCount').textContent = (config.targetCellCount || 0) + ' billion';
+              document.getElementById('brewerSheetYeastMaxGen').textContent = config.maxGenerations || '--';
+              document.getElementById('brewerSheetYeastConfig').style.display = 'block';
+              
+              // Load propagation batches
+              loadPropagationBatches(actualYeast, data.actualPropagationBatch || '');
+            }
+          })
+          .withFailureHandler(function(error) {
+            console.error('Error loading yeast config:', error);
+          })
+          .getYeastDataForRecipe(actualYeast);
+      }
+      
+      // Set generation and pitch date
+      if (data.actualYeastGeneration) {
+        document.getElementById('brewerSheetYeastGeneration').value = data.actualYeastGeneration;
+      }
+      if (data.yeastPitchDate) {
+        document.getElementById('brewerSheetYeastPitchDate').value = data.yeastPitchDate;
+      }
+      if (data.yeastPitched) {
+        document.getElementById('brewerSheetYeastPitched').checked = true;
+      }
+      
+      // Set target FG from recipe
+      if (data.recipeQATargets && data.recipeQATargets.targetFG) {
+        document.getElementById('brewerSheetTargetFG').textContent = data.recipeQATargets.targetFG;
+      }
+      
+      // Render QA checks table
+      renderQAChecks(data.qaChecks || [], data.recipeQATargets || {});
+      
       // Set checkboxes and dates based on batch status and data
       // This would need to be populated from Batch Details or Batch Tasks
+    }
+    
+    // Load propagation batches for a strain
+    function loadPropagationBatches(strainName, selectedBatch) {
+      google.script.run
+        .withSuccessHandler(function(pitches) {
+          var select = document.getElementById('brewerSheetYeastPropBatch');
+          if (!select) return;
+          
+          select.innerHTML = '<option value="">-- Select Batch --</option>';
+          
+          if (pitches && pitches.length > 0) {
+            pitches.forEach(function(pitch) {
+              var option = document.createElement('option');
+              option.value = pitch.pitchId;
+              option.textContent = pitch.pitchId + ' - Gen ' + pitch.generation + ' (' + (pitch.pitchesAvailable || 1) + ' available)';
+              if (selectedBatch && pitch.pitchId === selectedBatch) {
+                option.selected = true;
+                // Auto-set generation from selected pitch
+                document.getElementById('brewerSheetYeastGeneration').value = parseInt(pitch.generation.toString().replace('P', '')) || 1;
+              }
+              select.appendChild(option);
+            });
+          }
+        })
+        .withFailureHandler(function(error) {
+          console.error('Error loading propagation batches:', error);
+        })
+        .getAvailablePitches(strainName);
+    }
+    
+    // Load yeast strains into dropdown
+    function loadYeastStrainsDropdown(selectId, selectedValue) {
+      google.script.run
+        .withSuccessHandler(function(strains) {
+          var select = document.getElementById(selectId);
+          if (!select) return;
+          
+          select.innerHTML = '<option value="">-- Select Yeast Strain --</option>';
+          
+          if (strains && strains.length > 0) {
+            strains.forEach(function(strain) {
+              var option = document.createElement('option');
+              option.value = strain.name || strain;
+              option.textContent = strain.name || strain;
+              if (selectedValue && (strain.name === selectedValue || strain === selectedValue)) {
+                option.selected = true;
+              }
+              select.appendChild(option);
+            });
+          }
+        })
+        .withFailureHandler(function(error) {
+          console.error('Error loading yeast strains:', error);
+        })
+        .getActiveYeastStrains();
+    }
+    
+    // Load yeast config when strain is selected (Recipe View)
+    function loadYeastConfig(strainName) {
+      if (!strainName) {
+        strainName = document.getElementById('recipeViewYeastStrain').value;
+      }
+      
+      if (!strainName) {
+        document.getElementById('recipeViewYeastConfig').style.display = 'none';
+        return;
+      }
+      
+      google.script.run
+        .withSuccessHandler(function(data) {
+          if (data && data.success) {
+            var config = data.config;
+            document.getElementById('recipeViewYeastBase').textContent = config.baseYeast || '--';
+            document.getElementById('recipeViewYeastMaxGen').textContent = config.maxGenerations || '--';
+            document.getElementById('recipeViewYeastCellCount').textContent = (config.targetCellCount || 0) + ' billion';
+            document.getElementById('recipeViewYeastVolume').textContent = (config.targetVolume || 0) + ' gal';
+            document.getElementById('recipeViewYeastSingleUse').textContent = config.singleUseOnly ? 'Yes' : 'No';
+            document.getElementById('recipeViewYeastRecGen').textContent = 'P' + (data.recommendedGeneration || 1);
+            document.getElementById('recipeViewYeastNotes').textContent = config.notes || '--';
+            document.getElementById('recipeViewYeastConfig').style.display = 'block';
+            
+            // Track change
+            if (!recipeChanges.yeast) {
+              recipeChanges.yeast = {};
+            }
+            recipeChanges.yeast.strain = strainName;
+            showSaveButton();
+          }
+        })
+        .withFailureHandler(function(error) {
+          console.error('Error loading yeast config:', error);
+        })
+        .getYeastDataForRecipe(strainName);
+    }
+    
+    // Add yeast step (placeholder for future multi-yeast support)
+    function addYeastStep() {
+      // For now, just one yeast per recipe
+      showToast('One yeast strain per recipe. Select a strain from the dropdown.', 'info');
+    }
+    
+    // Update recipe QA targets
+    function updateRecipeQATarget() {
+      if (!recipeChanges.qaTargets) {
+        recipeChanges.qaTargets = {};
+      }
+      recipeChanges.qaTargets.targetFG = document.getElementById('recipeViewTargetFG').value;
+      recipeChanges.qaTargets.targetpHMin = document.getElementById('recipeViewTargetpHMin').value;
+      recipeChanges.qaTargets.targetpHMax = document.getElementById('recipeViewTargetpHMax').value;
+      recipeChanges.qaTargets.targetCO2 = document.getElementById('recipeViewTargetCO2').value;
+      recipeChanges.qaTargets.targetDO = document.getElementById('recipeViewTargetDO').value;
+      
+      showSaveButton();
+    }
+    
+    // Update brewer sheet yeast
+    function updateBrewerSheetYeast() {
+      var generation = document.getElementById('brewerSheetYeastGeneration').value;
+      var propBatch = document.getElementById('brewerSheetYeastPropBatch').value;
+      var pitchDate = document.getElementById('brewerSheetYeastPitchDate').value;
+      var pitched = document.getElementById('brewerSheetYeastPitched').checked;
+      
+      // Store in brewerSheetState for saving
+      if (!brewerSheetState.fermentation) {
+        brewerSheetState.fermentation = {};
+      }
+      brewerSheetState.fermentation.yeastGeneration = generation;
+      brewerSheetState.fermentation.propagationBatch = propBatch;
+      brewerSheetState.fermentation.pitchDate = pitchDate;
+      brewerSheetState.fermentation.yeastPitched = pitched;
+      
+      // If propagation batch changed, update generation
+      if (propBatch) {
+        var select = document.getElementById('brewerSheetYeastPropBatch');
+        var selectedOption = select.options[select.selectedIndex];
+        if (selectedOption && selectedOption.textContent) {
+          // Extract generation from option text (e.g., "PROP-2025-047 - Gen P3")
+          var genMatch = selectedOption.textContent.match(/Gen\s+P(\d+)/i);
+          if (genMatch) {
+            document.getElementById('brewerSheetYeastGeneration').value = genMatch[1];
+            brewerSheetState.fermentation.yeastGeneration = genMatch[1];
+          }
+        }
+      }
+    }
+    
+    // Render QA checks table
+    function renderQAChecks(checks, targets) {
+      var tbody = document.getElementById('brewerSheetQAChecksBody');
+      if (!tbody) return;
+      
+      tbody.innerHTML = '';
+      
+      if (!checks || checks.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;padding:20px;color:#999;">No QA checks yet. Click "+ Add QA Check" to add one.</td></tr>';
+        return;
+      }
+      
+      var targetFG = parseFloat(targets.targetFG) || 0;
+      var targetpHMin = parseFloat(targets.targetpHMin) || 0;
+      var targetpHMax = parseFloat(targets.targetpHMax) || 0;
+      
+      checks.forEach(function(check, index) {
+        var checkDate = check.date || '';
+        var checkGravity = check.gravity || '';
+        var checkpH = check.pH || '';
+        var checkCO2 = check.co2 || '';
+        var checkDO = check.do || '';
+        var checkNotes = check.notes || '';
+        
+        // Check if target is hit
+        var hitTarget = false;
+        var statusText = '';
+        if (targetFG > 0 && checkGravity) {
+          var gravity = parseFloat(checkGravity);
+          if (Math.abs(gravity - targetFG) <= 0.2) { // Within 0.2 °P
+            hitTarget = true;
+            statusText = '✓ HIT TARGET';
+          }
+        }
+        
+        var row = '<tr id="qa_check_' + index + '">' +
+          '<td style="padding:8px;text-align:center;font-weight:600;">' + (index + 1) + '</td>' +
+          '<td style="padding:8px;"><input type="date" class="qa-date-input" value="' + checkDate + '" data-index="' + index + '" style="width:100%;padding:4px;border:1px solid #ddd;border-radius:4px;"></td>' +
+          '<td style="padding:8px;"><input type="number" class="qa-gravity-input" step="0.1" value="' + checkGravity + '" data-index="' + index + '" onchange="checkQATarget(' + index + ')" style="width:100%;padding:4px;border:1px solid #ddd;border-radius:4px;"></td>' +
+          '<td style="padding:8px;"><input type="number" class="qa-ph-input" step="0.1" value="' + checkpH + '" data-index="' + index + '" style="width:100%;padding:4px;border:1px solid #ddd;border-radius:4px;"></td>' +
+          '<td style="padding:8px;"><input type="text" class="qa-co2-input" value="' + escapeHtml(checkCO2) + '" data-index="' + index + '" style="width:100%;padding:4px;border:1px solid #ddd;border-radius:4px;"></td>' +
+          '<td style="padding:8px;"><input type="text" class="qa-do-input" value="' + escapeHtml(checkDO) + '" data-index="' + index + '" style="width:100%;padding:4px;border:1px solid #ddd;border-radius:4px;"></td>' +
+          '<td style="padding:8px;"><input type="text" class="qa-notes-input" value="' + escapeHtml(checkNotes) + '" data-index="' + index + '" style="width:100%;padding:4px;border:1px solid #ddd;border-radius:4px;"></td>' +
+          '<td style="padding:8px;text-align:center;font-weight:600;color:' + (hitTarget ? '#4CAF50' : '#999') + ';">' + statusText + '</td>' +
+          '<td style="padding:8px;text-align:center;"><button onclick="deleteQACheck(' + index + ')" style="background:#dc3545;color:white;border:none;border-radius:4px;padding:4px 8px;cursor:pointer;font-size:12px;">X</button></td>' +
+          '</tr>';
+        tbody.innerHTML += row;
+      });
+    }
+    
+    // Add new QA check
+    function addQACheck() {
+      if (!brewerSheetState.qaChecks) {
+        brewerSheetState.qaChecks = [];
+      }
+      
+      brewerSheetState.qaChecks.push({
+        date: '',
+        gravity: '',
+        pH: '',
+        co2: '',
+        do: '',
+        notes: ''
+      });
+      
+      var targets = brewerSheetState.batchData && brewerSheetState.batchData.recipeQATargets ? brewerSheetState.batchData.recipeQATargets : {};
+      renderQAChecks(brewerSheetState.qaChecks, targets);
+    }
+    
+    // Delete QA check
+    function deleteQACheck(index) {
+      if (brewerSheetState.qaChecks && brewerSheetState.qaChecks[index]) {
+        brewerSheetState.qaChecks.splice(index, 1);
+        var targets = brewerSheetState.batchData && brewerSheetState.batchData.recipeQATargets ? brewerSheetState.batchData.recipeQATargets : {};
+        renderQAChecks(brewerSheetState.qaChecks, targets);
+      }
+    }
+    
+    // Check if QA target is hit
+    function checkQATarget(index) {
+      var gravityInput = document.querySelector('#qa_check_' + index + ' .qa-gravity-input');
+      if (!gravityInput) return;
+      
+      var gravity = parseFloat(gravityInput.value);
+      var targetFG = parseFloat(document.getElementById('brewerSheetTargetFG').textContent);
+      
+      if (targetFG > 0 && gravity) {
+        var hitTarget = Math.abs(gravity - targetFG) <= 0.2;
+        var statusCell = document.querySelector('#qa_check_' + index + ' td:nth-child(8)');
+        if (statusCell) {
+          if (hitTarget) {
+            statusCell.textContent = '✓ HIT TARGET';
+            statusCell.style.color = '#4CAF50';
+          } else {
+            statusCell.textContent = '';
+            statusCell.style.color = '#999';
+          }
+        }
+      }
+      
+      // Update brewerSheetState
+      if (!brewerSheetState.qaChecks) {
+        brewerSheetState.qaChecks = [];
+      }
+      if (!brewerSheetState.qaChecks[index]) {
+        brewerSheetState.qaChecks[index] = {};
+      }
+      brewerSheetState.qaChecks[index].gravity = gravityInput.value;
     }
     
     function renderBrewerSheetBriteTank(data) {
@@ -4960,6 +5853,33 @@ function renderOpExCategories(categories) {
         return;
       }
       
+      // Collect QA checks
+      var qaChecks = [];
+      var qaRows = document.querySelectorAll('#brewerSheetQAChecksBody tr');
+      qaRows.forEach(function(row, index) {
+        var dateInput = row.querySelector('.qa-date-input');
+        var gravityInput = row.querySelector('.qa-gravity-input');
+        var phInput = row.querySelector('.qa-ph-input');
+        var co2Input = row.querySelector('.qa-co2-input');
+        var doInput = row.querySelector('.qa-do-input');
+        var notesInput = row.querySelector('.qa-notes-input');
+        
+        if (dateInput || gravityInput || phInput) {
+          qaChecks.push({
+            date: dateInput ? dateInput.value : '',
+            gravity: gravityInput ? gravityInput.value : '',
+            pH: phInput ? phInput.value : '',
+            co2: co2Input ? co2Input.value : '',
+            do: doInput ? doInput.value : '',
+            notes: notesInput ? notesInput.value : ''
+          });
+        }
+      });
+      
+      // Collect yeast data
+      var yeastStrain = document.getElementById('brewerSheetYeastStrain').value;
+      var yeastGeneration = parseInt(document.getElementById('brewerSheetYeastGeneration').value) || 1;
+      
       // Collect all data from form
       var batchData = {
         batchNumber: brewerSheetState.batchNumber,
@@ -4997,19 +5917,41 @@ function renderOpExCategories(categories) {
           }
         },
         fermentation: {
-          yeastPitched: document.getElementById('fermYeastPitched').checked,
-          yeastPitchedDate: document.getElementById('fermYeastPitchedDate').value,
+          yeastGeneration: parseInt(document.getElementById('brewerSheetYeastGeneration').value) || 1,
+          propagationBatch: document.getElementById('brewerSheetYeastPropBatch').value,
+          pitchDate: document.getElementById('brewerSheetYeastPitchDate').value,
+          yeastPitched: document.getElementById('brewerSheetYeastPitched').checked,
           complete: document.getElementById('fermComplete').checked,
           completeDate: document.getElementById('fermCompleteDate').value,
           dryHop: document.getElementById('fermDryHop').checked,
           dryHopDate: document.getElementById('fermDryHopDate').value,
-          qaCheck: document.getElementById('fermQACheck').checked,
-          qaGravity: parseFloat(document.getElementById('fermQAGravity').value) || 0,
-          qaFG: parseFloat(document.getElementById('fermQAFG').value) || 0,
-          qapH: parseFloat(document.getElementById('fermQApH').value) || 0,
           crash: document.getElementById('fermCrash').checked,
           crashDate: document.getElementById('fermCrashDate').value
         },
+        qaChecks: (function() {
+          var qaChecks = [];
+          var qaRows = document.querySelectorAll('#brewerSheetQAChecksBody tr');
+          qaRows.forEach(function(row) {
+            var dateInput = row.querySelector('.qa-date-input');
+            var gravityInput = row.querySelector('.qa-gravity-input');
+            var phInput = row.querySelector('.qa-ph-input');
+            var co2Input = row.querySelector('.qa-co2-input');
+            var doInput = row.querySelector('.qa-do-input');
+            var notesInput = row.querySelector('.qa-notes-input');
+            
+            if (dateInput || gravityInput || phInput) {
+              qaChecks.push({
+                date: dateInput ? dateInput.value : '',
+                gravity: gravityInput ? gravityInput.value : '',
+                pH: phInput ? phInput.value : '',
+                co2: co2Input ? co2Input.value : '',
+                do: doInput ? doInput.value : '',
+                notes: notesInput ? notesInput.value : ''
+              });
+            }
+          });
+          return qaChecks;
+        })(),
         briteTank: {
           vessel: document.getElementById('briteTankSelect').value,
           transfer: document.getElementById('btTransfer').checked,
@@ -6246,6 +7188,42 @@ function renderOpExCategories(categories) {
   z-index: 1000;
   justify-content: center;
   align-items: center;
+}
+
+/* Recipe Editable Fields */
+.recipe-editable {
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 3px;
+  transition: background 0.2s;
+}
+
+.recipe-editable:hover {
+  background: rgba(255,255,255,0.2);
+}
+
+.recipe-edit-input {
+  padding: 2px 6px;
+  border: 2px solid #8B0000;
+  border-radius: 4px;
+  background: white;
+  color: #333;
+  font-size: inherit;
+}
+
+.ingredient-name-input,
+.ingredient-qty-input {
+  padding: 4px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: 14px;
+}
+
+.ingredient-name-input:focus,
+.ingredient-qty-input:focus {
+  border-color: #8B0000;
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(139,0,0,0.1);
 }
 
 #recipeViewModal.show,
@@ -9717,17 +10695,53 @@ function loadRecipeHistory(recipeName) {
 }
 
 /**
- * Save all recipe changes
+ * Save all recipe changes (Edit Recipe Modal version)
+ * This function is for the old Edit Recipe modal - it should use the modal too
  */
 function saveRecipeChanges() {
-  const reason = document.getElementById('editChangeReason').value.trim();
-  
-  if (!reason) {
-    alert('Please enter a reason for the change. This is required for tracking.');
-    document.getElementById('editChangeReason').focus();
+  // Check if we're in the Edit Recipe modal (has editChangeReason field)
+  var editReasonField = document.getElementById('editChangeReason');
+  if (editReasonField) {
+    // This is the Edit Recipe modal - use the same modal approach
+    var reason = editReasonField.value.trim();
+    if (!reason) {
+      // Show the modal instead of alert
+      showReasonForChangeModalForEditRecipe();
+      return;
+    }
+    // Continue with existing logic below...
+  } else {
+    // This is the Recipe View inline editing - use the existing modal
+    // Check if there are any changes
+    var hasChanges = false;
+    if (typeof recipeChanges !== 'undefined') {
+      for (var key in recipeChanges) {
+        if (recipeChanges.hasOwnProperty(key)) {
+          hasChanges = true;
+          break;
+        }
+      }
+    }
+    
+    if (!hasChanges) {
+      showToast('No changes to save', 'info');
+      return;
+    }
+    
+    // Show "Reason for Change" modal
+    showReasonForChangeModal();
     return;
   }
   
+  // Continue with Edit Recipe modal save logic...
+  const reason = editReasonField.value.trim();
+  
+  // Call the actual save function
+  saveRecipeChangesFromEditModal(reason);
+}
+
+// Helper function to continue save after reason is provided (Edit Recipe Modal)
+function saveRecipeChangesFromEditModal(reason) {
   // Collect recipe detail updates
   const updates = {};
   const fields = [
@@ -9887,7 +10901,7 @@ function saveRecipeChanges() {
               document.getElementById('saveRecipeBtn').textContent = '💾 Save Changes';
               document.getElementById('saveRecipeBtn').disabled = false;
               
-              alert('Recipe updated successfully!\n\nChanges logged: ' + (result.changesLogged + (ingResult.changesLogged || 0)));
+              showToast('Recipe updated successfully! Changes logged: ' + (result.changesLogged + (ingResult.changesLogged || 0)), 'success');
               closeEditRecipeModal();
               
               // Refresh recipes display if function exists
@@ -9896,7 +10910,7 @@ function saveRecipeChanges() {
             .withFailureHandler(function(error) {
               document.getElementById('saveRecipeBtn').textContent = '💾 Save Changes';
               document.getElementById('saveRecipeBtn').disabled = false;
-              alert('Error saving ingredients: ' + error.message);
+              showToast('Error saving ingredients: ' + error.message, 'error');
             })
             .updateRecipeIngredients(currentEditRecipe, ingredientUpdates, reason);
         } else {
@@ -9904,9 +10918,9 @@ function saveRecipeChanges() {
           document.getElementById('saveRecipeBtn').disabled = false;
           
           if (result.changesLogged > 0) {
-            alert('Recipe updated successfully!\n\nChanges logged: ' + result.changesLogged);
+            showToast('Recipe updated successfully! Changes logged: ' + result.changesLogged, 'success');
           } else {
-            alert('No changes detected.');
+            showToast('No changes detected.', 'info');
           }
           closeEditRecipeModal();
           
@@ -9915,13 +10929,13 @@ function saveRecipeChanges() {
       } else {
         document.getElementById('saveRecipeBtn').textContent = '💾 Save Changes';
         document.getElementById('saveRecipeBtn').disabled = false;
-        alert('Error: ' + result.error);
+        showToast('Error: ' + result.error, 'error');
       }
     })
     .withFailureHandler(function(error) {
       document.getElementById('saveRecipeBtn').textContent = '💾 Save Changes';
       document.getElementById('saveRecipeBtn').disabled = false;
-      alert('Error saving recipe: ' + error.message);
+      showToast('Error saving recipe: ' + error.message, 'error');
     })
     .updateRecipe(currentEditRecipe, updates, reason);
 }
@@ -10566,48 +11580,110 @@ document.getElementById('editRecipeModal').addEventListener('click', function(e)
       <!-- FERMENTATION SECTION -->
       <div style="margin-bottom:30px;border:1px solid #ddd;border-radius:8px;padding:20px;">
         <h3 style="margin:0 0 15px 0;color:#8B0000;">FERMENTATION</h3>
-        <div style="margin-bottom:10px;">
+        <div style="margin-bottom:15px;">
           <label style="display:block;margin-bottom:5px;font-weight:600;">FV:</label>
           <span id="fermentationFV" style="font-size:16px;font-weight:600;">--</span>
         </div>
-        <div style="display:grid;grid-template-columns:2fr 1fr 1fr;gap:10px;align-items:center;margin-bottom:10px;">
-          <label style="display:flex;align-items:center;gap:8px;">
-            <input type="checkbox" id="fermYeastPitched" style="width:18px;height:18px;"> Yeast Pitched
-          </label>
-          <span>Date:</span>
-          <input type="date" id="fermYeastPitchedDate" style="padding:4px;border:1px solid #ddd;border-radius:4px;">
+        
+        <!-- YEAST BLOCK -->
+        <div style="margin-bottom:20px;padding:15px;background:#fff;border-radius:8px;border:1px solid #ddd;">
+          <h4 style="margin:0 0 15px 0;color:#8B0000;font-size:14px;">YEAST</h4>
+          
+          <div style="margin-bottom:15px;">
+            <label style="display:block;margin-bottom:5px;font-weight:600;color:#8B0000;">Strain:</label>
+            <div id="brewerSheetYeastStrainDisplay" style="font-size:16px;font-weight:600;color:#333;margin-bottom:10px;">--</div>
+            <div id="brewerSheetYeastConfig" style="display:none;font-size:12px;color:#666;margin-bottom:10px;">
+              Target Cell Count: <span id="brewerSheetYeastCellCount">--</span> billion | 
+              Max Generation: <span id="brewerSheetYeastMaxGen">--</span>
+            </div>
+          </div>
+          
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:15px;margin-bottom:15px;">
+            <div>
+              <label style="display:block;margin-bottom:5px;font-weight:600;color:#8B0000;">Actual Generation Used:</label>
+              <input type="number" id="brewerSheetYeastGeneration" min="1" value="1" onchange="updateBrewerSheetYeast()" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:4px;font-size:14px;">
+            </div>
+            <div>
+              <label style="display:block;margin-bottom:5px;font-weight:600;color:#8B0000;">Propagation Batch:</label>
+              <select id="brewerSheetYeastPropBatch" onchange="updateBrewerSheetYeast()" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:4px;font-size:14px;">
+                <option value="">-- Select Batch --</option>
+              </select>
+            </div>
+            <div>
+              <label style="display:block;margin-bottom:5px;font-weight:600;color:#8B0000;">Pitch Date:</label>
+              <input type="date" id="brewerSheetYeastPitchDate" onchange="updateBrewerSheetYeast()" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:4px;font-size:14px;">
+            </div>
+          </div>
+          
+          <div style="display:flex;align-items:center;gap:8px;">
+            <input type="checkbox" id="brewerSheetYeastPitched" style="width:18px;height:18px;">
+            <label style="font-weight:600;">Yeast Pitched</label>
+          </div>
         </div>
-        <div style="display:grid;grid-template-columns:2fr 1fr 1fr;gap:10px;align-items:center;margin-bottom:10px;">
-          <label style="display:flex;align-items:center;gap:8px;">
-            <input type="checkbox" id="fermComplete" style="width:18px;height:18px;"> Fermentation Complete
-          </label>
-          <span>Date:</span>
-          <input type="date" id="fermCompleteDate" style="padding:4px;border:1px solid #ddd;border-radius:4px;">
+        
+        <!-- FERMENTATION STEPS -->
+        <div style="margin-bottom:20px;">
+          <div style="display:grid;grid-template-columns:2fr 1fr 1fr;gap:10px;align-items:center;margin-bottom:10px;">
+            <label style="display:flex;align-items:center;gap:8px;">
+              <input type="checkbox" id="fermYeastPitched" style="width:18px;height:18px;"> Yeast Pitched
+            </label>
+            <span>Date:</span>
+            <input type="date" id="fermYeastPitchedDate" style="padding:4px;border:1px solid #ddd;border-radius:4px;">
+          </div>
+          <div style="display:grid;grid-template-columns:2fr 1fr 1fr;gap:10px;align-items:center;margin-bottom:10px;">
+            <label style="display:flex;align-items:center;gap:8px;">
+              <input type="checkbox" id="fermComplete" style="width:18px;height:18px;"> Fermentation Complete
+            </label>
+            <span>Date:</span>
+            <input type="date" id="fermCompleteDate" style="padding:4px;border:1px solid #ddd;border-radius:4px;">
+          </div>
+          <div style="display:grid;grid-template-columns:2fr 1fr 1fr;gap:10px;align-items:center;margin-bottom:10px;">
+            <label style="display:flex;align-items:center;gap:8px;">
+              <input type="checkbox" id="fermDryHop" style="width:18px;height:18px;"> Dry Hop Added
+            </label>
+            <span>Date:</span>
+            <input type="date" id="fermDryHopDate" style="padding:4px;border:1px solid #ddd;border-radius:4px;">
+          </div>
+          <div style="display:grid;grid-template-columns:2fr 1fr 1fr;gap:10px;align-items:center;">
+            <label style="display:flex;align-items:center;gap:8px;">
+              <input type="checkbox" id="fermCrash" style="width:18px;height:18px;"> Crash Complete
+            </label>
+            <span>Date:</span>
+            <input type="date" id="fermCrashDate" style="padding:4px;border:1px solid #ddd;border-radius:4px;">
+          </div>
         </div>
-        <div style="display:grid;grid-template-columns:2fr 1fr 1fr;gap:10px;align-items:center;margin-bottom:10px;">
-          <label style="display:flex;align-items:center;gap:8px;">
-            <input type="checkbox" id="fermDryHop" style="width:18px;height:18px;"> Dry Hop Added
-          </label>
-          <span>Date:</span>
-          <input type="date" id="fermDryHopDate" style="padding:4px;border:1px solid #ddd;border-radius:4px;">
+        
+        <!-- QA CHECKS TABLE -->
+        <div style="margin-top:20px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+            <h4 style="margin:0;color:#8B0000;font-size:14px;">QA CHECKS</h4>
+            <div style="font-size:12px;color:#666;">
+              Target FG: <span id="brewerSheetTargetFG" style="font-weight:600;">--</span> °P
+            </div>
+          </div>
+          <table style="width:100%;border-collapse:collapse;font-size:13px;border:1px solid #ddd;">
+            <thead>
+              <tr style="background:#8B0000;color:white;">
+                <th style="padding:8px;text-align:center;font-weight:600;width:40px;">#</th>
+                <th style="padding:8px;text-align:center;font-weight:600;width:100px;">Date</th>
+                <th style="padding:8px;text-align:center;font-weight:600;width:80px;">°P</th>
+                <th style="padding:8px;text-align:center;font-weight:600;width:80px;">pH</th>
+                <th style="padding:8px;text-align:center;font-weight:600;width:80px;">CO2</th>
+                <th style="padding:8px;text-align:center;font-weight:600;width:80px;">DO</th>
+                <th style="padding:8px;text-align:left;font-weight:600;">Notes</th>
+                <th style="padding:8px;text-align:center;font-weight:600;width:80px;">Status</th>
+                <th style="padding:8px;width:40px;"></th>
+              </tr>
+            </thead>
+            <tbody id="brewerSheetQAChecksBody">
+              <!-- Populated dynamically -->
+            </tbody>
+          </table>
+          <button onclick="addQACheck()" style="margin-top:10px;background:transparent;border:1px dashed #8B0000;color:#8B0000;padding:6px 12px;border-radius:4px;cursor:pointer;font-size:12px;">+ Add QA Check</button>
         </div>
-        <div style="display:grid;grid-template-columns:2fr 1fr 1fr 1fr 1fr;gap:10px;align-items:center;margin-bottom:10px;">
-          <label style="display:flex;align-items:center;gap:8px;">
-            <input type="checkbox" id="fermQACheck" style="width:18px;height:18px;"> QA Check
-          </label>
-          <span>OG:</span>
-          <input type="number" id="fermQAGravity" step="0.1" placeholder="14.1" style="padding:4px;border:1px solid #ddd;border-radius:4px;">
-          <span>FG:</span>
-          <input type="number" id="fermQAFG" step="0.1" placeholder="3.4" style="padding:4px;border:1px solid #ddd;border-radius:4px;">
-          <span>pH:</span>
-          <input type="number" id="fermQApH" step="0.1" placeholder="4.2" style="padding:4px;border:1px solid #ddd;border-radius:4px;">
-        </div>
-        <div style="display:grid;grid-template-columns:2fr 1fr 1fr;gap:10px;align-items:center;">
-          <label style="display:flex;align-items:center;gap:8px;">
-            <input type="checkbox" id="fermCrash" style="width:18px;height:18px;"> Crash Complete
-          </label>
-          <span>Date:</span>
-          <input type="date" id="fermCrashDate" style="padding:4px;border:1px solid #ddd;border-radius:4px;">
+        
+        <div style="margin-top:15px;padding:10px;background:#f0f8ff;border-radius:4px;font-size:12px;color:#666;">
+          <strong>Note:</strong> Enter actual readings from your measurements. Target values are defined in the Recipe View.
         </div>
       </div>
       
@@ -10733,22 +11809,22 @@ document.getElementById('editRecipeModal').addEventListener('click', function(e)
         <div>
           <h2 style="margin:0;font-size:24px;"><span id="recipeViewName">Recipe Name</span></h2>
           <div style="font-size:14px;opacity:0.9;margin-top:4px;">
-            Batch Size: <span id="recipeViewBatchSizeHeader">60</span> BBL | 
-            Style: <span id="recipeViewStyleHeader">--</span> | 
+            Batch Size: <span id="recipeViewBatchSizeHeader" class="recipe-editable" data-field="batchSize" data-type="number" data-suffix=" BBL" onclick="startRecipeEdit(this)">60</span> BBL | 
+            Style: <span id="recipeViewStyleHeader" class="recipe-editable" data-field="style" data-type="text" onclick="startRecipeEdit(this)">--</span> | 
             Est. COGS: $<span id="recipeViewCOGSHeader">85</span>/BBL
           </div>
         </div>
         <div style="display:flex;gap:10px;">
-          <button onclick="openEditRecipeSimple()" class="btn btn-secondary" style="background:rgba(255,255,255,0.2);border:1px solid white;">Edit</button>
+          <button onclick="saveRecipeChanges()" id="recipeSaveBtn" class="btn btn-secondary" style="background:rgba(255,255,255,0.2);border:1px solid white;display:none;">Save Changes</button>
           <button onclick="brewThisFromRecipe()" class="btn btn-primary" style="background:white;color:#8B0000;font-weight:bold;">🍺 Brew This</button>
           <span class="close-btn" onclick="closeRecipeView()" style="color:white;font-size:28px;cursor:pointer;margin-left:10px;">&times;</span>
         </div>
       </div>
       <div style="margin-top:12px;padding-top:12px;border-top:1px solid rgba(255,255,255,0.2);font-size:13px;">
-        Target OG: <span id="recipeViewOGHeader">14.2</span>°P | 
-        Target FG: <span id="recipeViewFGHeader">3.4</span>°P | 
-        ABV: <span id="recipeViewABVHeader">5.4</span>% | 
-        IBU: <span id="recipeViewIBUHeader">10.77</span>
+        Target OG: <span id="recipeViewOGHeader" class="recipe-editable" data-field="og" data-type="number" data-suffix="°P" onclick="startRecipeEdit(this)">14.2</span>°P | 
+        Target FG: <span id="recipeViewFGHeader" class="recipe-editable" data-field="fg" data-type="number" data-suffix="°P" onclick="startRecipeEdit(this)">3.4</span>°P | 
+        ABV: <span id="recipeViewABVHeader" class="recipe-editable" data-field="abv" data-type="number" data-suffix="%" onclick="startRecipeEdit(this)">5.4</span>% | 
+        IBU: <span id="recipeViewIBUHeader" class="recipe-editable" data-field="ibu" data-type="number" onclick="startRecipeEdit(this)">10.77</span>
       </div>
     </div>
     
@@ -10756,7 +11832,10 @@ document.getElementById('editRecipeModal').addEventListener('click', function(e)
       
       <!-- INGREDIENTS SECTION -->
       <div style="margin-bottom:30px;">
-        <h3 style="margin:0 0 15px 0;color:#8B0000;border-bottom:2px solid #8B0000;padding-bottom:8px;">INGREDIENTS</h3>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:15px;">
+          <h3 style="margin:0;color:#8B0000;border-bottom:2px solid #8B0000;padding-bottom:8px;">INGREDIENTS</h3>
+          <button onclick="addIngredientRow()" class="btn btn-sm" style="background:#8B0000;color:white;padding:6px 12px;border:none;border-radius:4px;cursor:pointer;font-size:12px;">+ Add Row</button>
+        </div>
         <table style="width:100%;border-collapse:collapse;font-size:14px;">
           <thead>
             <tr style="background:#8B0000;color:white;">
@@ -10764,6 +11843,7 @@ document.getElementById('editRecipeModal').addEventListener('click', function(e)
               <th style="padding:10px;text-align:right;">Turn 1</th>
               <th style="padding:10px;text-align:right;">Turn 2</th>
               <th style="padding:10px;text-align:right;">Total</th>
+              <th style="padding:10px;width:40px;"></th>
             </tr>
           </thead>
           <tbody id="recipeViewIngredientsBody">
@@ -10783,41 +11863,158 @@ document.getElementById('editRecipeModal').addEventListener('click', function(e)
           </label>
         </div>
         <div style="font-size:13px;color:#666;">
-          Target Efficiency: <span id="recipeViewEfficiency">85</span>% | 
-          Target Pre-Boil Gravity: <span id="recipeViewPreBoilGravity">12</span>°P
+          Target Efficiency: <span id="recipeViewEfficiency" class="recipe-editable" data-field="targetEfficiency" data-type="number" data-suffix="%" onclick="startRecipeEdit(this)">85</span>% | 
+          Target Pre-Boil Gravity: <span id="recipeViewPreBoilGravity" class="recipe-editable" data-field="targetPreBoilGravity" data-type="number" data-suffix="°P" onclick="startRecipeEdit(this)">12</span>°P
+        </div>
+      </div>
+      
+      <!-- YEAST BLOCK -->
+      <div style="margin-bottom:30px;border:1px solid #ddd;border-radius:8px;padding:20px;background:#fff;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:15px;">
+          <h3 style="margin:0;color:#8B0000;border-bottom:2px solid #8B0000;padding-bottom:8px;">YEAST</h3>
+          <button onclick="addYeastStep()" class="btn btn-sm" style="background:#8B0000;color:white;padding:6px 12px;border:none;border-radius:4px;cursor:pointer;font-size:12px;">+ Add Step</button>
+        </div>
+        
+        <div style="margin-bottom:15px;">
+          <label style="display:block;margin-bottom:5px;font-weight:600;color:#8B0000;">Strain:</label>
+          <select id="recipeViewYeastStrain" onchange="loadYeastConfig()" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:4px;font-size:14px;">
+            <option value="">-- Select Yeast Strain --</option>
+          </select>
+        </div>
+        
+        <!-- YEAST CONFIG DISPLAY -->
+        <div id="recipeViewYeastConfig" style="display:none;padding:15px;background:#f9f9f9;border-radius:8px;border:1px solid #ddd;margin-bottom:15px;">
+          <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:15px;margin-bottom:10px;">
+            <div>
+              <label style="display:block;font-size:12px;color:#666;margin-bottom:3px;">Base Yeast:</label>
+              <div id="recipeViewYeastBase" style="font-weight:600;color:#333;">--</div>
+            </div>
+            <div>
+              <label style="display:block;font-size:12px;color:#666;margin-bottom:3px;">Max Generation:</label>
+              <div id="recipeViewYeastMaxGen" style="font-weight:600;color:#333;">--</div>
+            </div>
+            <div>
+              <label style="display:block;font-size:12px;color:#666;margin-bottom:3px;">Target Cell Count:</label>
+              <div id="recipeViewYeastCellCount" style="font-weight:600;color:#333;">--</div>
+            </div>
+            <div>
+              <label style="display:block;font-size:12px;color:#666;margin-bottom:3px;">Target Volume:</label>
+              <div id="recipeViewYeastVolume" style="font-weight:600;color:#333;">--</div>
+            </div>
+            <div>
+              <label style="display:block;font-size:12px;color:#666;margin-bottom:3px;">Single Use:</label>
+              <div id="recipeViewYeastSingleUse" style="font-weight:600;color:#333;">--</div>
+            </div>
+            <div>
+              <label style="display:block;font-size:12px;color:#666;margin-bottom:3px;">Recommended Generation:</label>
+              <div id="recipeViewYeastRecGen" style="font-weight:600;color:#4CAF50;">--</div>
+            </div>
+          </div>
+          <div>
+            <label style="display:block;font-size:12px;color:#666;margin-bottom:3px;">Notes:</label>
+            <div id="recipeViewYeastNotes" style="font-size:13px;color:#666;font-style:italic;">--</div>
+          </div>
         </div>
       </div>
       
       <!-- FERMENTATION & CELLAR SECTION -->
       <div style="margin-bottom:30px;">
-        <h3 style="margin:0 0 15px 0;color:#8B0000;border-bottom:2px solid #8B0000;padding-bottom:8px;">FERMENTATION & CELLAR</h3>
-        <ul style="list-style:none;padding:0;margin:0;">
-          <li style="padding:8px 0;border-bottom:1px solid #eee;">• Yeast Pitch</li>
-          <li style="padding:8px 0;border-bottom:1px solid #eee;">• Fermentation (7-14 days)</li>
-          <li style="padding:8px 0;border-bottom:1px solid #eee;">• Dry Hop (if applicable)</li>
-          <li style="padding:8px 0;border-bottom:1px solid #eee;">• QA Check</li>
-          <li style="padding:8px 0;">• Crash</li>
-        </ul>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:15px;">
+          <h3 style="margin:0;color:#8B0000;border-bottom:2px solid #8B0000;padding-bottom:8px;">FERMENTATION & CELLAR</h3>
+        </div>
+        
+        <!-- QA TARGETS -->
+        <div style="margin-bottom:20px;padding:15px;background:#fff3cd;border-radius:8px;border:1px solid #ffc107;">
+          <h4 style="margin:0 0 10px 0;color:#8B0000;font-size:14px;">QA TARGETS (must hit before transfer to BT)</h4>
+          <div style="display:grid;grid-template-columns:repeat(4, 1fr);gap:15px;">
+            <div>
+              <label style="display:block;margin-bottom:5px;font-size:12px;font-weight:600;">Target FG:</label>
+              <input type="number" id="recipeViewTargetFG" step="0.1" onchange="updateRecipeQATarget()" style="width:100%;padding:6px;border:1px solid #ddd;border-radius:4px;"> <span style="font-size:12px;">°P</span>
+            </div>
+            <div>
+              <label style="display:block;margin-bottom:5px;font-size:12px;font-weight:600;">Target pH Range:</label>
+              <div style="display:flex;gap:5px;align-items:center;">
+                <input type="number" id="recipeViewTargetpHMin" step="0.1" onchange="updateRecipeQATarget()" style="width:45%;padding:6px;border:1px solid #ddd;border-radius:4px;" placeholder="Min">
+                <span>-</span>
+                <input type="number" id="recipeViewTargetpHMax" step="0.1" onchange="updateRecipeQATarget()" style="width:45%;padding:6px;border:1px solid #ddd;border-radius:4px;" placeholder="Max">
+              </div>
+            </div>
+            <div>
+              <label style="display:block;margin-bottom:5px;font-size:12px;font-weight:600;">Target CO2:</label>
+              <input type="text" id="recipeViewTargetCO2" onchange="updateRecipeQATarget()" style="width:100%;padding:6px;border:1px solid #ddd;border-radius:4px;" placeholder="e.g., 2.4">
+            </div>
+            <div>
+              <label style="display:block;margin-bottom:5px;font-size:12px;font-weight:600;">Target DO:</label>
+              <input type="text" id="recipeViewTargetDO" onchange="updateRecipeQATarget()" style="width:100%;padding:6px;border:1px solid #ddd;border-radius:4px;" placeholder="e.g., < 50 ppb">
+            </div>
+          </div>
+        </div>
+        
+        <!-- FERMENTATION STEPS -->
+        <div style="margin-bottom:15px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+            <h4 style="margin:0;color:#8B0000;font-size:14px;">Fermentation Steps:</h4>
+            <button onclick="addFermentationStep()" class="btn btn-sm" style="background:#8B0000;color:white;padding:6px 12px;border:none;border-radius:4px;cursor:pointer;font-size:12px;">+ Add Step</button>
+          </div>
+          <table style="width:100%;border-collapse:collapse;font-size:14px;">
+            <thead>
+              <tr style="background:#8B0000;color:white;">
+                <th style="padding:10px;text-align:left;font-weight:600;">Step</th>
+                <th style="padding:10px;text-align:center;">Target Day</th>
+                <th style="padding:10px;text-align:center;">Target Gravity</th>
+                <th style="padding:10px;text-align:center;">Target pH</th>
+                <th style="padding:10px;text-align:left;">Notes</th>
+                <th style="padding:10px;width:40px;"></th>
+              </tr>
+            </thead>
+            <tbody id="recipeViewFermentationBody">
+              <!-- Populated dynamically -->
+            </tbody>
+          </table>
+        </div>
+        
+        <div style="margin-top:10px;padding:10px;background:#f0f8ff;border-radius:4px;font-size:12px;color:#666;">
+          <strong>Note:</strong> These are target values for the recipe. Brewers will enter actual readings (Gravity, pH, Temp) in the Brewer's Sheet as the batch moves through production.
+        </div>
       </div>
       
       <!-- BRITE & PACKAGING SECTION -->
       <div style="margin-bottom:30px;">
-        <h3 style="margin:0 0 15px 0;color:#8B0000;border-bottom:2px solid #8B0000;padding-bottom:8px;">BRITE & PACKAGING</h3>
-        <ul style="list-style:none;padding:0;margin:0 0 15px 0;">
-          <li style="padding:8px 0;border-bottom:1px solid #eee;">• Transfer to BT</li>
-          <li style="padding:8px 0;border-bottom:1px solid #eee;">• Carbonate</li>
-          <li style="padding:8px 0;">• Package</li>
-        </ul>
-        <div style="background:#f5f5f5;padding:12px;border-radius:6px;font-size:13px;">
-          <strong>Default Packaging:</strong> 
-          <span id="recipeViewDefaultPackaging">10 Half BBL, 5 Sixth BBL, 20 Cases</span>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:15px;">
+          <h3 style="margin:0;color:#8B0000;border-bottom:2px solid #8B0000;padding-bottom:8px;">BRITE & PACKAGING</h3>
+          <button onclick="addBriteStep()" class="btn btn-sm" style="background:#8B0000;color:white;padding:6px 12px;border:none;border-radius:4px;cursor:pointer;font-size:12px;">+ Add Step</button>
+        </div>
+        <table style="width:100%;border-collapse:collapse;font-size:14px;margin-bottom:15px;">
+          <thead>
+            <tr style="background:#8B0000;color:white;">
+              <th style="padding:10px;text-align:left;font-weight:600;">Step</th>
+              <th style="padding:10px;text-align:center;">Target Day</th>
+              <th style="padding:10px;text-align:left;">Notes</th>
+              <th style="padding:10px;width:40px;"></th>
+            </tr>
+          </thead>
+          <tbody id="recipeViewBriteBody">
+            <!-- Populated dynamically -->
+          </tbody>
+        </table>
+        <div style="background:#f5f5f5;padding:12px;border-radius:6px;font-size:13px;margin-bottom:10px;">
+          <strong>Default Packaging:</strong>
+          <input type="number" id="pkgHalfBBL" value="10" min="0" style="width:50px;padding:4px;border:1px solid #ddd;border-radius:4px;margin:0 5px;" onchange="updatePackagingDefault()"> Half BBL,
+          <input type="number" id="pkgSixthBBL" value="5" min="0" style="width:50px;padding:4px;border:1px solid #ddd;border-radius:4px;margin:0 5px;" onchange="updatePackagingDefault()"> Sixth BBL,
+          <input type="number" id="pkgCases" value="20" min="0" style="width:50px;padding:4px;border:1px solid #ddd;border-radius:4px;margin:0 5px;" onchange="updatePackagingDefault()"> Cases
+        </div>
+        <div style="margin-top:10px;padding:10px;background:#f0f8ff;border-radius:4px;font-size:12px;color:#666;">
+          <strong>Note:</strong> These are target steps for the recipe. Brewers will enter actual dates and quantities in the Brewer's Sheet as the batch moves through production.
         </div>
       </div>
       
     </div>
     
-    <div class="modal-footer" style="padding:15px 20px;border-top:1px solid #ddd;display:flex;justify-content:flex-end;gap:10px;">
-      <button onclick="closeRecipeView()" class="btn btn-secondary">Close</button>
+    <div class="modal-footer" style="padding:15px 20px;border-top:1px solid #ddd;display:flex;justify-content:space-between;align-items:center;">
+      <button onclick="viewRecipeChangeHistory()" class="btn btn-secondary" style="font-size:12px;">View Change History</button>
+      <div style="display:flex;gap:10px;">
+        <button onclick="closeRecipeView()" class="btn btn-secondary">Close</button>
+      </div>
     </div>
   </div>
 </div>
