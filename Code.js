@@ -14967,8 +14967,8 @@ function getBrewerSheetData(batchNumber) {
       }
     });
     
-    // Get cellar tasks for this batch
-    var cellarTasks = getCellarTasksForBatch(batchNumber);
+    // Get cellar tasks for this batch (with null check)
+    var cellarTasks = getCellarTasksForBatch(batchNumber) || [];
     
     // Get brewers list
     var brewers = getBrewersList();
@@ -15604,5 +15604,543 @@ function getLaborConfig() {
     return { rate: 25 }; // Default rate
   } catch(e) {
     return { rate: 25 };
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// RECIPE VIEW - DEFAULT CELLAR TASKS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+var DEFAULT_CELLAR_TASKS = [
+  { dayOffset: 1,  type: 'Gravity Check', name: 'Initial Gravity Check', materials: [], target: { gravity: true } },
+  { dayOffset: 3,  type: 'Gravity Check', name: 'Day 3 Gravity Check', materials: [], target: { gravity: true } },
+  { dayOffset: 7,  type: 'Gravity Check', name: 'Day 7 Gravity Check', materials: [], target: { gravity: true } },
+  { dayOffset: 10, type: 'Gravity Check', name: 'Day 10 Gravity Check', materials: [], target: { gravity: true, ph: true } },
+  { dayOffset: 14, type: 'Transfer', name: 'Transfer to BT', materials: [], target: {} },
+  { dayOffset: 15, type: 'Carbonate', name: 'Carbonate', materials: [], target: {} },
+  { dayOffset: 21, type: 'Package', name: 'Ready to Package', materials: [], target: {} }
+];
+
+/**
+ * Get ingredient-based tasks from recipe ingredients
+ * @param {string} recipeName - Recipe name
+ * @returns {Array} Array of task objects
+ */
+function getIngredientBasedTasks(recipeName) {
+  try {
+    var ss = getBrmSpreadsheet();
+    var ingredientsSheet = ss.getSheetByName(SHEETS.RECIPE_INGREDIENTS);
+    if (!ingredientsSheet) {
+      return [];
+    }
+    
+    var data = ingredientsSheet.getDataRange().getValues();
+    if (data.length < 2) return [];
+    
+    var headers = data[0];
+    var colIndex = {};
+    headers.forEach(function(h, idx) {
+      if (h) {
+        var headerKey = h.toString().toLowerCase().trim();
+        colIndex[headerKey] = idx;
+        if (headerKey.indexOf('recipe') !== -1 && headerKey.indexOf('name') !== -1) colIndex['recipename'] = idx;
+        if (headerKey.indexOf('ingredient') !== -1 || headerKey.indexOf('item') !== -1) colIndex['ingredient'] = idx;
+        if (headerKey.indexOf('usage') !== -1) colIndex['usage'] = idx;
+        if (headerKey.indexOf('quantity') !== -1 || headerKey.indexOf('amount') !== -1) colIndex['quantity'] = idx;
+        if (headerKey.indexOf('unit') !== -1 || headerKey.indexOf('uom') !== -1) colIndex['unit'] = idx;
+      }
+    });
+    
+    var tasks = [];
+    
+    for (var i = 1; i < data.length; i++) {
+      var row = data[i];
+      var rowRecipe = row[colIndex['recipename']] || row[0];
+      
+      if (rowRecipe && rowRecipe.toString().trim() !== recipeName) continue;
+      
+      var usage = (row[colIndex['usage']] || '').toString().trim();
+      var ingredientName = (row[colIndex['ingredient']] || '').toString().trim();
+      var quantity = parseFloat(row[colIndex['quantity']] || 0);
+      var unit = (row[colIndex['unit']] || '').toString().trim() || 'each';
+      
+      if (!ingredientName || !usage) continue;
+      
+      if (usage === 'Dry Hop') {
+        tasks.push({
+          dayOffset: 7, // Default dry hop day
+          type: 'Dry Hop',
+          name: 'Dry Hop - ' + ingredientName,
+          materials: [{ name: ingredientName, quantity: quantity, unit: unit }],
+          target: {}
+        });
+      } else if (usage === 'Fermentation Addition') {
+        tasks.push({
+          dayOffset: 5, // Default fermentation addition day
+          type: 'Addition',
+          name: 'Add ' + ingredientName,
+          materials: [{ name: ingredientName, quantity: quantity, unit: unit }],
+          target: {}
+        });
+      } else if (usage === 'Post-Fermentation Addition') {
+        tasks.push({
+          dayOffset: 14, // After transfer to BT
+          type: 'Addition',
+          name: 'Add ' + ingredientName,
+          materials: [{ name: ingredientName, quantity: quantity, unit: unit }],
+          target: {}
+        });
+      }
+    }
+    
+    return tasks;
+    
+  } catch(e) {
+    Logger.log('Error getting ingredient-based tasks: ' + e.toString());
+    return [];
+  }
+}
+
+/**
+ * Get recipe task templates from Recipe Task Templates sheet
+ * @param {string} recipeName - Recipe name
+ * @returns {Array} Array of task objects
+ */
+function getRecipeTaskTemplates(recipeName) {
+  try {
+    var ss = getBrmSpreadsheet();
+    var tasksSheet = ss.getSheetByName('Recipe Task Templates');
+    if (!tasksSheet) {
+      return [];
+    }
+    
+    var data = tasksSheet.getDataRange().getValues();
+    if (data.length < 2) return [];
+    
+    var headers = data[0];
+    var colIndex = {};
+    headers.forEach(function(h, idx) {
+      if (h) {
+        var headerKey = h.toString().toLowerCase().trim();
+        colIndex[headerKey] = idx;
+        if (headerKey.indexOf('recipe') !== -1) colIndex['recipename'] = idx;
+        if (headerKey.indexOf('day') !== -1) colIndex['day'] = idx;
+        if (headerKey.indexOf('task') !== -1 && headerKey.indexOf('name') !== -1) colIndex['taskname'] = idx;
+        if (headerKey.indexOf('task') !== -1 && headerKey.indexOf('type') !== -1) colIndex['tasktype'] = idx;
+        if (headerKey.indexOf('materials') !== -1) colIndex['materials'] = idx;
+        if (headerKey.indexOf('target') !== -1) colIndex['target'] = idx;
+      }
+    });
+    
+    var tasks = [];
+    
+    for (var i = 1; i < data.length; i++) {
+      var row = data[i];
+      var rowRecipe = row[colIndex['recipename']] || row[0];
+      
+      if (rowRecipe && rowRecipe.toString().trim() !== recipeName) continue;
+      
+      var dayOffset = parseFloat(row[colIndex['day']] || 0);
+      var taskName = (row[colIndex['taskname']] || '').toString().trim();
+      var taskType = (row[colIndex['tasktype']] || '').toString().trim();
+      var materialsJson = row[colIndex['materials']];
+      var targetJson = row[colIndex['target']];
+      
+      var materials = [];
+      if (materialsJson) {
+        try {
+          materials = typeof materialsJson === 'string' ? JSON.parse(materialsJson) : materialsJson;
+          if (!Array.isArray(materials)) materials = [];
+        } catch(e) {
+          Logger.log('Error parsing materials: ' + e.toString());
+        }
+      }
+      
+      var target = {};
+      if (targetJson) {
+        try {
+          target = typeof targetJson === 'string' ? JSON.parse(targetJson) : targetJson;
+          if (typeof target !== 'object') target = {};
+        } catch(e) {
+          Logger.log('Error parsing target: ' + e.toString());
+        }
+      }
+      
+      tasks.push({
+        dayOffset: dayOffset,
+        type: taskType || 'Task',
+        name: taskName || 'Task',
+        materials: materials,
+        target: target
+      });
+    }
+    
+    return tasks;
+    
+  } catch(e) {
+    Logger.log('Error getting recipe task templates: ' + e.toString());
+    return [];
+  }
+}
+
+/**
+ * Get recipe tasks with defaults - Phase 2D
+ * @param {string} recipeName - Recipe name
+ * @returns {Array} Array of task objects
+ */
+function getRecipeTasksWithDefaults(recipeName) {
+  try {
+    // Get custom tasks from Recipe Task Templates
+    var customTasks = getRecipeTaskTemplates(recipeName) || [];
+    
+    // If recipe has custom tasks, use those
+    if (customTasks.length > 0) {
+      // Still add ingredient-based tasks
+      var ingredientTasks = getIngredientBasedTasks(recipeName);
+      var allTasks = customTasks.concat(ingredientTasks);
+      allTasks.sort(function(a, b) { return a.dayOffset - b.dayOffset; });
+      return allTasks;
+    }
+    
+    // Otherwise, return defaults plus any ingredient-based tasks
+    var ingredientTasks = getIngredientBasedTasks(recipeName);
+    
+    // Merge defaults with ingredient tasks
+    var allTasks = DEFAULT_CELLAR_TASKS.concat(ingredientTasks);
+    
+    // Sort by day offset
+    allTasks.sort(function(a, b) { return a.dayOffset - b.dayOffset; });
+    
+    return allTasks;
+    
+  } catch(e) {
+    Logger.log('Error getting recipe tasks with defaults: ' + e.toString());
+    return DEFAULT_CELLAR_TASKS;
+  }
+}
+
+/**
+ * Get recipe view data - Phase 2D
+ * @param {string} recipeName - Recipe name
+ * @returns {Object} Recipe view data
+ */
+function getRecipeViewData(recipeName) {
+  try {
+    var ss = getBrmSpreadsheet();
+    var recipesSheet = ss.getSheetByName(SHEETS.RECIPES);
+    var ingredientsSheet = ss.getSheetByName(SHEETS.RECIPE_INGREDIENTS);
+    
+    if (!recipesSheet) {
+      return { success: false, error: 'Recipes sheet not found' };
+    }
+    
+    // Get recipe details
+    var recipeData = recipesSheet.getDataRange().getValues();
+    var recipeHeaders = recipeData[0];
+    var recipeColIndex = {};
+    recipeHeaders.forEach(function(h, idx) {
+      if (h) {
+        var headerKey = h.toString().toLowerCase().trim();
+        recipeColIndex[headerKey] = idx;
+        if (headerKey.indexOf('recipe') !== -1 && headerKey.indexOf('name') !== -1) recipeColIndex['recipename'] = idx;
+        if (headerKey.indexOf('beer') !== -1 && headerKey.indexOf('type') !== -1) recipeColIndex['style'] = idx;
+        if (headerKey.indexOf('batch') !== -1 && headerKey.indexOf('size') !== -1) recipeColIndex['batchsize'] = idx;
+        if (headerKey.indexOf('expected') !== -1 && headerKey.indexOf('yield') !== -1) recipeColIndex['yield'] = idx;
+        if (headerKey.indexOf('fermentation') !== -1 && headerKey.indexOf('day') !== -1) recipeColIndex['fermdays'] = idx;
+        if (headerKey.indexOf('og') !== -1) recipeColIndex['og'] = idx;
+        if (headerKey.indexOf('fg') !== -1) recipeColIndex['fg'] = idx;
+        if (headerKey.indexOf('abv') !== -1) recipeColIndex['abv'] = idx;
+        if (headerKey.indexOf('ibu') !== -1) recipeColIndex['ibu'] = idx;
+        if (headerKey.indexOf('srm') !== -1) recipeColIndex['srm'] = idx;
+        if (headerKey.indexOf('mash') !== -1 && headerKey.indexOf('temp') !== -1) recipeColIndex['mashtemp'] = idx;
+      }
+    });
+    
+    var recipe = null;
+    for (var i = 1; i < recipeData.length; i++) {
+      var rowRecipeName = recipeData[i][recipeColIndex['recipename']] || recipeData[i][0];
+      if (rowRecipeName && rowRecipeName.toString().trim() === recipeName) {
+        recipe = {
+          name: recipeName,
+          style: (recipeData[i][recipeColIndex['style']] || '').toString(),
+          batchSize: parseFloat(recipeData[i][recipeColIndex['batchsize']] || 60),
+          expectedYield: parseFloat(recipeData[i][recipeColIndex['yield']] || 95),
+          fermDays: parseFloat(recipeData[i][recipeColIndex['fermdays']] || 14),
+          og: (recipeData[i][recipeColIndex['og']] || '').toString(),
+          fg: (recipeData[i][recipeColIndex['fg']] || '').toString(),
+          abv: (recipeData[i][recipeColIndex['abv']] || '').toString(),
+          ibu: (recipeData[i][recipeColIndex['ibu']] || '').toString(),
+          srm: (recipeData[i][recipeColIndex['srm']] || '').toString(),
+          mashTemp: (recipeData[i][recipeColIndex['mashtemp']] || '').toString()
+        };
+        break;
+      }
+    }
+    
+    if (!recipe) {
+      return { success: false, error: 'Recipe not found: ' + recipeName };
+    }
+    
+    // Get ingredients by turn
+    var turn1Result = getRecipeIngredientsByTurn(recipeName, 1);
+    var turn2Result = getRecipeIngredientsByTurn(recipeName, 2);
+    
+    var turn1Ingredients = [];
+    var turn2Ingredients = [];
+    
+    if (turn1Result.success) {
+      // Combine turn1-specific and both-turns (50% for turn1)
+      turn1Ingredients = (turn1Result.ingredients.grains || []).concat(
+        turn1Result.ingredients.hops || [],
+        turn1Result.ingredients.other || []
+      );
+      // Add both-turns at 50%
+      if (turn1Result.bothTurns) {
+        (turn1Result.bothTurns.grains || []).forEach(function(ing) {
+          turn1Ingredients.push({
+            name: ing.ingredient,
+            category: 'Grain',
+            quantity: ing.amount * 0.5,
+            unit: ing.uom
+          });
+        });
+        (turn1Result.bothTurns.hops || []).forEach(function(ing) {
+          turn1Ingredients.push({
+            name: ing.ingredient,
+            category: 'Hop',
+            quantity: ing.amount * 0.5,
+            unit: ing.uom
+          });
+        });
+        (turn1Result.bothTurns.other || []).forEach(function(ing) {
+          turn1Ingredients.push({
+            name: ing.ingredient,
+            category: 'Other',
+            quantity: ing.amount * 0.5,
+            unit: ing.uom
+          });
+        });
+      }
+    }
+    
+    if (turn2Result.success) {
+      // Combine turn2-specific and both-turns (100% for turn2)
+      turn2Ingredients = (turn2Result.ingredients.grains || []).concat(
+        turn2Result.ingredients.hops || [],
+        turn2Result.ingredients.other || []
+      );
+      // Add both-turns at 100%
+      if (turn2Result.bothTurns) {
+        (turn2Result.bothTurns.grains || []).forEach(function(ing) {
+          turn2Ingredients.push({
+            name: ing.ingredient,
+            category: 'Grain',
+            quantity: ing.amount,
+            unit: ing.uom
+          });
+        });
+        (turn2Result.bothTurns.hops || []).forEach(function(ing) {
+          turn2Ingredients.push({
+            name: ing.ingredient,
+            category: 'Hop',
+            quantity: ing.amount,
+            unit: ing.uom
+          });
+        });
+        (turn2Result.bothTurns.other || []).forEach(function(ing) {
+          turn2Ingredients.push({
+            name: ing.ingredient,
+            category: 'Other',
+            quantity: ing.amount,
+            unit: ing.uom
+          });
+        });
+      }
+    }
+    
+    // Get raw materials for cost calculation
+    var rmMap = getRawMaterialsMap();
+    
+    // Calculate costs
+    var turn1Cost = 0;
+    var turn2Cost = 0;
+    
+    turn1Ingredients.forEach(function(ing) {
+      var rmData = rmMap[(ing.name || ing.ingredient || '').toLowerCase()];
+      if (rmData) {
+        var unitCost = 0;
+        // Try to get cost from Raw Materials - would need avgCost column
+        // For now, estimate based on quantity
+        turn1Cost += (ing.quantity || 0) * 0.5; // Placeholder cost calculation
+      }
+    });
+    
+    turn2Ingredients.forEach(function(ing) {
+      var rmData = rmMap[(ing.name || ing.ingredient || '').toLowerCase()];
+      if (rmData) {
+        turn2Cost += (ing.quantity || 0) * 0.5; // Placeholder cost calculation
+      }
+    });
+    
+    // Get ingredient costs from Raw Materials sheet
+    var rmSheet = ss.getSheetByName(SHEETS.RAW_MATERIALS);
+    if (rmSheet) {
+      var rmData = rmSheet.getDataRange().getValues();
+      var rmCols = RAW_MATERIAL_CONFIG.columns;
+      var rmStartRow = RAW_MATERIAL_CONFIG.dataStartRow - 1;
+      
+      var costMap = {};
+      for (var r = rmStartRow; r < rmData.length; r++) {
+        var itemName = (rmData[r][rmCols.item - 1] || '').toString().trim();
+        var avgCost = parseFloat(rmData[r][rmCols.avgCost - 1]) || 0;
+        if (itemName) {
+          costMap[itemName.toLowerCase()] = avgCost;
+        }
+      }
+      
+      // Recalculate with actual costs
+      turn1Cost = 0;
+      turn2Cost = 0;
+      
+      turn1Ingredients.forEach(function(ing) {
+        var ingName = (ing.name || ing.ingredient || '').toLowerCase();
+        var unitCost = costMap[ingName] || 0;
+        turn1Cost += (ing.quantity || 0) * unitCost;
+      });
+      
+      turn2Ingredients.forEach(function(ing) {
+        var ingName = (ing.name || ing.ingredient || '').toLowerCase();
+        var unitCost = costMap[ingName] || 0;
+        turn2Cost += (ing.quantity || 0) * unitCost;
+      });
+    }
+    
+    var ingredientCost = turn1Cost + turn2Cost;
+    var laborCost = recipe.batchSize * 19; // Estimate: ~19/BBL labor
+    var overhead = recipe.batchSize * 15; // $15/BBL overhead
+    var totalCost = ingredientCost + laborCost + overhead;
+    var cogsPerBBL = totalCost / (recipe.batchSize * (recipe.expectedYield / 100));
+    
+    // Get cellar tasks (with defaults)
+    var cellarTasks = getRecipeTasksWithDefaults(recipeName);
+    
+    return serializeForHtml({
+      success: true,
+      recipe: recipe,
+      turn1Ingredients: turn1Ingredients,
+      turn2Ingredients: turn2Ingredients,
+      cellarTasks: cellarTasks,
+      costs: {
+        turn1: turn1Cost,
+        turn2: turn2Cost,
+        ingredient: ingredientCost,
+        labor: laborCost,
+        overhead: overhead,
+        total: totalCost,
+        perBBL: cogsPerBBL
+      }
+    });
+    
+  } catch(e) {
+    Logger.log('Error in getRecipeViewData: ' + e.toString());
+    return { success: false, error: e.toString() };
+  }
+}
+
+/**
+ * Create batch with tasks - Phase 2D
+ * @param {string} recipeName - Recipe name
+ * @param {number} batchSize - Batch size in BBL
+ * @param {string} notes - Optional notes
+ * @returns {Object} Success/error result
+ */
+function createBatchWithTasks(recipeName, batchSize, notes) {
+  try {
+    // Create batch (existing logic)
+    var recipeData = {
+      recipeName: recipeName,
+      batchSize: batchSize || 60,
+      yieldPct: 0.95,
+      estimatedIngredientCost: 0 // Will be calculated
+    };
+    
+    var batchResult = createBatch(recipeData);
+    
+    if (!batchResult.success) {
+      return batchResult;
+    }
+    
+    var batchNumber = batchResult.batchNumber || batchResult.data?.batchNumber;
+    if (!batchNumber) {
+      // Try to extract from result
+      Logger.log('Batch result: ' + JSON.stringify(batchResult));
+      return { success: false, error: 'Could not determine batch number' };
+    }
+    
+    var brewDate = new Date();
+    
+    // Get recipe tasks (with defaults)
+    var tasks = getRecipeTasksWithDefaults(recipeName);
+    
+    // Create batch tasks
+    var ss = getBrmSpreadsheet();
+    var tasksSheet = ss.getSheetByName('Batch Tasks');
+    
+    if (!tasksSheet) {
+      // Create Batch Tasks sheet if it doesn't exist
+      tasksSheet = ss.insertSheet('Batch Tasks');
+      tasksSheet.appendRow([
+        'Task ID', 'Batch Number', 'Recipe Name', 'Task Type', 'Task Name',
+        'Day Offset', 'Due Date', 'Status', 'Assigned To', 'Materials',
+        'Target Gravity', 'Target pH', 'Actual Gravity', 'Actual pH',
+        'Timer Start', 'Timer End', 'Actual Labor Hours',
+        'Completed By', 'Completed Date', 'Notes'
+      ]);
+    }
+    
+    var tasksCreated = 0;
+    tasks.forEach(function(task, index) {
+      var dueDate = new Date(brewDate);
+      dueDate.setDate(dueDate.getDate() + (task.dayOffset || 0));
+      
+      var taskId = batchNumber + '_T' + (index + 1);
+      
+      tasksSheet.appendRow([
+        taskId,
+        batchNumber,
+        recipeName,
+        task.type || '',
+        task.name || '',
+        task.dayOffset || 0,
+        dueDate,
+        'Pending',
+        '', // Assigned To
+        JSON.stringify(task.materials || []),
+        task.target && task.target.gravity ? 'Yes' : '',
+        task.target && task.target.ph ? 'Yes' : '',
+        '', // Actual Gravity
+        '', // Actual pH
+        '', // Timer Start
+        '', // Timer End
+        '', // Actual Labor Hours
+        '', // Completed By
+        '', // Completed Date
+        notes || '' // Notes
+      ]);
+      
+      tasksCreated++;
+    });
+    
+    Logger.log('Created ' + tasksCreated + ' tasks for batch ' + batchNumber);
+    
+    return {
+      success: true,
+      batchNumber: batchNumber,
+      tasksCreated: tasksCreated
+    };
+    
+  } catch(e) {
+    Logger.log('Error in createBatchWithTasks: ' + e.toString());
+    return { success: false, error: e.toString() };
   }
 }

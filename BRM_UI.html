@@ -2784,21 +2784,8 @@
     }
     
     function viewRecipe(name) {
-      currentRecipeName = name;
-      var recipe = allRecipes.find(function(r) { return r.recipeName === name; });
-      
-      document.getElementById('recipeModalTitle').textContent = name;
-      document.getElementById('recipeModalStyle').textContent = recipe ? (recipe.style || recipe.beerType || 'Beer') : 'Beer';
-      document.getElementById('recipeModalBatchSize').textContent = recipe ? (recipe.batchSize || 60) : 60;
-      document.getElementById('recipeModalABV').textContent = recipe ? (recipe.abv || '-') : '-';
-      document.getElementById('recipeModalIBU').textContent = recipe ? (recipe.ibu || '-') : '-';
-      document.getElementById('recipeModalYield').textContent = recipe ? ((recipe.yieldPct || 0.95) * 100).toFixed(0) + '%' : '95%';
-      
-      google.script.run.withSuccessHandler(populateRecipeModal).withFailureHandler(function(err) {
-        console.error('Error loading recipe details:', err);
-      }).getRecipeDetails(name);
-      
-      document.getElementById('recipeModal').style.display = 'flex';
+      // Use new Recipe View instead of old modal
+      openRecipeView(name);
     }
     
     function populateRecipeModal(data) {
@@ -2889,6 +2876,240 @@
       }).catch(function(err) {
         showToast('Error loading brewer sheet: ' + err, 'error');
       });
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // RECIPE VIEW FUNCTIONS - Phase 2D
+    // ═══════════════════════════════════════════════════════════════
+    var currentRecipeData = null;
+
+    function openRecipeView(recipeName) {
+      showLoading('Loading recipe...');
+      
+      google.script.run
+        .withSuccessHandler(function(data) {
+          hideLoading();
+          if (data && data.success) {
+            currentRecipeData = data;
+            renderRecipeView(data);
+            document.getElementById('recipeViewModal').style.display = 'flex';
+          } else {
+            showToast('Error: ' + (data ? data.error : 'Unknown error'), 'error');
+          }
+        })
+        .withFailureHandler(function(error) {
+          hideLoading();
+          showToast('Error: ' + error.message, 'error');
+        })
+        .getRecipeViewData(recipeName);
+    }
+
+    function renderRecipeView(data) {
+      var recipe = data.recipe;
+      
+      // Recipe Info
+      document.getElementById('recipeViewName').textContent = recipe.name;
+      document.getElementById('recipeViewStyle').textContent = recipe.style || '--';
+      document.getElementById('recipeViewBatchSize').textContent = recipe.batchSize + ' BBL';
+      document.getElementById('recipeViewYield').textContent = recipe.expectedYield + '%';
+      document.getElementById('recipeViewFermDays').textContent = recipe.fermDays || '--';
+      
+      // Targets
+      document.getElementById('recipeViewOG').textContent = recipe.og ? recipe.og + ' °P' : '--';
+      document.getElementById('recipeViewFG').textContent = recipe.fg ? recipe.fg + ' °P' : '--';
+      document.getElementById('recipeViewABV').textContent = recipe.abv ? recipe.abv + '%' : '--';
+      document.getElementById('recipeViewIBU').textContent = recipe.ibu || '--';
+      document.getElementById('recipeViewSRM').textContent = recipe.srm || '--';
+      document.getElementById('recipeViewMashTemp').textContent = recipe.mashTemp ? recipe.mashTemp + '°F' : '--';
+      
+      // Turn 1 Ingredients
+      renderRecipeIngredients('recipeViewTurn1Body', data.turn1Ingredients);
+      document.getElementById('recipeViewTurn1Cost').textContent = '$' + (data.costs.turn1 || 0).toFixed(2);
+      
+      // Turn 2 Ingredients
+      renderRecipeIngredients('recipeViewTurn2Body', data.turn2Ingredients);
+      document.getElementById('recipeViewTurn2Cost').textContent = '$' + (data.costs.turn2 || 0).toFixed(2);
+      
+      // Cellar Tasks
+      renderRecipeTasks('recipeViewTasksBody', data.cellarTasks);
+      
+      // Costs
+      document.getElementById('recipeViewIngredientCost').textContent = '$' + (data.costs.ingredient || 0).toFixed(2);
+      document.getElementById('recipeViewLaborCost').textContent = '$' + (data.costs.labor || 0).toFixed(2);
+      document.getElementById('recipeViewOverhead').textContent = '$' + (data.costs.overhead || 0).toFixed(2);
+      document.getElementById('recipeViewCOGSPerBBL').textContent = '$' + (data.costs.perBBL || 0).toFixed(2);
+    }
+
+    function renderRecipeIngredients(tbodyId, ingredients) {
+      var tbody = document.getElementById(tbodyId);
+      tbody.innerHTML = '';
+      
+      if (!ingredients || ingredients.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="4" class="no-data">No ingredients</td></tr>';
+        return;
+      }
+      
+      ingredients.forEach(function(ing) {
+        var row = '<tr>' +
+          '<td>' + escapeHtml(ing.name || ing.ingredient || '') + '</td>' +
+          '<td>' + escapeHtml(ing.category || '') + '</td>' +
+          '<td>' + (ing.quantity || 0).toFixed(2) + '</td>' +
+          '<td>' + escapeHtml(ing.unit || '') + '</td>' +
+          '</tr>';
+        tbody.innerHTML += row;
+      });
+    }
+
+    function renderRecipeTasks(tbodyId, tasks) {
+      var tbody = document.getElementById(tbodyId);
+      tbody.innerHTML = '';
+      
+      if (!tasks || tasks.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="4" class="no-data">No tasks defined (defaults will apply)</td></tr>';
+        return;
+      }
+      
+      tasks.forEach(function(task) {
+        var materials = '';
+        if (task.materials && task.materials.length > 0) {
+          materials = task.materials.map(function(m) {
+            return m.name + ' ' + m.quantity + ' ' + m.unit;
+          }).join(', ');
+        }
+        
+        var target = '';
+        if (task.target) {
+          if (task.target.gravity) target += 'Gravity ';
+          if (task.target.ph) target += 'pH ';
+        }
+        
+        var row = '<tr>' +
+          '<td>Day ' + task.dayOffset + '</td>' +
+          '<td>' + escapeHtml(task.name || task.type || '') + '</td>' +
+          '<td>' + escapeHtml(materials || '--') + '</td>' +
+          '<td>' + escapeHtml(target || '--') + '</td>' +
+          '</tr>';
+        tbody.innerHTML += row;
+      });
+    }
+
+    function closeRecipeView() {
+      document.getElementById('recipeViewModal').style.display = 'none';
+      currentRecipeData = null;
+    }
+
+    // Edit section functions - open targeted edit modals
+    function editRecipeInfo() {
+      openEditModal('info');
+    }
+
+    function editRecipeTargets() {
+      openEditModal('targets');
+    }
+
+    function editTurn1Ingredients() {
+      openEditModal('turn1');
+    }
+
+    function editTurn2Ingredients() {
+      openEditModal('turn2');
+    }
+
+    function editCellarTasks() {
+      openEditModal('tasks');
+    }
+
+    function openEditModal(section) {
+      // Don't close Recipe View - open Edit Recipe as overlay
+      var recipeName = currentRecipeData.recipe.name;
+      
+      // Store that we came from Recipe View so we can return to it
+      sessionStorage.setItem('returnToRecipeView', recipeName);
+      
+      // Open Edit Recipe modal (it should appear on top)
+      openEditRecipe(recipeName, section);
+    }
+    
+    // Wrapper function for openEditRecipeModal
+    function openEditRecipe(recipeName, section) {
+      openEditRecipeModal(recipeName);
+      // If section specified, switch to that tab
+      if (section) {
+        setTimeout(function() {
+          if (section === 'info' || section === 'targets') {
+            showEditRecipeTab('details');
+          } else if (section === 'turn1' || section === 'turn2') {
+            showEditRecipeTab('ingredients');
+          } else if (section === 'tasks') {
+            showEditRecipeTab('tasks');
+          }
+        }, 500);
+      }
+    }
+
+    function brewThis() {
+      if (!currentRecipeData) {
+        showToast('No recipe loaded', 'error');
+        return;
+      }
+      
+      var recipeName = currentRecipeData.recipe.name;
+      var batchSize = currentRecipeData.recipe.batchSize || 60;
+      
+      showLoading('Creating batch with tasks...');
+      
+      google.script.run
+        .withSuccessHandler(function(result) {
+          hideLoading();
+          if (result && result.success) {
+            showToast('Batch ' + result.batchNumber + ' created with ' + result.tasksCreated + ' tasks!', 'success');
+            closeRecipeView();
+            // Refresh batches list
+            loadBatches();
+            // Optionally open the batch
+            setTimeout(function() {
+              openBrewerSheet(result.batchNumber);
+            }, 1000);
+          } else {
+            showToast('Error: ' + (result ? result.error : 'Unknown error'), 'error');
+          }
+        })
+        .withFailureHandler(function(error) {
+          hideLoading();
+          showToast('Error creating batch: ' + error.message, 'error');
+        })
+        .createBatchWithTasks(recipeName, batchSize, 'Created from Recipe View');
+    }
+
+    function viewRecipeInSheet() {
+      if (!currentRecipeData) return;
+      // Could open a new window to the sheet, or scroll to recipe
+      showToast('View in Sheet - feature coming soon', 'info');
+    }
+
+    function viewChangeHistory() {
+      if (!currentRecipeData) return;
+      var recipeName = currentRecipeData.recipe.name;
+      // Store return info
+      sessionStorage.setItem('returnToRecipeView', recipeName);
+      openEditRecipe(recipeName);
+      // Switch to Change History tab
+      setTimeout(function() {
+        showEditRecipeTab('history');
+      }, 500);
+    }
+
+    function addCellarTaskToRecipe() {
+      if (!currentRecipeData) return;
+      var recipeName = currentRecipeData.recipe.name;
+      // Store return info
+      sessionStorage.setItem('returnToRecipeView', recipeName);
+      openEditRecipe(recipeName, 'tasks');
+    }
+
+    // Update recipe click handler
+    function onRecipeClick(recipeName) {
+      openRecipeView(recipeName);
     }
     
     window.currentBrewerSheet = null;
@@ -4905,22 +5126,31 @@ function renderOpExCategories(categories) {
 
     // Task Timer Functions
     function startTaskTimer(taskId) {
-      if (taskTimers[taskId] && taskTimers[taskId].interval) return;
+      // Check if already running
+      if (taskTimers[taskId] && taskTimers[taskId].interval) {
+        return; // Already running, do nothing
+      }
       
+      // Initialize if needed
       if (!taskTimers[taskId]) {
         taskTimers[taskId] = { interval: null, seconds: 0, startTime: null };
       }
       
       taskTimers[taskId].startTime = new Date();
+      
+      // Toggle buttons - use direct style setting
       var startBtn = document.getElementById('taskStartBtn_' + taskId);
       var stopBtn = document.getElementById('taskStopBtn_' + taskId);
+      
       if (startBtn) startBtn.style.display = 'none';
       if (stopBtn) stopBtn.style.display = 'inline-block';
       
       taskTimers[taskId].interval = setInterval(function() {
         taskTimers[taskId].seconds++;
         var timerEl = document.getElementById('taskTimer_' + taskId);
-        if (timerEl) timerEl.textContent = formatTimer(taskTimers[taskId].seconds);
+        if (timerEl) {
+          timerEl.textContent = formatTimer(taskTimers[taskId].seconds);
+        }
       }, 1000);
       
       updateTaskButtonState(taskId);
@@ -4931,8 +5161,10 @@ function renderOpExCategories(categories) {
         clearInterval(taskTimers[taskId].interval);
         taskTimers[taskId].interval = null;
       }
+      
       var startBtn = document.getElementById('taskStartBtn_' + taskId);
       var stopBtn = document.getElementById('taskStopBtn_' + taskId);
+      
       if (startBtn) startBtn.style.display = 'inline-block';
       if (stopBtn) stopBtn.style.display = 'none';
     }
@@ -5310,6 +5542,210 @@ function renderOpExCategories(categories) {
 .status-conditioning { background: #F3E5F5; color: #7B1FA2; }
 .status-ready-to-package { background: #E8F5E9; color: #2E7D32; }
 .status-packaged { background: #4CAF50; color: white; }
+
+/* ═══════════════════════════════════════════════════════════════ */
+/* RECIPE VIEW MODAL STYLES - Phase 2D */
+/* ═══════════════════════════════════════════════════════════════ */
+/* Recipe View Modal Centering */
+#recipeViewModal {
+  display: none;
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(0,0,0,0.5);
+  z-index: 1000;
+  justify-content: center;
+  align-items: center;
+}
+
+#recipeViewModal.show,
+#recipeViewModal[style*="display: block"] {
+  display: flex !important;
+}
+
+.recipe-view-modal {
+  background: white;
+  border-radius: 8px;
+  max-width: 900px;
+  width: 90%;
+  max-height: 90vh;
+  overflow-y: auto;
+  margin: auto;
+}
+
+.recipe-view-body {
+  padding: 0;
+}
+
+.recipe-section {
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  margin: 12px 16px;
+  overflow: hidden;
+}
+
+.recipe-section .section-header {
+  background: #f5f5f5;
+  padding: 10px 16px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid #ddd;
+}
+
+.recipe-section .section-header h3 {
+  margin: 0;
+  font-size: 14px;
+  color: #8B0000;
+}
+
+.edit-section-btn {
+  background: transparent;
+  border: 1px solid #8B0000;
+  color: #8B0000;
+  padding: 4px 10px;
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.edit-section-btn:hover {
+  background: #8B0000;
+  color: white;
+}
+
+.recipe-section .section-content {
+  padding: 12px 16px;
+}
+
+.recipe-info-grid,
+.targets-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 16px;
+}
+
+.info-item,
+.target-item {
+  text-align: center;
+}
+
+.info-item label,
+.target-item label {
+  display: block;
+  font-size: 11px;
+  color: #666;
+  margin-bottom: 4px;
+}
+
+.info-item span,
+.target-item span {
+  font-size: 16px;
+  font-weight: bold;
+  color: #333;
+}
+
+.recipe-ingredients-table,
+.cellar-tasks-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.recipe-ingredients-table th,
+.recipe-ingredients-table td,
+.cellar-tasks-table th,
+.cellar-tasks-table td {
+  padding: 8px 12px;
+  text-align: left;
+  border-bottom: 1px solid #eee;
+}
+
+.recipe-ingredients-table th,
+.cellar-tasks-table th {
+  background: #8B0000;
+  color: white;
+  font-size: 11px;
+  font-weight: bold;
+}
+
+.section-subtotal {
+  text-align: right;
+  padding-top: 8px;
+  font-size: 13px;
+  color: #666;
+}
+
+.section-subtotal strong {
+  color: #8B0000;
+}
+
+.add-task-inline-btn {
+  margin-top: 8px;
+  background: transparent;
+  border: 1px dashed #8B0000;
+  color: #8B0000;
+  padding: 6px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.add-task-inline-btn:hover {
+  background: #8B0000;
+  color: white;
+}
+
+.cost-summary-section {
+  background: linear-gradient(135deg, #8B0000 0%, #5C0000 100%);
+  color: white;
+  margin: 16px;
+}
+
+.cost-summary-section .section-header {
+  background: transparent;
+  border-bottom: 1px solid rgba(255,255,255,0.2);
+}
+
+.cost-summary-section .section-header h3 {
+  color: white;
+}
+
+.cost-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 16px;
+}
+
+.cost-item {
+  text-align: center;
+}
+
+.cost-item label {
+  display: block;
+  font-size: 11px;
+  opacity: 0.8;
+  margin-bottom: 4px;
+}
+
+.cost-item span {
+  font-size: 18px;
+  font-weight: bold;
+}
+
+.cost-item.total span {
+  color: #FFD700;
+  font-size: 22px;
+}
+
+.no-data {
+  text-align: center;
+  color: #999;
+  font-style: italic;
+  padding: 20px;
+}
 
 /* Task Filters */
 .task-filters {
@@ -8135,6 +8571,17 @@ function openEditRecipeModal(recipeName) {
  */
 function closeEditRecipeModal() {
   document.getElementById('editRecipeModal').style.display = 'none';
+  
+  // Check if we should return to Recipe View
+  var returnTo = sessionStorage.getItem('returnToRecipeView');
+  if (returnTo) {
+    sessionStorage.removeItem('returnToRecipeView');
+    // Reopen Recipe View with fresh data
+    setTimeout(function() {
+      openRecipeView(returnTo);
+    }, 100);
+  }
+  
   currentEditRecipe = null;
   originalRecipeData = null;
   ingredientChanges = [];
@@ -8709,6 +9156,9 @@ function saveRecipeChanges() {
   google.script.run
     .withSuccessHandler(function(result) {
       if (result.success) {
+        // Check if we should return to Recipe View after save
+        var returnTo = sessionStorage.getItem('returnToRecipeView');
+        
         // Now save ingredient changes if any
         if (ingredientUpdates.length > 0) {
           google.script.run
@@ -9462,6 +9912,190 @@ document.getElementById('editRecipeModal').addEventListener('click', function(e)
   <div style="background:white;padding:24px;border-radius:8px;text-align:center;box-shadow:0 4px 20px rgba(0,0,0,0.3);">
     <div class="spinner" style="width:40px;height:40px;border:4px solid #f3f3f3;border-top:4px solid #8B0000;border-radius:50%;animation:spin 1s linear infinite;margin:0 auto 16px;"></div>
     <p class="loading-message" style="margin:0;font-size:16px;color:#333;">Loading...</p>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<!-- RECIPE VIEW MODAL - Phase 2D -->
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<div id="recipeViewModal" class="modal">
+  <div class="modal-content recipe-view-modal">
+    <div class="modal-header">
+      <h2>📋 Recipe: <span id="recipeViewName"></span></h2>
+      <span class="close-btn" onclick="closeRecipeView()">&times;</span>
+    </div>
+    
+    <div class="modal-body recipe-view-body">
+      
+      <!-- SECTION 1: RECIPE INFO -->
+      <div class="recipe-section">
+        <div class="section-header">
+          <h3>📊 Recipe Info</h3>
+          <button class="edit-section-btn" onclick="editRecipeInfo()">✏️ Edit</button>
+        </div>
+        <div class="section-content recipe-info-grid">
+          <div class="info-item">
+            <label>Style</label>
+            <span id="recipeViewStyle">--</span>
+          </div>
+          <div class="info-item">
+            <label>Base Batch Size</label>
+            <span id="recipeViewBatchSize">--</span>
+          </div>
+          <div class="info-item">
+            <label>Expected Yield</label>
+            <span id="recipeViewYield">--</span>
+          </div>
+          <div class="info-item">
+            <label>Fermentation Days</label>
+            <span id="recipeViewFermDays">--</span>
+          </div>
+        </div>
+      </div>
+      
+      <!-- SECTION 2: TARGETS -->
+      <div class="recipe-section">
+        <div class="section-header">
+          <h3>🎯 Targets</h3>
+          <button class="edit-section-btn" onclick="editRecipeTargets()">✏️ Edit</button>
+        </div>
+        <div class="section-content targets-grid">
+          <div class="target-item">
+            <label>OG</label>
+            <span id="recipeViewOG">--</span>
+          </div>
+          <div class="target-item">
+            <label>FG</label>
+            <span id="recipeViewFG">--</span>
+          </div>
+          <div class="target-item">
+            <label>ABV</label>
+            <span id="recipeViewABV">--</span>
+          </div>
+          <div class="target-item">
+            <label>IBU</label>
+            <span id="recipeViewIBU">--</span>
+          </div>
+          <div class="target-item">
+            <label>SRM</label>
+            <span id="recipeViewSRM">--</span>
+          </div>
+          <div class="target-item">
+            <label>Mash Temp</label>
+            <span id="recipeViewMashTemp">--</span>
+          </div>
+        </div>
+      </div>
+      
+      <!-- SECTION 3: TURN 1 INGREDIENTS -->
+      <div class="recipe-section">
+        <div class="section-header">
+          <h3>🍺 Turn 1 Ingredients</h3>
+          <button class="edit-section-btn" onclick="editTurn1Ingredients()">✏️ Edit</button>
+        </div>
+        <div class="section-content">
+          <table class="recipe-ingredients-table">
+            <thead>
+              <tr>
+                <th>Ingredient</th>
+                <th>Category</th>
+                <th>Amount</th>
+                <th>Unit</th>
+              </tr>
+            </thead>
+            <tbody id="recipeViewTurn1Body">
+              <!-- Populated dynamically -->
+            </tbody>
+          </table>
+          <div class="section-subtotal">
+            Turn 1 Cost: <strong id="recipeViewTurn1Cost">$0.00</strong>
+          </div>
+        </div>
+      </div>
+      
+      <!-- SECTION 4: TURN 2 INGREDIENTS -->
+      <div class="recipe-section">
+        <div class="section-header">
+          <h3>🍺 Turn 2 Ingredients</h3>
+          <button class="edit-section-btn" onclick="editTurn2Ingredients()">✏️ Edit</button>
+        </div>
+        <div class="section-content">
+          <table class="recipe-ingredients-table">
+            <thead>
+              <tr>
+                <th>Ingredient</th>
+                <th>Category</th>
+                <th>Amount</th>
+                <th>Unit</th>
+              </tr>
+            </thead>
+            <tbody id="recipeViewTurn2Body">
+              <!-- Populated dynamically -->
+            </tbody>
+          </table>
+          <div class="section-subtotal">
+            Turn 2 Cost: <strong id="recipeViewTurn2Cost">$0.00</strong>
+          </div>
+        </div>
+      </div>
+      
+      <!-- SECTION 5: CELLAR TASKS -->
+      <div class="recipe-section">
+        <div class="section-header">
+          <h3>📋 Cellar Tasks</h3>
+          <button class="edit-section-btn" onclick="editCellarTasks()">✏️ Edit</button>
+        </div>
+        <div class="section-content">
+          <table class="cellar-tasks-table">
+            <thead>
+              <tr>
+                <th>Day</th>
+                <th>Task</th>
+                <th>Materials</th>
+                <th>Target</th>
+              </tr>
+            </thead>
+            <tbody id="recipeViewTasksBody">
+              <!-- Populated dynamically -->
+            </tbody>
+          </table>
+          <button class="add-task-inline-btn" onclick="addCellarTaskToRecipe()">+ Add Task</button>
+        </div>
+      </div>
+      
+      <!-- SECTION 6: COST SUMMARY -->
+      <div class="recipe-section cost-summary-section">
+        <div class="section-header">
+          <h3>💰 Cost Summary</h3>
+        </div>
+        <div class="section-content cost-summary-grid">
+          <div class="cost-item">
+            <label>Ingredient Cost</label>
+            <span id="recipeViewIngredientCost">$0.00</span>
+          </div>
+          <div class="cost-item">
+            <label>Est. Labor Cost</label>
+            <span id="recipeViewLaborCost">$0.00</span>
+          </div>
+          <div class="cost-item">
+            <label>Est. Overhead</label>
+            <span id="recipeViewOverhead">$0.00</span>
+          </div>
+          <div class="cost-item total">
+            <label>Est. COGS/BBL</label>
+            <span id="recipeViewCOGSPerBBL">$0.00</span>
+          </div>
+        </div>
+      </div>
+      
+    </div>
+    
+    <div class="modal-footer">
+      <button onclick="viewRecipeInSheet()" class="btn btn-secondary">📊 View in Sheet</button>
+      <button onclick="viewChangeHistory()" class="btn btn-secondary">📜 Change History</button>
+      <button onclick="closeRecipeView()" class="btn btn-secondary">Close</button>
+      <button onclick="brewThis()" class="btn btn-primary btn-lg">🍺 Brew This</button>
+    </div>
   </div>
 </div>
 
