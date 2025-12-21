@@ -1664,7 +1664,8 @@ function confirmBrewStartEnhanced_Old(brewerData) {
     // Deplete raw materials
     var allIngredients = (brewerData.grains || []).concat(brewerData.hops || []).concat(brewerData.other || []);
     allIngredients.forEach(function(item) {
-      depleteRawMaterial(item.ingredient, item.actualAmount || item.scaledAmount, batchNumber);
+      var itemUnit = item.uom || item.unit || 'each';
+      depleteRawMaterial(item.ingredient, item.actualAmount || item.scaledAmount, batchNumber, itemUnit);
     });
     
     // Update equipment status
@@ -1694,7 +1695,7 @@ function generateBatchNumber(recipeName) {
   return prefix + '-' + yy + mm + dd + '-' + random;
 }
 
-function depleteRawMaterial(itemName, qty, batchNumber) {
+function depleteRawMaterial(itemName, qty, batchNumber, recipeUnit) {
   try {
     var ss = getBrmSpreadsheet();
     var sheet = ss.getSheetByName(RAW_MATERIAL_CONFIG.sheetName);
@@ -1706,9 +1707,18 @@ function depleteRawMaterial(itemName, qty, batchNumber) {
     for (var i = RAW_MATERIAL_CONFIG.dataStartRow - 1; i < data.length; i++) {
       if (data[i][cols.item - 1] && data[i][cols.item - 1].toString().toLowerCase() === itemName.toLowerCase()) {
         var currentQty = parseFloat(data[i][cols.qtyOnHand - 1]) || 0;
-        var newQty = Math.max(0, currentQty - qty);
+        var rmUnit = (data[i][cols.unit - 1] || '').toString().trim() || 'each';
         var cost = parseFloat(data[i][cols.avgCost - 1]) || 0;
         var reorder = parseFloat(data[i][cols.reorderPoint - 1]) || 0;
+        
+        // Convert recipe unit to raw material unit if different
+        var qtyToDeplete = qty;
+        if (recipeUnit && recipeUnit.toLowerCase() !== rmUnit.toLowerCase()) {
+          qtyToDeplete = convertUnits(qty, recipeUnit, rmUnit);
+          Logger.log('Unit conversion: ' + qty + ' ' + recipeUnit + ' = ' + qtyToDeplete + ' ' + rmUnit);
+        }
+        
+        var newQty = Math.max(0, currentQty - qtyToDeplete);
         
         var status = '✅ OK';
         if (newQty <= 0) status = '🚨 OUT';
@@ -8060,7 +8070,7 @@ function addSecondaryAddition(batchNumber, item, amount, uom, notes) {
     }
     
     // Deplete from Raw Materials
-    var depleteResult = depleteRawMaterial(item, amount, batchNumber);
+    var depleteResult = depleteRawMaterial(item, amount, batchNumber, uom);
     
     // Add entry to Batch Details
     addBatchEntry(batchNumber, 'Addition', {
@@ -9185,7 +9195,8 @@ function finalizeBrewWithActuals(batchNumber, vessel, brewer, actualIngredients,
           var amt = parseFloat(item.actualAmount) || parseFloat(item.amount) || 0;
           if (amt > 0 && item.ingredient) {
             // Deplete from Raw Materials
-            depleteRawMaterial(item.ingredient, amt, batchNumber);
+            var itemUnit = item.uom || item.unit || 'each';
+            depleteRawMaterial(item.ingredient, amt, batchNumber, itemUnit);
             
             // Calculate cost
             var unitCost = parseFloat(item.avgCost) || parseFloat(item.unitCost) || 0;
@@ -9338,7 +9349,8 @@ function addCellarAddition(batchNumber, ingredient, amount, uom, notes) {
     var totalCost = amount * unitCost;
     
     // Deplete from Raw Materials
-    depleteRawMaterial(ingredient, amount, batchNumber);
+    var ingredientUnit = uom || 'each';
+    depleteRawMaterial(ingredient, amount, batchNumber, ingredientUnit);
     
     // Log to Batch Details
     addBatchEntry(batchNumber, 'Addition', {
@@ -14627,8 +14639,9 @@ function completeTurn(batchNumber, turnNumber, brewerId, laborHours, vesselName,
               }
             }
             
-            // Deplete from Raw Materials
-            depleteRawMaterial(ing.ingredient, amount, batchNumber);
+            // Deplete from Raw Materials (with unit conversion)
+            var recipeUnit = ing.uom || 'lb';
+            depleteRawMaterial(ing.ingredient, amount, batchNumber, recipeUnit);
             
             depletedItems.push({
               ingredient: ing.ingredient,
@@ -14921,14 +14934,44 @@ function getBrewerSheetData(batchNumber) {
       });
     }
     
-    // Add on-hand quantities from Raw Materials
+    // Add on-hand quantities from Raw Materials (with unit conversion)
     var rawMaterialsMap = getRawMaterialsMap();
     turn1Ingredients.forEach(function(ing) {
-      ing.onHand = rawMaterialsMap[ing.name.toLowerCase()] || 0;
+      var rmData = rawMaterialsMap[ing.name.toLowerCase()];
+      if (rmData) {
+        var recipeUnit = ing.unit || 'lb';
+        var rmUnit = rmData.unit || 'each';
+        // Convert raw material unit to recipe unit for display
+        ing.onHand = convertUnits(rmData.quantity, rmUnit, recipeUnit);
+        ing.onHandUnit = recipeUnit; // Store recipe unit for reference
+        ing.rawMaterialUnit = rmUnit; // Store raw material unit for depletion
+      } else {
+        ing.onHand = 0;
+        ing.onHandUnit = ing.unit || 'lb';
+        ing.rawMaterialUnit = null;
+      }
     });
     turn2Ingredients.forEach(function(ing) {
-      ing.onHand = rawMaterialsMap[ing.name.toLowerCase()] || 0;
+      var rmData = rawMaterialsMap[ing.name.toLowerCase()];
+      if (rmData) {
+        var recipeUnit = ing.unit || 'lb';
+        var rmUnit = rmData.unit || 'each';
+        // Convert raw material unit to recipe unit for display
+        ing.onHand = convertUnits(rmData.quantity, rmUnit, recipeUnit);
+        ing.onHandUnit = recipeUnit;
+        ing.rawMaterialUnit = rmUnit;
+      } else {
+        ing.onHand = 0;
+        ing.onHandUnit = ing.unit || 'lb';
+        ing.rawMaterialUnit = null;
+      }
     });
+    
+    // Get cellar tasks for this batch
+    var cellarTasks = getCellarTasksForBatch(batchNumber);
+    
+    // Get brewers list
+    var brewers = getBrewersList();
     
     return serializeForHtml({
       success: true,
@@ -14955,7 +14998,11 @@ function getBrewerSheetData(batchNumber) {
       turn2CompletedBy: turn2CompletedBy,
       turn2LaborHours: turn2LaborHours,
       turn2Ingredients: turn2Ingredients,
-      noTurn2: status === 'Fermenting' && !turn2CompleteDate && turn1CompleteDate // Single turn brew
+      noTurn2: status === 'Fermenting' && !turn2CompleteDate && turn1CompleteDate, // Single turn brew
+      
+      // Cellar Tasks data
+      cellarTasks: cellarTasks,
+      brewers: brewers
     });
     
   } catch (e) {
@@ -14965,8 +15012,66 @@ function getBrewerSheetData(batchNumber) {
 }
 
 /**
- * Get raw materials as a map (name -> qty on hand) - Phase 2B
- * @returns {Object} Map of material names (lowercase) to quantities
+ * Convert units - Phase 2C Unit Conversion Fix
+ * @param {number} quantity - Quantity to convert
+ * @param {string} fromUnit - Source unit
+ * @param {string} toUnit - Target unit
+ * @returns {number} Converted quantity
+ */
+function convertUnits(quantity, fromUnit, toUnit) {
+  if (!fromUnit || !toUnit || fromUnit.toLowerCase() === toUnit.toLowerCase()) {
+    return quantity;
+  }
+  
+  var from = fromUnit.toLowerCase().trim();
+  var to = toUnit.toLowerCase().trim();
+  
+  // Define conversion factors
+  var conversions = {
+    // Weight conversions
+    'oz_to_lb': 1/16,
+    'lb_to_oz': 16,
+    'g_to_kg': 1/1000,
+    'kg_to_g': 1000,
+    'g_to_lb': 0.00220462,
+    'lb_to_g': 453.592,
+    'oz_to_g': 28.3495,
+    'g_to_oz': 1/28.3495,
+    
+    // Volume conversions
+    'oz_to_gal': 1/128,
+    'gal_to_oz': 128,
+    'oz_to_l': 0.0295735,
+    'l_to_oz': 33.814,
+    'ml_to_l': 1/1000,
+    'l_to_ml': 1000,
+    'ml_to_gal': 0.000264172,
+    'gal_to_ml': 3785.41,
+    
+    // Common brewing conversions
+    'fl_oz_to_oz': 1, // Fluid oz to oz (same for brewing purposes)
+    'oz_to_fl_oz': 1
+  };
+  
+  var key = from + '_to_' + to;
+  if (conversions[key]) {
+    return quantity * conversions[key];
+  }
+  
+  // If no direct conversion, try reverse
+  var reverseKey = to + '_to_' + from;
+  if (conversions[reverseKey]) {
+    return quantity / conversions[reverseKey];
+  }
+  
+  // No conversion available - return original (assume same unit)
+  Logger.log('No conversion available: ' + from + ' to ' + to);
+  return quantity;
+}
+
+/**
+ * Get raw materials as a map (name -> {quantity, unit}) - Phase 2C Unit Conversion Fix
+ * @returns {Object} Map of material names (lowercase) to {quantity, unit}
  */
 function getRawMaterialsMap() {
   try {
@@ -14986,7 +15091,12 @@ function getRawMaterialsMap() {
       if (!itemName) continue;
       
       var qty = parseFloat(data[i][cols.qtyOnHand - 1]) || 0;
-      map[itemName.toLowerCase()] = qty;
+      var unit = (data[i][cols.unit - 1] || '').toString().trim();
+      
+      map[itemName.toLowerCase()] = {
+        quantity: qty,
+        unit: unit || 'each'
+      };
     }
     
     return map;
@@ -15084,5 +15194,415 @@ function markNoTurn2(batchNumber) {
   } catch (e) {
     Logger.log('Error in markNoTurn2: ' + e.toString());
     return { success: false, error: e.toString() };
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// PHASE 2C: CELLAR TASKS - BACKEND FUNCTIONS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Get cellar tasks for a batch - Phase 2C
+ * @param {string} batchNumber - Batch number
+ * @returns {Array} Array of task objects
+ */
+function getCellarTasksForBatch(batchNumber) {
+  try {
+    var ss = getBrmSpreadsheet();
+    var tasksSheet = ss.getSheetByName('Batch Tasks');
+    var rmSheet = ss.getSheetByName(SHEETS.RAW_MATERIALS);
+    
+    if (!tasksSheet) {
+      Logger.log('Batch Tasks sheet not found');
+      return [];
+    }
+    
+    var data = tasksSheet.getDataRange().getValues();
+    if (data.length < 2) return [];
+    
+    var headers = data[0];
+    var tasks = [];
+    
+    // Get column indices
+    var colIndex = {};
+    headers.forEach(function(h, idx) {
+      if (h) {
+        var headerKey = h.toString().toLowerCase().trim();
+        colIndex[headerKey] = idx;
+        // Map common variations
+        if (headerKey.indexOf('batch') !== -1 && headerKey.indexOf('#') !== -1) colIndex['batchnumber'] = idx;
+        if (headerKey.indexOf('task') !== -1 && headerKey.indexOf('name') !== -1) colIndex['taskname'] = idx;
+        if (headerKey.indexOf('task') !== -1 && headerKey.indexOf('type') !== -1) colIndex['tasktype'] = idx;
+        if (headerKey.indexOf('due') !== -1 && headerKey.indexOf('date') !== -1) colIndex['duedate'] = idx;
+        if (headerKey.indexOf('status') !== -1) colIndex['status'] = idx;
+        if (headerKey.indexOf('assigned') !== -1) colIndex['assignedto'] = idx;
+        if (headerKey.indexOf('materials') !== -1) colIndex['materials'] = idx;
+        if (headerKey.indexOf('notes') !== -1) colIndex['notes'] = idx;
+        if (headerKey.indexOf('completed') !== -1 && headerKey.indexOf('by') !== -1) colIndex['completedby'] = idx;
+        if (headerKey.indexOf('completed') !== -1 && headerKey.indexOf('date') !== -1) colIndex['completeddate'] = idx;
+        if (headerKey.indexOf('actual') !== -1 && headerKey.indexOf('labor') !== -1) colIndex['actuallaborhours'] = idx;
+        if (headerKey.indexOf('target') !== -1 && headerKey.indexOf('gravity') !== -1) colIndex['targetgravity'] = idx;
+        if (headerKey.indexOf('target') !== -1 && headerKey.indexOf('ph') !== -1) colIndex['targetph'] = idx;
+        if (headerKey.indexOf('task') !== -1 && headerKey.indexOf('id') !== -1) colIndex['taskid'] = idx;
+      }
+    });
+    
+    // Get raw materials for on-hand quantities (with units)
+    var rmMap = getRawMaterialsMap();
+    
+    // Find tasks for this batch
+    for (var i = 1; i < data.length; i++) {
+      var row = data[i];
+      var rowBatchNumber = row[colIndex['batchnumber']] || row[0];
+      
+      if (rowBatchNumber && rowBatchNumber.toString() === batchNumber) {
+        var materials = [];
+        var materialsJson = row[colIndex['materials']];
+        
+        if (materialsJson) {
+          try {
+            var mats = typeof materialsJson === 'string' ? JSON.parse(materialsJson) : materialsJson;
+            if (Array.isArray(mats)) {
+              mats.forEach(function(m) {
+                var matName = (m.name || m.item || '').toString();
+                var recipeUnit = (m.unit || m.uom || '').toString().trim() || 'each';
+                var rmData = rmMap[matName.toLowerCase()];
+                
+                var onHand = 0;
+                if (rmData) {
+                  var rmUnit = rmData.unit || 'each';
+                  // Convert raw material unit to recipe unit for display
+                  onHand = convertUnits(rmData.quantity, rmUnit, recipeUnit);
+                }
+                
+                materials.push({
+                  name: matName,
+                  quantity: parseFloat(m.quantity || m.amount || 0),
+                  unit: recipeUnit,
+                  onHand: onHand,
+                  rawMaterialUnit: rmData ? rmData.unit : null
+                });
+              });
+            }
+          } catch(e) {
+            Logger.log('Error parsing materials JSON: ' + e.toString());
+          }
+        }
+        
+        var taskId = row[colIndex['taskid']] || 'task_' + i;
+        if (!taskId || taskId === '') taskId = 'task_' + i;
+        
+        tasks.push({
+          id: taskId.toString(),
+          rowIndex: i + 1, // 1-indexed for sheet
+          name: (row[colIndex['taskname']] || row[1] || '').toString(),
+          type: (row[colIndex['tasktype']] || row[2] || '').toString(),
+          dueDate: row[colIndex['duedate']] || row[3] || '',
+          status: (row[colIndex['status']] || row[4] || 'Pending').toString(),
+          assignedTo: (row[colIndex['assignedto']] || row[5] || '').toString(),
+          materials: materials,
+          notes: (row[colIndex['notes']] || '').toString(),
+          completedBy: (row[colIndex['completedby']] || '').toString(),
+          completedDate: row[colIndex['completeddate']] || '',
+          laborHours: parseFloat(row[colIndex['actuallaborhours']] || 0),
+          targets: {
+            gravity: row[colIndex['targetgravity']] ? parseFloat(row[colIndex['targetgravity']]) : null,
+            ph: row[colIndex['targetph']] ? parseFloat(row[colIndex['targetph']]) : null
+          }
+        });
+      }
+    }
+    
+    // Sort by due date
+    tasks.sort(function(a, b) {
+      var dateA = new Date(a.dueDate);
+      var dateB = new Date(b.dueDate);
+      return dateA - dateB;
+    });
+    
+    return tasks;
+    
+  } catch(e) {
+    Logger.log('Error getting cellar tasks: ' + e.toString());
+    return [];
+  }
+}
+
+/**
+ * Complete a cellar task - Phase 2C
+ * @param {string} batchNumber - Batch number
+ * @param {string} taskId - Task ID
+ * @param {string} completedBy - Person who completed the task
+ * @param {number} laborHours - Labor hours worked
+ * @param {Array} actualMaterials - Array of actual material quantities
+ * @param {Object} actualReadings - Object with gravity, pH readings
+ * @param {string} notes - Task notes
+ * @returns {Object} Success/error result
+ */
+function completeCellarTask(batchNumber, taskId, completedBy, laborHours, actualMaterials, actualReadings, notes) {
+  try {
+    var ss = getBrmSpreadsheet();
+    var tasksSheet = ss.getSheetByName('Batch Tasks');
+    var rmSheet = ss.getSheetByName(SHEETS.RAW_MATERIALS);
+    var materialLogSheet = ss.getSheetByName('Material Log');
+    var batchLogSheet = ss.getSheetByName(SHEETS.BATCH_LOG);
+    
+    if (!tasksSheet) {
+      return { success: false, error: 'Batch Tasks sheet not found' };
+    }
+    
+    var data = tasksSheet.getDataRange().getValues();
+    if (data.length < 2) {
+      return { success: false, error: 'No tasks found' };
+    }
+    
+    var headers = data[0];
+    var colIndex = {};
+    headers.forEach(function(h, idx) {
+      if (h) {
+        var headerKey = h.toString().toLowerCase().trim();
+        colIndex[headerKey] = idx;
+        if (headerKey.indexOf('batch') !== -1 && headerKey.indexOf('#') !== -1) colIndex['batchnumber'] = idx;
+        if (headerKey.indexOf('task') !== -1 && headerKey.indexOf('id') !== -1) colIndex['taskid'] = idx;
+        if (headerKey.indexOf('task') !== -1 && headerKey.indexOf('name') !== -1) colIndex['taskname'] = idx;
+        if (headerKey.indexOf('materials') !== -1) colIndex['materials'] = idx;
+        if (headerKey.indexOf('status') !== -1) colIndex['status'] = idx;
+        if (headerKey.indexOf('assigned') !== -1) colIndex['assignedto'] = idx;
+        if (headerKey.indexOf('completed') !== -1 && headerKey.indexOf('by') !== -1) colIndex['completedby'] = idx;
+        if (headerKey.indexOf('completed') !== -1 && headerKey.indexOf('date') !== -1) colIndex['completeddate'] = idx;
+        if (headerKey.indexOf('actual') !== -1 && headerKey.indexOf('labor') !== -1) colIndex['actuallaborhours'] = idx;
+        if (headerKey.indexOf('notes') !== -1) colIndex['notes'] = idx;
+        if (headerKey.indexOf('actual') !== -1 && headerKey.indexOf('gravity') !== -1) colIndex['actualgravity'] = idx;
+        if (headerKey.indexOf('actual') !== -1 && headerKey.indexOf('ph') !== -1) colIndex['actualph'] = idx;
+      }
+    });
+    
+    // Find task row
+    var taskRow = -1;
+    var taskData = null;
+    for (var i = 1; i < data.length; i++) {
+      var rowBatchNumber = data[i][colIndex['batchnumber']] || data[i][0];
+      var rowTaskId = data[i][colIndex['taskid']] || 'task_' + (i + 1);
+      
+      if (rowBatchNumber && rowBatchNumber.toString() === batchNumber && 
+          rowTaskId.toString() === taskId.toString()) {
+        taskRow = i + 1;
+        taskData = data[i];
+        break;
+      }
+    }
+    
+    if (taskRow === -1) {
+      return { success: false, error: 'Task not found: ' + taskId };
+    }
+    
+    // Get materials
+    var materials = [];
+    var materialsJson = taskData[colIndex['materials']];
+    if (materialsJson) {
+      try {
+        materials = typeof materialsJson === 'string' ? JSON.parse(materialsJson) : materialsJson;
+        if (!Array.isArray(materials)) materials = [];
+      } catch(e) {
+        Logger.log('Error parsing materials: ' + e.toString());
+      }
+    }
+    
+    // Deplete materials
+    var totalMaterialCost = 0;
+    var laborConfig = getLaborConfig();
+    var laborRate = laborConfig.rate || 25;
+    var rmCols = RAW_MATERIAL_CONFIG.columns;
+    
+    for (var m = 0; m < materials.length; m++) {
+      var mat = materials[m];
+      var actualQty = actualMaterials[m] !== undefined ? actualMaterials[m] : (mat.quantity || 0);
+      var matName = (mat.name || mat.item || '').toString();
+      
+      if (!matName) continue;
+      
+      // Find and deplete from Raw Materials
+      if (rmSheet) {
+        var rmData = rmSheet.getDataRange().getValues();
+        var rmStartRow = RAW_MATERIAL_CONFIG.dataStartRow - 1;
+        
+        for (var r = rmStartRow; r < rmData.length; r++) {
+          var itemName = (rmData[r][rmCols.item - 1] || '').toString().trim();
+          if (itemName && itemName.toLowerCase() === matName.toLowerCase()) {
+            var currentQty = parseFloat(rmData[r][rmCols.qtyOnHand - 1]) || 0;
+            var rmUnit = (rmData[r][rmCols.unit - 1] || '').toString().trim() || 'each';
+            var unitCost = parseFloat(rmData[r][rmCols.avgCost - 1]) || 0;
+            
+            // Convert recipe unit to raw material unit if different
+            var recipeUnit = (mat.unit || mat.uom || '').toString().trim() || 'each';
+            var qtyToDeplete = actualQty;
+            if (recipeUnit.toLowerCase() !== rmUnit.toLowerCase()) {
+              qtyToDeplete = convertUnits(actualQty, recipeUnit, rmUnit);
+              Logger.log('Cellar task unit conversion: ' + actualQty + ' ' + recipeUnit + ' = ' + qtyToDeplete + ' ' + rmUnit);
+            }
+            
+            var newQty = Math.max(0, currentQty - qtyToDeplete);
+            
+            rmSheet.getRange(r + 1, rmCols.qtyOnHand).setValue(newQty);
+            // Cost calculation uses original recipe quantity (for pricing accuracy)
+            totalMaterialCost += actualQty * unitCost;
+            
+            // Log to Material Log
+            if (materialLogSheet) {
+              var taskName = (taskData[colIndex['taskname']] || taskId).toString();
+              materialLogSheet.appendRow([
+                new Date(),
+                batchNumber,
+                matName,
+                -actualQty,
+                (mat.unit || mat.uom || '').toString(),
+                completedBy,
+                taskName,
+                'Cellar Task: ' + taskName
+              ]);
+            }
+            break;
+          }
+        }
+      }
+    }
+    
+    // Update task status
+    var now = new Date();
+    if (colIndex['status'] !== undefined) {
+      tasksSheet.getRange(taskRow, colIndex['status'] + 1).setValue('Complete');
+    }
+    if (colIndex['completedby'] !== undefined) {
+      tasksSheet.getRange(taskRow, colIndex['completedby'] + 1).setValue(completedBy);
+    }
+    if (colIndex['completeddate'] !== undefined) {
+      tasksSheet.getRange(taskRow, colIndex['completeddate'] + 1).setValue(now);
+    }
+    if (colIndex['actuallaborhours'] !== undefined) {
+      tasksSheet.getRange(taskRow, colIndex['actuallaborhours'] + 1).setValue(laborHours);
+    }
+    if (notes && colIndex['notes'] !== undefined) {
+      tasksSheet.getRange(taskRow, colIndex['notes'] + 1).setValue(notes);
+    }
+    
+    // Store actual readings if provided
+    if (actualReadings) {
+      if (actualReadings.gravity && colIndex['actualgravity'] !== undefined) {
+        tasksSheet.getRange(taskRow, colIndex['actualgravity'] + 1).setValue(actualReadings.gravity);
+      }
+      if (actualReadings.ph && colIndex['actualph'] !== undefined) {
+        tasksSheet.getRange(taskRow, colIndex['actualph'] + 1).setValue(actualReadings.ph);
+      }
+    }
+    
+    // Update batch COGS
+    var laborCost = laborHours * laborRate;
+    updateBatchCOGS(batchNumber, totalMaterialCost, laborCost);
+    
+    return serializeForHtml({ 
+      success: true, 
+      materialCost: totalMaterialCost,
+      laborCost: laborCost,
+      message: 'Task completed successfully'
+    });
+    
+  } catch(e) {
+    Logger.log('Error completing cellar task: ' + e.toString());
+    return { success: false, error: e.toString() };
+  }
+}
+
+/**
+ * Update batch COGS after task completion - Phase 2C
+ * @param {string} batchNumber - Batch number
+ * @param {number} materialCost - Additional material cost
+ * @param {number} laborCost - Additional labor cost
+ */
+function updateBatchCOGS(batchNumber, materialCost, laborCost) {
+  try {
+    var ss = getBrmSpreadsheet();
+    var batchLogSheet = ss.getSheetByName(SHEETS.BATCH_LOG);
+    if (!batchLogSheet) return;
+    
+    var data = batchLogSheet.getDataRange().getValues();
+    var headerRow = 8; // Row 9 is headers
+    var headers = data[headerRow] || [];
+    
+    var colIndex = {};
+    headers.forEach(function(h, idx) {
+      if (h) {
+        var headerKey = h.toString().toLowerCase().trim();
+        colIndex[headerKey] = idx;
+        if (headerKey.indexOf('recipe cost') !== -1) colIndex['recipecost'] = idx;
+        if (headerKey.indexOf('addition cost') !== -1) colIndex['additioncost'] = idx;
+        if (headerKey.indexOf('labor') !== -1 && headerKey.indexOf('$') !== -1) colIndex['laborcost'] = idx;
+        if (headerKey.indexOf('overhead') !== -1) colIndex['overhead'] = idx;
+        if (headerKey.indexOf('total cost') !== -1) colIndex['totalcost'] = idx;
+        if (headerKey.indexOf('size') !== -1) colIndex['size'] = idx;
+      }
+    });
+    
+    for (var i = headerRow + 1; i < data.length; i++) {
+      if (data[i][0] && data[i][0].toString() === batchNumber) {
+        var currentRecipeCost = parseFloat(data[i][colIndex['recipecost']] || data[i][4] || 0);
+        var currentAdditionCost = parseFloat(data[i][colIndex['additioncost']] || data[i][18] || 0);
+        var currentLaborCost = parseFloat(data[i][colIndex['laborcost']] || data[i][6] || 0);
+        var batchSize = parseFloat(data[i][colIndex['size']] || data[i][3] || 60);
+        
+        // Update Addition Cost (for cellar task materials)
+        var newAdditionCost = currentAdditionCost + materialCost;
+        if (colIndex['additioncost'] !== undefined) {
+          batchLogSheet.getRange(i + 1, colIndex['additioncost'] + 1).setValue(newAdditionCost);
+        } else {
+          batchLogSheet.getRange(i + 1, 19).setValue(newAdditionCost); // Column S
+        }
+        
+        // Update Labor Cost
+        var newLaborCost = currentLaborCost + laborCost;
+        if (colIndex['laborcost'] !== undefined) {
+          batchLogSheet.getRange(i + 1, colIndex['laborcost'] + 1).setValue(newLaborCost);
+        } else {
+          batchLogSheet.getRange(i + 1, 7).setValue(newLaborCost); // Column G
+        }
+        
+        // Recalculate Total Cost (Recipe + Addition + Labor + Overhead)
+        var overheadRate = 15; // $/BBL
+        var overhead = batchSize * overheadRate;
+        var totalCost = currentRecipeCost + newAdditionCost + newLaborCost + overhead;
+        
+        if (colIndex['totalcost'] !== undefined) {
+          batchLogSheet.getRange(i + 1, colIndex['totalcost'] + 1).setValue(totalCost);
+        } else {
+          batchLogSheet.getRange(i + 1, 9).setValue(totalCost); // Column I
+        }
+        
+        break;
+      }
+    }
+  } catch(e) {
+    Logger.log('Error updating COGS: ' + e.toString());
+  }
+}
+
+/**
+ * Get labor config - Phase 2C
+ * @returns {Object} Labor configuration with rate
+ */
+function getLaborConfig() {
+  try {
+    var ss = getBrmSpreadsheet();
+    var batchLogSheet = ss.getSheetByName(SHEETS.BATCH_LOG);
+    if (batchLogSheet) {
+      // Try to get rate from cell B5 (common location)
+      try {
+        var laborRate = batchLogSheet.getRange('B5').getValue();
+        if (laborRate && !isNaN(laborRate)) {
+          return { rate: parseFloat(laborRate) };
+        }
+      } catch(e) {}
+    }
+    return { rate: 25 }; // Default rate
+  } catch(e) {
+    return { rate: 25 };
   }
 }

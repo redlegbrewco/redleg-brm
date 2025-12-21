@@ -4254,6 +4254,9 @@ function renderOpExCategories(categories) {
       // Section 3: Turn 2
       renderTurn2(data);
       
+      // Section 4: Cellar Tasks
+      renderCellarTasks(data);
+      
       // Update section visibility based on workflow state
       updateSectionVisibility(data);
     }
@@ -4720,6 +4723,332 @@ function renderOpExCategories(categories) {
       return formatDate(dateStr) + ' ' + d.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
     }
 
+    // ═══════════════════════════════════════════════════════════════════════════════
+    // PHASE 2C: CELLAR TASKS
+    // ═══════════════════════════════════════════════════════════════════════════════
+
+    // Cellar Tasks State
+    var taskTimers = {}; // { taskId: { interval, seconds, startTime } }
+
+    // Render Cellar Tasks
+    function renderCellarTasks(data) {
+      var container = document.getElementById('cellarTasksList');
+      if (!container) return;
+      
+      container.innerHTML = '';
+      
+      // Check if brewing is complete (Turn 1 + Turn 2 or Turn 1 + No Turn 2)
+      var brewingComplete = (data.turn1Complete && data.turn2Complete) || 
+                            (data.turn1Complete && data.noTurn2);
+      
+      if (!brewingComplete) {
+        document.getElementById('cellarTasksSection').classList.add('locked');
+        var statusEl = document.getElementById('cellarTasksStatus');
+        if (statusEl) statusEl.textContent = '🔒 Complete brewing first';
+        container.innerHTML = '<p class="locked-message">Complete Turn 1 and Turn 2 to unlock cellar tasks.</p>';
+        return;
+      }
+      
+      document.getElementById('cellarTasksSection').classList.remove('locked');
+      
+      if (!data.cellarTasks || data.cellarTasks.length === 0) {
+        container.innerHTML = '<p class="no-tasks">No cellar tasks for this batch.</p>';
+        var statusEl = document.getElementById('cellarTasksStatus');
+        if (statusEl) statusEl.textContent = 'No tasks';
+        return;
+      }
+      
+      var completedCount = 0;
+      var today = new Date();
+      today.setHours(0, 0, 0, 0);
+      
+      data.cellarTasks.forEach(function(task) {
+        if (task.status === 'Complete') completedCount++;
+        
+        var dueDate = new Date(task.dueDate);
+        dueDate.setHours(0, 0, 0, 0);
+        
+        var dueClass = '';
+        var statusClass = '';
+        
+        if (task.status === 'Complete') {
+          statusClass = 'complete';
+          dueClass = '';
+        } else if (dueDate < today) {
+          statusClass = 'overdue';
+          dueClass = 'overdue';
+        } else if (dueDate.getTime() === today.getTime()) {
+          statusClass = 'due-today';
+          dueClass = 'due-today';
+        } else {
+          statusClass = 'pending';
+          dueClass = '';
+        }
+        
+        var taskHtml = buildTaskCard(task, statusClass, dueClass, data.brewers || []);
+        container.innerHTML += taskHtml;
+      });
+      
+      var statusEl = document.getElementById('cellarTasksStatus');
+      if (statusEl) {
+        statusEl.textContent = completedCount + ' of ' + data.cellarTasks.length + ' Complete';
+      }
+      
+      // Initialize timer states for incomplete tasks
+      data.cellarTasks.forEach(function(task) {
+        if (task.status !== 'Complete') {
+          taskTimers[task.id] = { interval: null, seconds: 0, startTime: null };
+        }
+      });
+    }
+
+    function buildTaskCard(task, statusClass, dueClass, brewers) {
+      var materialsHtml = '';
+      if (task.materials && task.materials.length > 0) {
+        task.materials.forEach(function(mat, idx) {
+          materialsHtml += '<tr>' +
+            '<td>' + escapeHtml(mat.name) + '</td>' +
+            '<td>' + mat.quantity.toFixed(2) + '</td>' +
+            '<td><input type="number" id="taskMatActual_' + task.id + '_' + idx + '" value="' + mat.quantity.toFixed(2) + '" step="0.01" class="actual-input"></td>' +
+            '<td>' + escapeHtml(mat.unit) + '</td>' +
+            '<td class="' + (mat.onHand < mat.quantity ? 'low-inventory' : '') + '">' + (mat.onHand || 0).toFixed(2) + '</td>' +
+            '</tr>';
+        });
+      } else {
+        materialsHtml = '<tr><td colspan="5" style="text-align:center;padding:12px;color:#999;">No materials for this task</td></tr>';
+      }
+      
+      var brewersOptions = '<option value="">-- Select --</option>';
+      if (brewers && brewers.length > 0) {
+        brewers.forEach(function(b) {
+          var name = typeof b === 'string' ? b : (b.name || b);
+          var selected = task.assignedTo === name ? ' selected' : '';
+          brewersOptions += '<option value="' + escapeHtml(name) + '"' + selected + '>' + escapeHtml(name) + '</option>';
+        });
+      }
+      
+      var targetsHtml = '';
+      if (task.targets) {
+        targetsHtml = '<div class="task-targets">';
+        if (task.targets.gravity) {
+          targetsHtml += '<div class="target-item"><label>Target Gravity:</label><span>' + task.targets.gravity + ' °P</span>' +
+            '<label>Actual:</label><input type="number" id="taskGravityActual_' + task.id + '" step="0.1" placeholder="°P"></div>';
+        }
+        if (task.targets.ph) {
+          targetsHtml += '<div class="target-item"><label>Target pH:</label><span>' + task.targets.ph + '</span>' +
+            '<label>Actual:</label><input type="number" id="taskPhActual_' + task.id + '" step="0.01" placeholder="pH"></div>';
+        }
+        targetsHtml += '</div>';
+      }
+      
+      var isComplete = task.status === 'Complete';
+      
+      return '<div class="task-card" data-task-id="' + task.id + '" data-status="' + statusClass + '">' +
+        '<div class="task-header" onclick="toggleTaskDetails(\'' + task.id + '\')">' +
+          '<div class="task-status-indicator ' + statusClass + '"></div>' +
+          '<div class="task-info">' +
+            '<span class="task-name">' + escapeHtml(task.name) + '</span>' +
+            '<span class="task-type">' + escapeHtml(task.type) + '</span>' +
+          '</div>' +
+          '<div class="task-due">' +
+            '<span class="due-label">Due:</span>' +
+            '<span class="due-date ' + dueClass + '">' + formatDate(task.dueDate) + '</span>' +
+          '</div>' +
+          '<span class="task-expand-icon">▼</span>' +
+        '</div>' +
+        '<div id="taskDetails_' + task.id + '" class="task-details" style="display:none;">' +
+          (isComplete ? '' : 
+            '<div class="task-controls">' +
+              '<div class="control-group">' +
+                '<label>Assigned:</label>' +
+                '<select id="taskAssigned_' + task.id + '" onchange="updateTaskButtonState(\'' + task.id + '\')" style="padding:8px;border:1px solid #ddd;border-radius:4px;min-width:150px;">' + brewersOptions + '</select>' +
+              '</div>' +
+              '<div class="control-group">' +
+                '<label>Timer:</label>' +
+                '<span id="taskTimer_' + task.id + '" class="timer-display">00:00:00</span>' +
+                '<button id="taskStartBtn_' + task.id + '" onclick="startTaskTimer(\'' + task.id + '\')" class="btn btn-sm btn-success">▶ Start</button>' +
+                '<button id="taskStopBtn_' + task.id + '" onclick="stopTaskTimer(\'' + task.id + '\')" class="btn btn-sm btn-warning" style="display:none;">⏸ Pause</button>' +
+              '</div>' +
+            '</div>'
+          ) +
+          targetsHtml +
+          (isComplete ? '' :
+            '<div class="task-materials">' +
+              '<h5>Materials</h5>' +
+              '<table class="materials-table">' +
+                '<thead><tr><th>Material</th><th>Recipe</th><th>Actual</th><th>Unit</th><th>On Hand</th></tr></thead>' +
+                '<tbody>' + materialsHtml + '</tbody>' +
+              '</table>' +
+            '</div>' +
+            '<div class="task-notes">' +
+              '<label>Notes:</label>' +
+              '<textarea id="taskNotes_' + task.id + '" rows="2" placeholder="Add notes..." style="width:100%;padding:8px;border:1px solid #ddd;border-radius:4px;resize:vertical;">' + (task.notes || '') + '</textarea>' +
+            '</div>' +
+            '<div class="task-complete-section">' +
+              '<button id="taskCompleteBtn_' + task.id + '" onclick="completeTask(\'' + task.id + '\')" class="btn btn-primary" disabled>✅ Complete Task</button>' +
+              '<p class="help-text">Depletes materials, logs labor, updates COGS</p>' +
+            '</div>'
+          ) +
+          (isComplete ? 
+            '<div class="completed-info">' +
+              '<div class="completed-badge">✅ COMPLETE</div>' +
+              '<div class="completed-details">' +
+                '<span>By: <strong>' + escapeHtml(task.completedBy || '') + '</strong></span>' +
+                '<span>Hours: <strong>' + (task.laborHours || 0).toFixed(2) + '</strong></span>' +
+                '<span>Time: <strong>' + formatDateTime(task.completedDate) + '</strong></span>' +
+              '</div>' +
+            '</div>'
+          : '') +
+        '</div>' +
+      '</div>';
+    }
+
+    // Task Timer Functions
+    function startTaskTimer(taskId) {
+      if (taskTimers[taskId] && taskTimers[taskId].interval) return;
+      
+      if (!taskTimers[taskId]) {
+        taskTimers[taskId] = { interval: null, seconds: 0, startTime: null };
+      }
+      
+      taskTimers[taskId].startTime = new Date();
+      var startBtn = document.getElementById('taskStartBtn_' + taskId);
+      var stopBtn = document.getElementById('taskStopBtn_' + taskId);
+      if (startBtn) startBtn.style.display = 'none';
+      if (stopBtn) stopBtn.style.display = 'inline-block';
+      
+      taskTimers[taskId].interval = setInterval(function() {
+        taskTimers[taskId].seconds++;
+        var timerEl = document.getElementById('taskTimer_' + taskId);
+        if (timerEl) timerEl.textContent = formatTimer(taskTimers[taskId].seconds);
+      }, 1000);
+      
+      updateTaskButtonState(taskId);
+    }
+
+    function stopTaskTimer(taskId) {
+      if (taskTimers[taskId] && taskTimers[taskId].interval) {
+        clearInterval(taskTimers[taskId].interval);
+        taskTimers[taskId].interval = null;
+      }
+      var startBtn = document.getElementById('taskStartBtn_' + taskId);
+      var stopBtn = document.getElementById('taskStopBtn_' + taskId);
+      if (startBtn) startBtn.style.display = 'inline-block';
+      if (stopBtn) stopBtn.style.display = 'none';
+    }
+
+    // Complete Task
+    function completeTask(taskId) {
+      var assignedEl = document.getElementById('taskAssigned_' + taskId);
+      var assigned = assignedEl ? assignedEl.value : '';
+      var laborHours = taskTimers[taskId] ? taskTimers[taskId].seconds / 3600 : 0;
+      var notesEl = document.getElementById('taskNotes_' + taskId);
+      var notes = notesEl ? notesEl.value : '';
+      
+      if (!assigned) {
+        showToast('Please select who completed this task', 'warning');
+        return;
+      }
+      if (laborHours < 0.01) {
+        showToast('Please start the timer before completing', 'warning');
+        return;
+      }
+      
+      // Collect actual material quantities
+      var actualMaterials = [];
+      var matInputs = document.querySelectorAll('[id^="taskMatActual_' + taskId + '_"]');
+      matInputs.forEach(function(input) {
+        actualMaterials.push(parseFloat(input.value) || 0);
+      });
+      
+      // Collect actual readings (gravity, pH)
+      var actualReadings = {};
+      var gravityInput = document.getElementById('taskGravityActual_' + taskId);
+      var phInput = document.getElementById('taskPhActual_' + taskId);
+      if (gravityInput && gravityInput.value) actualReadings.gravity = parseFloat(gravityInput.value);
+      if (phInput && phInput.value) actualReadings.ph = parseFloat(phInput.value);
+      
+      if (!confirm('Complete this task?\n\nThis will:\n- Deplete task materials\n- Log ' + laborHours.toFixed(2) + ' labor hours\n- Update COGS')) {
+        return;
+      }
+      
+      stopTaskTimer(taskId);
+      showLoading('Completing task...');
+      
+      google.script.run
+        .withSuccessHandler(function(result) {
+          hideLoading();
+          if (result.success) {
+            showToast('Task completed!', 'success');
+            openBrewerSheet(brewerSheetState.batchNumber); // Refresh
+          } else {
+            showToast('Error: ' + result.error, 'error');
+          }
+        })
+        .withFailureHandler(function(error) {
+          hideLoading();
+          showToast('Error: ' + error.message, 'error');
+        })
+        .completeCellarTask(brewerSheetState.batchNumber, taskId, assigned, laborHours, actualMaterials, actualReadings, notes);
+    }
+
+    // Task UI Helpers
+    function toggleTaskDetails(taskId) {
+      var details = document.getElementById('taskDetails_' + taskId);
+      if (details) {
+        details.style.display = details.style.display === 'none' ? 'block' : 'none';
+        var icon = event.target.querySelector('.task-expand-icon');
+        if (!icon) {
+          var header = event.target.closest('.task-header');
+          if (header) icon = header.querySelector('.task-expand-icon');
+        }
+        if (icon) {
+          icon.textContent = details.style.display === 'none' ? '▼' : '▲';
+        }
+      }
+    }
+
+    function updateTaskButtonState(taskId) {
+      var assignedEl = document.getElementById('taskAssigned_' + taskId);
+      var timerStarted = taskTimers[taskId] && taskTimers[taskId].seconds > 0;
+      var btn = document.getElementById('taskCompleteBtn_' + taskId);
+      
+      if (assignedEl && btn) {
+        btn.disabled = !(assignedEl.value && timerStarted);
+      }
+    }
+
+    function filterTasks(filter) {
+      var cards = document.querySelectorAll('.task-card');
+      
+      // Update filter buttons
+      document.querySelectorAll('.filter-btn').forEach(function(btn) {
+        btn.classList.remove('active');
+      });
+      if (event && event.target) {
+        event.target.classList.add('active');
+      }
+      
+      cards.forEach(function(card) {
+        var status = card.dataset.status;
+        var show = false;
+        
+        switch(filter) {
+          case 'all': show = true; break;
+          case 'pending': show = status === 'pending'; break;
+          case 'due': show = status === 'due-today'; break;
+          case 'overdue': show = status === 'overdue'; break;
+          case 'complete': show = status === 'complete'; break;
+        }
+        
+        card.style.display = show ? 'block' : 'none';
+      });
+    }
+
+    function showAddTaskModal() {
+      showToast('Add Task feature coming soon', 'info');
+    }
+
   </script>
 
   <!-- ═══════════════════════════════════════════════════════════════════════════════
@@ -4975,12 +5304,264 @@ function renderOpExCategories(categories) {
       text-transform: uppercase;
     }
 
-    .status-planned { background: #E0E0E0; color: #424242; }
-    .status-brewing { background: #FFF3E0; color: #E65100; }
-    .status-fermenting { background: #E3F2FD; color: #1565C0; }
-    .status-conditioning { background: #F3E5F5; color: #7B1FA2; }
-    .status-ready-to-package { background: #E8F5E9; color: #2E7D32; }
-    .status-packaged { background: #4CAF50; color: white; }
+.status-planned { background: #E0E0E0; color: #424242; }
+.status-brewing { background: #FFF3E0; color: #E65100; }
+.status-fermenting { background: #E3F2FD; color: #1565C0; }
+.status-conditioning { background: #F3E5F5; color: #7B1FA2; }
+.status-ready-to-package { background: #E8F5E9; color: #2E7D32; }
+.status-packaged { background: #4CAF50; color: white; }
+
+/* Task Filters */
+.task-filters {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+
+.filter-btn {
+  padding: 6px 12px;
+  border: 1px solid #ddd;
+  background: white;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+  transition: all 0.2s;
+}
+
+.filter-btn:hover {
+  background: #f5f5f5;
+}
+
+.filter-btn.active {
+  background: #8B0000;
+  color: white;
+  border-color: #8B0000;
+}
+
+/* Task Cards */
+.cellar-tasks-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.task-card {
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  overflow: hidden;
+  background: white;
+  transition: box-shadow 0.2s;
+}
+
+.task-card:hover {
+  box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+}
+
+.task-header {
+  display: flex;
+  align-items: center;
+  padding: 12px 16px;
+  cursor: pointer;
+  gap: 12px;
+  background: #fafafa;
+}
+
+.task-header:hover {
+  background: #f0f0f0;
+}
+
+.task-status-indicator {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.task-status-indicator.pending { background: #9E9E9E; }
+.task-status-indicator.due-today { background: #FF9800; }
+.task-status-indicator.overdue { background: #F44336; }
+.task-status-indicator.complete { background: #4CAF50; }
+
+.task-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.task-name {
+  font-weight: bold;
+  display: block;
+  color: #1D3557;
+  font-size: 14px;
+}
+
+.task-type {
+  font-size: 12px;
+  color: #666;
+  display: block;
+  margin-top: 2px;
+}
+
+.task-due {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+}
+
+.due-label {
+  font-size: 11px;
+  color: #666;
+}
+
+.task-due .due-date {
+  font-weight: bold;
+  font-size: 13px;
+}
+
+.task-due .due-date.overdue {
+  color: #F44336;
+}
+
+.task-due .due-date.due-today {
+  color: #FF9800;
+}
+
+.task-expand-icon {
+  font-size: 12px;
+  color: #666;
+  transition: transform 0.2s;
+}
+
+.task-details {
+  padding: 16px;
+  border-top: 1px solid #eee;
+  background: #fafafa;
+}
+
+.task-controls {
+  display: flex;
+  gap: 24px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+  padding: 12px;
+  background: white;
+  border-radius: 8px;
+  border: 1px solid #e5e7eb;
+}
+
+.task-materials {
+  margin-bottom: 16px;
+}
+
+.task-materials h5 {
+  margin: 0 0 8px 0;
+  color: #8B0000;
+  font-size: 14px;
+}
+
+.materials-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  background: white;
+}
+
+.materials-table th,
+.materials-table td {
+  padding: 6px 10px;
+  text-align: left;
+  border-bottom: 1px solid #eee;
+}
+
+.materials-table th {
+  background: #8B0000;
+  color: white;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.materials-table tr:hover {
+  background: #f9fafb;
+}
+
+.task-notes {
+  margin-bottom: 16px;
+}
+
+.task-notes label {
+  display: block;
+  font-weight: 600;
+  margin-bottom: 6px;
+  color: #374151;
+  font-size: 13px;
+}
+
+.task-complete-section {
+  text-align: center;
+  padding-top: 16px;
+  border-top: 1px solid #eee;
+}
+
+.task-targets {
+  background: #E3F2FD;
+  padding: 12px;
+  border-radius: 8px;
+  margin-bottom: 16px;
+  border: 1px solid #BBDEFB;
+}
+
+.target-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.target-item:last-child {
+  margin-bottom: 0;
+}
+
+.target-item label {
+  font-weight: 600;
+  font-size: 12px;
+  min-width: 100px;
+}
+
+.target-item span {
+  font-weight: bold;
+  color: #1565C0;
+}
+
+.target-item input {
+  padding: 6px 8px;
+  border: 1px solid #90CAF9;
+  border-radius: 4px;
+  width: 100px;
+}
+
+.add-task-section {
+  margin-top: 16px;
+  text-align: center;
+  padding-top: 16px;
+  border-top: 1px solid #eee;
+}
+
+.no-tasks, .locked-message {
+  text-align: center;
+  color: #666;
+  padding: 24px;
+  font-size: 14px;
+}
+
+.section-status {
+  padding: 4px 12px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: bold;
+  background: #E0E0E0;
+  color: #666;
+}
 
     .collapse-icon {
       font-size: 12px;
