@@ -2907,90 +2907,125 @@
     function renderRecipeView(data) {
       var recipe = data.recipe;
       
-      // Recipe Info
+      // Header
       document.getElementById('recipeViewName').textContent = recipe.name;
-      document.getElementById('recipeViewStyle').textContent = recipe.style || '--';
-      document.getElementById('recipeViewBatchSize').textContent = recipe.batchSize + ' BBL';
-      document.getElementById('recipeViewYield').textContent = recipe.expectedYield + '%';
-      document.getElementById('recipeViewFermDays').textContent = recipe.fermDays || '--';
+      document.getElementById('recipeViewBatchSizeHeader').textContent = recipe.batchSize || 60;
+      document.getElementById('recipeViewStyleHeader').textContent = recipe.style || '--';
+      document.getElementById('recipeViewCOGSHeader').textContent = (data.costs.perBBL || 0).toFixed(0);
+      document.getElementById('recipeViewOGHeader').textContent = recipe.og || '--';
+      document.getElementById('recipeViewFGHeader').textContent = recipe.fg || '--';
+      document.getElementById('recipeViewABVHeader').textContent = recipe.abv || '--';
+      document.getElementById('recipeViewIBUHeader').textContent = recipe.ibu || '--';
       
-      // Targets
-      document.getElementById('recipeViewOG').textContent = recipe.og ? recipe.og + ' °P' : '--';
-      document.getElementById('recipeViewFG').textContent = recipe.fg ? recipe.fg + ' °P' : '--';
-      document.getElementById('recipeViewABV').textContent = recipe.abv ? recipe.abv + '%' : '--';
-      document.getElementById('recipeViewIBU').textContent = recipe.ibu || '--';
-      document.getElementById('recipeViewSRM').textContent = recipe.srm || '--';
-      document.getElementById('recipeViewMashTemp').textContent = recipe.mashTemp ? recipe.mashTemp + '°F' : '--';
+      // Ingredients - Combined table
+      renderRecipeIngredientsCombined(data.turn1Ingredients, data.turn2Ingredients);
       
-      // Turn 1 Ingredients
-      renderRecipeIngredients('recipeViewTurn1Body', data.turn1Ingredients);
-      document.getElementById('recipeViewTurn1Cost').textContent = '$' + (data.costs.turn1 || 0).toFixed(2);
+      // Brew Day
+      document.getElementById('recipeViewEfficiency').textContent = '85'; // Default, can be made editable
+      document.getElementById('recipeViewPreBoilGravity').textContent = '12'; // Default
       
-      // Turn 2 Ingredients
-      renderRecipeIngredients('recipeViewTurn2Body', data.turn2Ingredients);
-      document.getElementById('recipeViewTurn2Cost').textContent = '$' + (data.costs.turn2 || 0).toFixed(2);
-      
-      // Cellar Tasks
-      renderRecipeTasks('recipeViewTasksBody', data.cellarTasks);
-      
-      // Costs
-      document.getElementById('recipeViewIngredientCost').textContent = '$' + (data.costs.ingredient || 0).toFixed(2);
-      document.getElementById('recipeViewLaborCost').textContent = '$' + (data.costs.labor || 0).toFixed(2);
-      document.getElementById('recipeViewOverhead').textContent = '$' + (data.costs.overhead || 0).toFixed(2);
-      document.getElementById('recipeViewCOGSPerBBL').textContent = '$' + (data.costs.perBBL || 0).toFixed(2);
+      // Default Packaging
+      document.getElementById('recipeViewDefaultPackaging').textContent = '10 Half BBL, 5 Sixth BBL, 20 Cases';
     }
-
-    function renderRecipeIngredients(tbodyId, ingredients) {
-      var tbody = document.getElementById(tbodyId);
+    
+    function renderRecipeIngredientsCombined(turn1Ingredients, turn2Ingredients) {
+      var tbody = document.getElementById('recipeViewIngredientsBody');
       tbody.innerHTML = '';
       
-      if (!ingredients || ingredients.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="4" class="no-data">No ingredients</td></tr>';
-        return;
+      // Combine ingredients by name
+      var ingredientMap = {};
+      
+      // Process Turn 1
+      if (turn1Ingredients) {
+        turn1Ingredients.forEach(function(ing) {
+          var name = (ing.name || ing.ingredient || '').toString();
+          var key = name.toLowerCase();
+          if (!ingredientMap[key]) {
+            ingredientMap[key] = {
+              name: name,
+              turn1: 0,
+              turn2: 0,
+              unit: ing.unit || 'lb'
+            };
+          }
+          ingredientMap[key].turn1 = (ing.quantity || 0);
+          if (!ingredientMap[key].unit) ingredientMap[key].unit = ing.unit || 'lb';
+        });
       }
       
-      ingredients.forEach(function(ing) {
-        var row = '<tr>' +
-          '<td>' + escapeHtml(ing.name || ing.ingredient || '') + '</td>' +
-          '<td>' + escapeHtml(ing.category || '') + '</td>' +
-          '<td>' + (ing.quantity || 0).toFixed(2) + '</td>' +
-          '<td>' + escapeHtml(ing.unit || '') + '</td>' +
+      // Process Turn 2
+      if (turn2Ingredients) {
+        turn2Ingredients.forEach(function(ing) {
+          var name = (ing.name || ing.ingredient || '').toString();
+          var key = name.toLowerCase();
+          if (!ingredientMap[key]) {
+            ingredientMap[key] = {
+              name: name,
+              turn1: 0,
+              turn2: 0,
+              unit: ing.unit || 'lb'
+            };
+          }
+          ingredientMap[key].turn2 = (ing.quantity || 0);
+          if (!ingredientMap[key].unit) ingredientMap[key].unit = ing.unit || 'lb';
+        });
+      }
+      
+      // Render table
+      Object.keys(ingredientMap).forEach(function(key) {
+        var ing = ingredientMap[key];
+        var total = ing.turn1 + ing.turn2;
+        var row = '<tr style="border-bottom:1px solid #eee;">' +
+          '<td style="padding:10px;">' + escapeHtml(ing.name) + '</td>' +
+          '<td style="padding:10px;text-align:right;">' + (ing.turn1 > 0 ? ing.turn1.toFixed(2) + ' ' + ing.unit : '--') + '</td>' +
+          '<td style="padding:10px;text-align:right;">' + (ing.turn2 > 0 ? ing.turn2.toFixed(2) + ' ' + ing.unit : '--') + '</td>' +
+          '<td style="padding:10px;text-align:right;font-weight:600;">' + total.toFixed(2) + ' ' + ing.unit + '</td>' +
           '</tr>';
         tbody.innerHTML += row;
       });
+      
+      if (tbody.innerHTML === '') {
+        tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;padding:20px;color:#999;">No ingredients</td></tr>';
+      }
     }
 
-    function renderRecipeTasks(tbodyId, tasks) {
-      var tbody = document.getElementById(tbodyId);
-      tbody.innerHTML = '';
-      
-      if (!tasks || tasks.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="4" class="no-data">No tasks defined (defaults will apply)</td></tr>';
+    function brewThisFromRecipe() {
+      if (!currentRecipeData) {
+        showToast('No recipe loaded', 'error');
         return;
       }
       
-      tasks.forEach(function(task) {
-        var materials = '';
-        if (task.materials && task.materials.length > 0) {
-          materials = task.materials.map(function(m) {
-            return m.name + ' ' + m.quantity + ' ' + m.unit;
-          }).join(', ');
-        }
-        
-        var target = '';
-        if (task.target) {
-          if (task.target.gravity) target += 'Gravity ';
-          if (task.target.ph) target += 'pH ';
-        }
-        
-        var row = '<tr>' +
-          '<td>Day ' + task.dayOffset + '</td>' +
-          '<td>' + escapeHtml(task.name || task.type || '') + '</td>' +
-          '<td>' + escapeHtml(materials || '--') + '</td>' +
-          '<td>' + escapeHtml(target || '--') + '</td>' +
-          '</tr>';
-        tbody.innerHTML += row;
-      });
+      var recipeName = currentRecipeData.recipe.name;
+      var batchSize = currentRecipeData.recipe.batchSize || 60;
+      
+      showLoading('Creating batch...');
+      
+      google.script.run
+        .withSuccessHandler(function(result) {
+          hideLoading();
+          if (result && result.success) {
+            showToast('Batch ' + result.batchNumber + ' created!', 'success');
+            closeRecipeView();
+            // Open Brewer's Sheet
+            setTimeout(function() {
+              openBrewerSheet(result.batchNumber);
+            }, 500);
+          } else {
+            showToast('Error: ' + (result ? result.error : 'Unknown error'), 'error');
+          }
+        })
+        .withFailureHandler(function(error) {
+          hideLoading();
+          showToast('Error: ' + error.message, 'error');
+        })
+        .createBatchWithTasks(recipeName, batchSize, 'Created from Recipe View');
+    }
+    
+    function openEditRecipeSimple() {
+      if (!currentRecipeData) return;
+      var recipeName = currentRecipeData.recipe.name;
+      closeRecipeView();
+      openEditRecipe(recipeName);
     }
 
     function closeRecipeView() {
@@ -3110,6 +3145,205 @@
     // Update recipe click handler
     function onRecipeClick(recipeName) {
       openRecipeView(recipeName);
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // INLINE EDITING FUNCTIONS - Phase 1
+    // ═══════════════════════════════════════════════════════════════
+    
+    /**
+     * Start inline editing - convert span to input
+     */
+    function startInlineEdit(element) {
+      // Don't start if already editing
+      if (element.tagName === 'INPUT') return;
+      
+      var field = element.getAttribute('data-field');
+      var type = element.getAttribute('data-type') || 'text';
+      var suffix = element.getAttribute('data-suffix') || '';
+      var currentValue = element.textContent.trim();
+      
+      // Remove suffix from current value for editing
+      var editValue = currentValue;
+      if (suffix && editValue.endsWith(suffix)) {
+        editValue = editValue.substring(0, editValue.length - suffix.length).trim();
+      }
+      if (editValue === '--') editValue = '';
+      
+      // Create input
+      var input = document.createElement('input');
+      input.type = type === 'number' ? 'number' : 'text';
+      input.value = editValue;
+      input.className = 'inline-edit-input';
+      input.style.width = '100%';
+      input.style.textAlign = 'center';
+      input.style.border = '2px solid #8B0000';
+      input.style.borderRadius = '4px';
+      input.style.padding = '4px 8px';
+      input.style.fontSize = '16px';
+      input.style.fontWeight = 'bold';
+      
+      // Store original element data
+      input.setAttribute('data-field', field);
+      input.setAttribute('data-type', type);
+      input.setAttribute('data-suffix', suffix);
+      input.setAttribute('data-original-value', currentValue);
+      input.setAttribute('data-element-id', element.id);
+      
+      // Replace span with input
+      element.parentNode.replaceChild(input, element);
+      input.focus();
+      input.select();
+      
+      // Save on blur or Enter
+      input.addEventListener('blur', function() {
+        saveInlineEdit(input);
+      });
+      
+      input.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          input.blur();
+        } else if (e.key === 'Escape') {
+          e.preventDefault();
+          cancelInlineEdit(input);
+        }
+      });
+    }
+    
+    /**
+     * Save inline edit
+     */
+    function saveInlineEdit(input) {
+      var field = input.getAttribute('data-field');
+      var type = input.getAttribute('data-type');
+      var suffix = input.getAttribute('data-suffix') || '';
+      var elementId = input.getAttribute('data-element-id');
+      var originalValue = input.getAttribute('data-original-value');
+      var newValue = input.value.trim();
+      
+      // Validate
+      if (type === 'number') {
+        var numValue = parseFloat(newValue);
+        if (isNaN(numValue)) {
+          // Invalid number - revert
+          cancelInlineEdit(input);
+          showToast('Invalid number', 'error');
+          return;
+        }
+        newValue = numValue;
+      }
+      
+      // Check if value changed
+      var displayValue = newValue + suffix;
+      if (displayValue === originalValue) {
+        // No change - just revert
+        cancelInlineEdit(input);
+        return;
+      }
+      
+      // Show saving indicator
+      input.style.borderColor = '#FFA500';
+      input.style.opacity = '0.7';
+      
+      // Get recipe name
+      var recipeName = currentRecipeData ? currentRecipeData.recipe.name : null;
+      if (!recipeName) {
+        cancelInlineEdit(input);
+        showToast('Recipe not loaded', 'error');
+        return;
+      }
+      
+      // Save to backend
+      google.script.run
+        .withSuccessHandler(function(result) {
+          if (result && result.success) {
+            // Update display
+            updateInlineEditableField(elementId, newValue, field, type, suffix);
+            
+            // Show success indicator
+            var span = document.getElementById(elementId);
+            if (span) {
+              span.style.backgroundColor = '#E8F5E9';
+              setTimeout(function() {
+                span.style.backgroundColor = '';
+              }, 1000);
+            }
+            
+            // Update currentRecipeData
+            if (currentRecipeData && currentRecipeData.recipe) {
+              currentRecipeData.recipe[field] = newValue;
+            }
+            
+            showToast('Saved', 'success');
+          } else {
+            // Error - revert
+            cancelInlineEdit(input);
+            showToast('Error: ' + (result ? result.error : 'Unknown error'), 'error');
+          }
+        })
+        .withFailureHandler(function(error) {
+          cancelInlineEdit(input);
+          showToast('Error: ' + error.message, 'error');
+        })
+        .updateRecipeField(recipeName, field, newValue);
+    }
+    
+    /**
+     * Cancel inline edit - revert to original
+     */
+    function cancelInlineEdit(input) {
+      var elementId = input.getAttribute('data-element-id');
+      var originalValue = input.getAttribute('data-original-value');
+      var field = input.getAttribute('data-field');
+      var type = input.getAttribute('data-type');
+      var suffix = input.getAttribute('data-suffix') || '';
+      
+      // Extract value from original (remove suffix)
+      var value = originalValue;
+      if (suffix && value.endsWith(suffix)) {
+        value = value.substring(0, value.length - suffix.length).trim();
+      }
+      if (value === '--') value = '';
+      
+      updateInlineEditableField(elementId, value, field, type, suffix);
+    }
+    
+    /**
+     * Update inline editable field display
+     */
+    function updateInlineEditableField(elementId, value, field, type, suffix) {
+      var element = document.getElementById(elementId);
+      if (!element) return;
+      
+      // Create new span
+      var span = document.createElement('span');
+      span.id = elementId;
+      span.className = 'inline-editable';
+      span.setAttribute('data-field', field);
+      span.setAttribute('data-type', type);
+      if (suffix) span.setAttribute('data-suffix', suffix);
+      span.onclick = function() { startInlineEdit(this); };
+      
+      // Format display value
+      var displayValue = '--';
+      if (value !== null && value !== undefined && value !== '') {
+        if (type === 'number') {
+          displayValue = parseFloat(value) || 0;
+          if (suffix) {
+            displayValue = displayValue + suffix;
+          }
+        } else {
+          displayValue = value.toString();
+        }
+      }
+      
+      span.textContent = displayValue;
+      
+      // Replace input with span
+      if (element.parentNode) {
+        element.parentNode.replaceChild(span, element);
+      }
     }
     
     window.currentBrewerSheet = null;
@@ -4452,35 +4686,414 @@ function renderOpExCategories(categories) {
 
     // Render Brewer's Sheet
     function renderBrewerSheet(data) {
-      // Section 1: Batch Info
-      document.getElementById('batchNumber').textContent = data.batchNumber || 'TBD';
-      document.getElementById('batchBeerName').textContent = data.beerName || 'Unknown';
-      document.getElementById('batchSize').textContent = data.batchSize + ' BBL';
-      document.getElementById('batchBrewDate').textContent = formatDate(data.brewDate);
-      document.getElementById('batchCurrentVessel').textContent = data.currentVessel || '--';
-      var statusEl = document.getElementById('batchStatus');
-      statusEl.textContent = data.status || 'PLANNED';
-      statusEl.className = 'batch-value status-badge status-' + (data.status || 'planned').toLowerCase().replace(' ', '-');
-      document.getElementById('batchRunningCOGS').textContent = '$' + (data.runningCOGS || 0).toFixed(2);
+      // Batch Header
+      document.getElementById('batchNumberHeader').textContent = data.batchNumber || 'TBD';
+      document.getElementById('batchStatusHeader').textContent = 'Status: ' + (data.status || 'PLANNED');
+      document.getElementById('batchRecipeHeader').textContent = data.beerName || 'Unknown';
+      document.getElementById('batchBrewDateHeader').textContent = formatDate(data.brewDate) || '--';
+      document.getElementById('batchFVHeader').textContent = data.currentVessel || '--';
+      document.getElementById('batchSizeHeader').textContent = data.batchSize || '--';
+      document.getElementById('batchCOGSHeader').textContent = (data.runningCOGS || 0).toFixed(0);
       
-      // Load brewers dropdown
+      // Ingredients - Combined table
+      renderBrewerSheetIngredients(data);
+      
+      // Turn 1
+      renderBrewerSheetTurn1(data);
+      
+      // Turn 2
+      renderBrewerSheetTurn2(data);
+      
+      // Fermentation
+      renderBrewerSheetFermentation(data);
+      
+      // Brite Tank
+      renderBrewerSheetBriteTank(data);
+      
+      // Packaging
+      renderBrewerSheetPackaging(data);
+      
+      // Costs
+      renderBrewerSheetCosts(data);
+      
+      // Load dropdowns
       loadBrewersDropdown();
-      
-      // Load available vessels
       loadAvailableVessels();
-      
-      // Section 2: Turn 1
-      renderTurn1(data);
-      
-      // Section 3: Turn 2
-      renderTurn2(data);
-      
-      // Section 4: Cellar Tasks
-      renderCellarTasks(data);
-      
-      // Update section visibility based on workflow state
-      updateSectionVisibility(data);
     }
+    
+    function renderBrewerSheetIngredients(data) {
+      var tbody = document.getElementById('brewerSheetIngredientsBody');
+      tbody.innerHTML = '';
+      
+      // Combine Turn 1 and Turn 2 ingredients
+      var ingredientMap = {};
+      
+      // Process Turn 1
+      if (data.turn1Ingredients) {
+        data.turn1Ingredients.forEach(function(ing) {
+          var name = (ing.name || ing.ingredient || '').toString();
+          var key = name.toLowerCase();
+          if (!ingredientMap[key]) {
+            ingredientMap[key] = {
+              name: name,
+              turn1Recipe: 0,
+              turn1Actual: 0,
+              turn2Recipe: 0,
+              turn2Actual: 0,
+              unit: ing.unit || 'lb'
+            };
+          }
+          ingredientMap[key].turn1Recipe = (ing.quantity || 0);
+          // Get actual if available
+          if (ing.actualQuantity !== undefined) {
+            ingredientMap[key].turn1Actual = ing.actualQuantity;
+          } else {
+            ingredientMap[key].turn1Actual = ingredientMap[key].turn1Recipe; // Default to recipe
+          }
+        });
+      }
+      
+      // Process Turn 2
+      if (data.turn2Ingredients) {
+        data.turn2Ingredients.forEach(function(ing) {
+          var name = (ing.name || ing.ingredient || '').toString();
+          var key = name.toLowerCase();
+          if (!ingredientMap[key]) {
+            ingredientMap[key] = {
+              name: name,
+              turn1Recipe: 0,
+              turn1Actual: 0,
+              turn2Recipe: 0,
+              turn2Actual: 0,
+              unit: ing.unit || 'lb'
+            };
+          }
+          ingredientMap[key].turn2Recipe = (ing.quantity || 0);
+          if (ing.actualQuantity !== undefined) {
+            ingredientMap[key].turn2Actual = ing.actualQuantity;
+          } else {
+            ingredientMap[key].turn2Actual = ingredientMap[key].turn2Recipe;
+          }
+        });
+      }
+      
+      // Render table
+      Object.keys(ingredientMap).forEach(function(key) {
+        var ing = ingredientMap[key];
+        var row = '<tr style="border-bottom:1px solid #eee;">' +
+          '<td style="padding:10px;">' + escapeHtml(ing.name) + '</td>' +
+          '<td style="padding:10px;text-align:right;">' + (ing.turn1Recipe > 0 ? ing.turn1Recipe.toFixed(2) + ' ' + ing.unit : '--') + '</td>' +
+          '<td style="padding:10px;text-align:right;">' +
+            '<input type="number" id="ing_t1_' + key.replace(/[^a-z0-9]/g, '_') + '" value="' + ing.turn1Actual.toFixed(2) + '" step="0.01" style="width:80px;padding:4px;border:1px solid #ddd;border-radius:4px;text-align:right;"> ' + ing.unit +
+          '</td>' +
+          '<td style="padding:10px;text-align:right;">' + (ing.turn2Recipe > 0 ? ing.turn2Recipe.toFixed(2) + ' ' + ing.unit : '--') + '</td>' +
+          '<td style="padding:10px;text-align:right;">' +
+            '<input type="number" id="ing_t2_' + key.replace(/[^a-z0-9]/g, '_') + '" value="' + ing.turn2Actual.toFixed(2) + '" step="0.01" style="width:80px;padding:4px;border:1px solid #ddd;border-radius:4px;text-align:right;"> ' + ing.unit +
+          '</td>' +
+          '</tr>';
+        tbody.innerHTML += row;
+      });
+      
+      if (tbody.innerHTML === '') {
+        tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;padding:20px;color:#999;">No ingredients</td></tr>';
+      }
+    }
+    
+    function renderBrewerSheetTurn1(data) {
+      // Set date
+      if (data.turn1CompleteDate) {
+        var date1 = new Date(data.turn1CompleteDate);
+        document.getElementById('turn1Date').value = date1.toISOString().split('T')[0];
+      } else {
+        document.getElementById('turn1Date').value = '';
+      }
+      
+      // Set brewer (after dropdown is loaded)
+      setTimeout(function() {
+        if (data.turn1CompletedBy) {
+          var brewerSelect = document.getElementById('turn1Brewer');
+          if (brewerSelect) {
+            brewerSelect.value = data.turn1CompletedBy;
+          }
+        }
+        
+        // Set vessel
+        if (data.turn1Vessel) {
+          var vesselSelect = document.getElementById('turn1Vessel');
+          if (vesselSelect) {
+            vesselSelect.value = data.turn1Vessel;
+          }
+        }
+      }, 500);
+      
+      // Set checkboxes if complete
+      if (data.turn1Complete) {
+        document.getElementById('turn1Mill').checked = true;
+        document.getElementById('turn1Mash').checked = true;
+        document.getElementById('turn1Lauter').checked = true;
+        document.getElementById('turn1Boil').checked = true;
+        document.getElementById('turn1Whirlpool').checked = true;
+        document.getElementById('turn1Transfer').checked = true;
+      }
+      
+      // Set efficiency and pre-boil gravity if available
+      if (data.turn1Efficiency) {
+        document.getElementById('turn1Efficiency').value = data.turn1Efficiency;
+      }
+      if (data.turn1PreBoilGravity) {
+        document.getElementById('turn1PreBoilGravity').value = data.turn1PreBoilGravity;
+      }
+    }
+    
+    function renderBrewerSheetTurn2(data) {
+      // Check if no turn 2
+      if (data.noTurn2) {
+        document.getElementById('noTurn2Checkbox').checked = true;
+        document.getElementById('turn2Controls').style.display = 'none';
+        return;
+      }
+      
+      document.getElementById('turn2Controls').style.display = 'block';
+      
+      // Set date
+      if (data.turn2CompleteDate) {
+        var date2 = new Date(data.turn2CompleteDate);
+        document.getElementById('turn2Date').value = date2.toISOString().split('T')[0];
+      } else {
+        document.getElementById('turn2Date').value = '';
+      }
+      
+      // Set brewer (after dropdown is loaded)
+      setTimeout(function() {
+        if (data.turn2CompletedBy) {
+          var brewerSelect = document.getElementById('turn2Brewer');
+          if (brewerSelect) {
+            brewerSelect.value = data.turn2CompletedBy;
+          }
+        }
+      }, 500);
+      
+      // Set checkboxes if complete
+      if (data.turn2Complete) {
+        document.getElementById('turn2Mill').checked = true;
+        document.getElementById('turn2Mash').checked = true;
+        document.getElementById('turn2Lauter').checked = true;
+        document.getElementById('turn2Boil').checked = true;
+        document.getElementById('turn2Whirlpool').checked = true;
+        document.getElementById('turn2Transfer').checked = true;
+      }
+      
+      // Set efficiency and pre-boil gravity
+      if (data.turn2Efficiency) {
+        document.getElementById('turn2Efficiency').value = data.turn2Efficiency;
+      }
+      if (data.turn2PreBoilGravity) {
+        document.getElementById('turn2PreBoilGravity').value = data.turn2PreBoilGravity;
+      }
+    }
+    
+    function renderBrewerSheetFermentation(data) {
+      // Set FV
+      document.getElementById('fermentationFV').textContent = data.currentVessel || '--';
+      
+      // Set checkboxes and dates based on batch status and data
+      // This would need to be populated from Batch Details or Batch Tasks
+    }
+    
+    function renderBrewerSheetBriteTank(data) {
+      // Set BT if available
+      if (data.briteTank) {
+        var btSelect = document.getElementById('briteTankSelect');
+        if (btSelect) {
+          btSelect.value = data.briteTank;
+        }
+      }
+    }
+    
+    function renderBrewerSheetPackaging(data) {
+      // Set packaging quantities if available
+      if (data.packagingHalfBBL) {
+        document.getElementById('pkgHalfBBL').value = data.packagingHalfBBL;
+      }
+      if (data.packagingSixthBBL) {
+        document.getElementById('pkgSixthBBL').value = data.packagingSixthBBL;
+      }
+      if (data.packagingCases) {
+        document.getElementById('pkgCases').value = data.packagingCases;
+      }
+      if (data.packagingWaste) {
+        document.getElementById('pkgWaste').value = data.packagingWaste;
+      }
+      
+      // Calculate totals
+      updatePackagingTotals();
+    }
+    
+    function renderBrewerSheetCosts(data) {
+      document.getElementById('costsIngredients').textContent = (data.ingredientCost || 0).toFixed(0);
+      document.getElementById('costsLabor').textContent = (data.laborCost || 0).toFixed(0);
+      document.getElementById('costsOverhead').textContent = (data.overheadCost || 0).toFixed(0);
+      var total = (data.ingredientCost || 0) + (data.laborCost || 0) + (data.overheadCost || 0);
+      document.getElementById('costsTotal').textContent = total.toFixed(0);
+      var perBBL = data.batchSize > 0 ? total / data.batchSize : 0;
+      document.getElementById('costsPerBBL').textContent = perBBL.toFixed(2);
+    }
+    
+    function updatePackagingTotals() {
+      var halfBBL = parseFloat(document.getElementById('pkgHalfBBL').value) || 0;
+      var sixthBBL = parseFloat(document.getElementById('pkgSixthBBL').value) || 0;
+      var cases = parseFloat(document.getElementById('pkgCases').value) || 0;
+      
+      // Convert to BBL (Half BBL = 0.5 BBL, Sixth BBL = 0.167 BBL, Case = ~0.02 BBL)
+      var totalBBL = (halfBBL * 0.5) + (sixthBBL * 0.167) + (cases * 0.02);
+      document.getElementById('pkgTotalBBL').textContent = totalBBL.toFixed(2);
+      
+      // Calculate yield
+      var batchSize = parseFloat(document.getElementById('batchSizeHeader').textContent) || 0;
+      var yield = batchSize > 0 ? (totalBBL / batchSize) * 100 : 0;
+      document.getElementById('pkgYield').textContent = yield.toFixed(1);
+    }
+    
+    function completeBatchFromSheet() {
+      if (!brewerSheetState.batchNumber) {
+        showToast('No batch loaded', 'error');
+        return;
+      }
+      
+      // Collect all data from form
+      var batchData = {
+        batchNumber: brewerSheetState.batchNumber,
+        turn1: {
+          date: document.getElementById('turn1Date').value,
+          brewer: document.getElementById('turn1Brewer').value,
+          vessel: document.getElementById('turn1Vessel').value,
+          efficiency: parseFloat(document.getElementById('turn1Efficiency').value) || 0,
+          preBoilGravity: parseFloat(document.getElementById('turn1PreBoilGravity').value) || 0,
+          notes: document.getElementById('turn1Notes').value,
+          steps: {
+            mill: document.getElementById('turn1Mill').checked,
+            mash: document.getElementById('turn1Mash').checked,
+            lauter: document.getElementById('turn1Lauter').checked,
+            boil: document.getElementById('turn1Boil').checked,
+            whirlpool: document.getElementById('turn1Whirlpool').checked,
+            transfer: document.getElementById('turn1Transfer').checked
+          }
+        },
+        turn2: {
+          noTurn2: document.getElementById('noTurn2Checkbox').checked,
+          date: document.getElementById('turn2Date').value,
+          brewer: document.getElementById('turn2Brewer').value,
+          vessel: document.getElementById('turn2Vessel').value,
+          efficiency: parseFloat(document.getElementById('turn2Efficiency').value) || 0,
+          preBoilGravity: parseFloat(document.getElementById('turn2PreBoilGravity').value) || 0,
+          notes: document.getElementById('turn2Notes').value,
+          steps: {
+            mill: document.getElementById('turn2Mill').checked,
+            mash: document.getElementById('turn2Mash').checked,
+            lauter: document.getElementById('turn2Lauter').checked,
+            boil: document.getElementById('turn2Boil').checked,
+            whirlpool: document.getElementById('turn2Whirlpool').checked,
+            transfer: document.getElementById('turn2Transfer').checked
+          }
+        },
+        fermentation: {
+          yeastPitched: document.getElementById('fermYeastPitched').checked,
+          yeastPitchedDate: document.getElementById('fermYeastPitchedDate').value,
+          complete: document.getElementById('fermComplete').checked,
+          completeDate: document.getElementById('fermCompleteDate').value,
+          dryHop: document.getElementById('fermDryHop').checked,
+          dryHopDate: document.getElementById('fermDryHopDate').value,
+          qaCheck: document.getElementById('fermQACheck').checked,
+          qaGravity: parseFloat(document.getElementById('fermQAGravity').value) || 0,
+          qaFG: parseFloat(document.getElementById('fermQAFG').value) || 0,
+          qapH: parseFloat(document.getElementById('fermQApH').value) || 0,
+          crash: document.getElementById('fermCrash').checked,
+          crashDate: document.getElementById('fermCrashDate').value
+        },
+        briteTank: {
+          vessel: document.getElementById('briteTankSelect').value,
+          transfer: document.getElementById('btTransfer').checked,
+          transferDate: document.getElementById('btTransferDate').value,
+          carbonate: document.getElementById('btCarbonate').checked,
+          carbonateDate: document.getElementById('btCarbonateDate').value
+        },
+        packaging: {
+          complete: document.getElementById('pkgComplete').checked,
+          completeDate: document.getElementById('pkgCompleteDate').value,
+          halfBBL: parseFloat(document.getElementById('pkgHalfBBL').value) || 0,
+          sixthBBL: parseFloat(document.getElementById('pkgSixthBBL').value) || 0,
+          cases: parseFloat(document.getElementById('pkgCases').value) || 0,
+          waste: parseFloat(document.getElementById('pkgWaste').value) || 0
+        },
+        actualIngredients: collectActualIngredients()
+      };
+      
+      showLoading('Completing batch...');
+      
+      google.script.run
+        .withSuccessHandler(function(result) {
+          hideLoading();
+          if (result && result.success) {
+            showToast('Batch completed successfully!', 'success');
+            closeBrewerSheet();
+            // Refresh batches list
+            if (typeof loadBatches === 'function') loadBatches();
+          } else {
+            showToast('Error: ' + (result ? result.error : 'Unknown error'), 'error');
+          }
+        })
+        .withFailureHandler(function(error) {
+          hideLoading();
+          showToast('Error: ' + error.message, 'error');
+        })
+        .completeBatchFromSheet(batchData);
+    }
+    
+    function collectActualIngredients() {
+      var actuals = { turn1: [], turn2: [] };
+      
+      // Collect Turn 1 actuals
+      var t1Inputs = document.querySelectorAll('[id^="ing_t1_"]');
+      t1Inputs.forEach(function(input) {
+        var key = input.id.replace('ing_t1_', '').replace(/_/g, ' ');
+        var value = parseFloat(input.value) || 0;
+        if (value > 0) {
+          actuals.turn1.push({ ingredient: key, quantity: value });
+        }
+      });
+      
+      // Collect Turn 2 actuals
+      var t2Inputs = document.querySelectorAll('[id^="ing_t2_"]');
+      t2Inputs.forEach(function(input) {
+        var key = input.id.replace('ing_t2_', '').replace(/_/g, ' ');
+        var value = parseFloat(input.value) || 0;
+        if (value > 0) {
+          actuals.turn2.push({ ingredient: key, quantity: value });
+        }
+      });
+      
+      return actuals;
+    }
+    
+    function toggleNoTurn2Checkbox() {
+      var checkbox = document.getElementById('noTurn2Checkbox');
+      var controls = document.getElementById('turn2Controls');
+      if (checkbox.checked) {
+        controls.style.display = 'none';
+      } else {
+        controls.style.display = 'block';
+      }
+    }
+    
+    // Add event listeners for packaging totals
+    document.addEventListener('DOMContentLoaded', function() {
+      ['pkgHalfBBL', 'pkgSixthBBL', 'pkgCases'].forEach(function(id) {
+        var el = document.getElementById(id);
+        if (el) {
+          el.addEventListener('input', updatePackagingTotals);
+        }
+      });
+    });
 
     // Render Turn 1
     function renderTurn1(data) {
@@ -4856,6 +5469,31 @@ function renderOpExCategories(categories) {
       google.script.run
         .withSuccessHandler(function(brewers) {
           var html = '<option value="">-- Select Brewer --</option>';
+          if (brewers && Array.isArray(brewers)) {
+            brewers.forEach(function(brewer) {
+              html += '<option value="' + escapeHtml(brewer) + '">' + escapeHtml(brewer) + '</option>';
+            });
+          }
+          
+          // Populate all brewer dropdowns
+          ['turn1Brewer', 'turn2Brewer'].forEach(function(id) {
+            var select = document.getElementById(id);
+            if (select) {
+              select.innerHTML = html;
+            }
+          });
+        })
+        .withFailureHandler(function(error) {
+          Logger.log('Error loading brewers: ' + error);
+        })
+        .getBrewersList();
+    }
+    
+    // Keep old function for backward compatibility
+    function loadBrewersDropdownOld() {
+      google.script.run
+        .withSuccessHandler(function(brewers) {
+          var html = '<option value="">-- Select Brewer --</option>';
           if (Array.isArray(brewers)) {
             brewers.forEach(function(b) {
               var name = typeof b === 'string' ? b : (b.name || b);
@@ -4880,6 +5518,56 @@ function renderOpExCategories(categories) {
     }
 
     function loadAvailableVessels() {
+      google.script.run
+        .withSuccessHandler(function(result) {
+          var vessels = [];
+          if (result && result.success && result.vessels) {
+            vessels = result.vessels;
+          } else if (Array.isArray(result)) {
+            vessels = result;
+          }
+          
+          // Separate FV/LT and Brite Tank options
+          var fvHtml = '<option value="">-- Select FV/LT --</option>';
+          var btHtml = '<option value="">-- Select BT --</option>';
+          
+          vessels.forEach(function(vessel) {
+            if (vessel.available || vessel.status === 'Available') {
+              var name = vessel.name || vessel.vessel || '';
+              var type = (vessel.type || '').toLowerCase();
+              var capacity = vessel.capacity || 60;
+              
+              if (type.indexOf('fermenter') !== -1 || type === 'lt' || type === 'fv' || type.indexOf('ferment') !== -1) {
+                fvHtml += '<option value="' + escapeHtml(name) + '">' + escapeHtml(name) + ' (' + capacity + ' BBL)</option>';
+              }
+              if (type.indexOf('brite') !== -1 || type === 'bt' || type.indexOf('bright') !== -1) {
+                btHtml += '<option value="' + escapeHtml(name) + '">' + escapeHtml(name) + ' (' + capacity + ' BBL)</option>';
+              }
+            }
+          });
+          
+          // Populate FV/LT dropdowns
+          ['turn1Vessel', 'turn2Vessel'].forEach(function(id) {
+            var select = document.getElementById(id);
+            if (select) {
+              select.innerHTML = fvHtml;
+            }
+          });
+          
+          // Populate Brite Tank dropdown
+          var btSelect = document.getElementById('briteTankSelect');
+          if (btSelect) {
+            btSelect.innerHTML = btHtml;
+          }
+        })
+        .withFailureHandler(function(error) {
+          console.error('Error loading vessels:', error);
+        })
+        .getAvailableVessels();
+    }
+    
+    // Keep old function for backward compatibility
+    function loadAvailableVesselsOld() {
       google.script.run
         .withSuccessHandler(function(result) {
           if (result.success && result.vessels) {
@@ -5745,6 +6433,39 @@ function renderOpExCategories(categories) {
   color: #999;
   font-style: italic;
   padding: 20px;
+}
+
+/* Inline Editing Styles - Phase 1 */
+.inline-editable {
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 4px;
+  transition: background-color 0.2s;
+  display: inline-block;
+  min-width: 60px;
+}
+
+.inline-editable:hover {
+  background-color: #f0f0f0;
+  border: 1px dashed #8B0000;
+}
+
+.inline-editable.editing {
+  background-color: #fffde7;
+}
+
+.inline-edit-input {
+  outline: none;
+  font-family: inherit;
+  font-size: inherit;
+  font-weight: inherit;
+  color: inherit;
+  background: white;
+}
+
+.inline-edit-input:focus {
+  border-color: #8B0000 !important;
+  box-shadow: 0 0 0 3px rgba(139, 0, 0, 0.1);
 }
 
 /* Task Filters */
@@ -9685,223 +10406,310 @@ document.getElementById('editRecipeModal').addEventListener('click', function(e)
       <h2 style="margin:0;">🍺 Brewer's Sheet</h2>
       <span class="close-btn" onclick="closeBrewerSheet()">&times;</span>
     </div>
-    <div class="modal-body brewer-sheet-body">
+    <div class="modal-body brewer-sheet-body" style="padding:20px;">
       
-      <!-- SECTION 1: BATCH INFO -->
-      <div id="batchInfoSection" class="brewer-section batch-info-section">
-        <div class="batch-info-grid">
-          <div class="batch-info-item">
-            <label>Batch #</label>
-            <span id="batchNumber" class="batch-value">--</span>
-          </div>
-          <div class="batch-info-item">
-            <label>Beer</label>
-            <span id="batchBeerName" class="batch-value">--</span>
-          </div>
-          <div class="batch-info-item">
-            <label>Total BBL</label>
-            <span id="batchSize" class="batch-value">--</span>
-          </div>
-          <div class="batch-info-item">
-            <label>Brew Date</label>
-            <span id="batchBrewDate" class="batch-value">--</span>
-          </div>
-          <div class="batch-info-item">
-            <label>Current Vessel</label>
-            <span id="batchCurrentVessel" class="batch-value">--</span>
-          </div>
-          <div class="batch-info-item">
-            <label>Status</label>
-            <span id="batchStatus" class="batch-value status-badge">--</span>
-          </div>
-          <div class="batch-info-item">
-            <label>Running COGS</label>
-            <span id="batchRunningCOGS" class="batch-value cogs-value">$0.00</span>
-          </div>
+      <!-- BATCH HEADER -->
+      <div style="background:#8B0000;color:white;padding:20px;border-radius:8px;margin-bottom:20px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+          <h2 style="margin:0;font-size:24px;">BATCH: <span id="batchNumberHeader">--</span></h2>
+          <span style="background:rgba(255,255,255,0.2);padding:6px 12px;border-radius:4px;font-weight:600;" id="batchStatusHeader">Status: --</span>
+        </div>
+        <div style="font-size:14px;opacity:0.9;">
+          Recipe: <span id="batchRecipeHeader">--</span> | 
+          Brew Date: <span id="batchBrewDateHeader">--</span> | 
+          FV: <span id="batchFVHeader">--</span>
+        </div>
+        <div style="font-size:14px;opacity:0.9;margin-top:8px;">
+          Batch Size: <span id="batchSizeHeader">--</span> BBL | 
+          Est. COGS: $<span id="batchCOGSHeader">--</span>/BBL
         </div>
       </div>
       
-      <!-- SECTION 2: TURN 1 -->
-      <div id="turn1Section" class="brewer-section turn-section">
-        <div class="section-header" onclick="toggleSection('turn1Content')">
-          <h3>🍺 TURN 1</h3>
-          <span id="turn1Status" class="turn-status">Not Started</span>
-          <span class="collapse-icon">▼</span>
-        </div>
-        
-        <div id="turn1Content" class="section-content">
-          <!-- Turn 1 Controls -->
-          <div class="turn-controls">
-            <div class="control-group">
-              <label>Brewer:</label>
-              <select id="turn1Brewer" onchange="updateTurn1ButtonState()" style="padding:8px;border:1px solid #ddd;border-radius:4px;min-width:150px;">
-                <option value="">-- Select Brewer --</option>
-              </select>
-            </div>
-            <div class="control-group">
-              <label>Timer:</label>
-              <span id="turn1Timer" class="timer-display">00:00:00</span>
-              <button id="turn1StartBtn" onclick="startTurn1Timer()" class="btn btn-sm btn-success">▶ Start</button>
-              <button id="turn1StopBtn" onclick="stopTurn1Timer()" class="btn btn-sm btn-warning" style="display:none;">⏸ Pause</button>
-            </div>
-            <div class="control-group">
-              <label>Transfer To:</label>
-              <select id="turn1Vessel" onchange="updateTurn1ButtonState()" style="padding:8px;border:1px solid #ddd;border-radius:4px;min-width:150px;">
-                <option value="">-- Select FV/LT --</option>
-              </select>
-            </div>
-          </div>
-          
-          <!-- Turn 1 Ingredients -->
-          <div class="ingredients-section">
-            <h4>Turn 1 Ingredients</h4>
-            <table class="ingredients-table">
-              <thead>
-                <tr>
-                  <th>Ingredient</th>
-                  <th>Category</th>
-                  <th>Recipe</th>
-                  <th>Actual</th>
-                  <th>Unit</th>
-                  <th>On Hand</th>
-                </tr>
-              </thead>
-              <tbody id="turn1IngredientsBody">
-                <tr><td colspan="6" style="text-align:center;padding:20px;color:#999;">Loading...</td></tr>
-              </tbody>
-            </table>
-          </div>
-          
-          <!-- Turn 1 Complete Button -->
-          <div class="turn-complete-section">
-            <button id="turn1CompleteBtn" onclick="completeTurn1()" class="btn btn-primary btn-lg" disabled>
-              ✅ Complete Turn 1 + Transfer to FV/LT
-            </button>
-            <p class="help-text">Depletes Turn 1 materials, logs labor, updates vessel status</p>
-          </div>
-          
-          <!-- Turn 1 Completed Info -->
-          <div id="turn1CompletedInfo" class="completed-info" style="display:none;">
-            <div class="completed-badge">✅ TURN 1 COMPLETE</div>
-            <div class="completed-details">
-              <span>Brewer: <strong id="turn1CompletedBrewer"></strong></span>
-              <span>Hours: <strong id="turn1CompletedHours"></strong></span>
-              <span>Vessel: <strong id="turn1CompletedVessel"></strong></span>
-              <span>Time: <strong id="turn1CompletedTime"></strong></span>
-            </div>
-          </div>
-        </div>
+      <!-- INGREDIENTS SECTION -->
+      <div style="margin-bottom:30px;">
+        <h3 style="margin:0 0 15px 0;color:#8B0000;border-bottom:2px solid #8B0000;padding-bottom:8px;">INGREDIENTS</h3>
+        <table style="width:100%;border-collapse:collapse;font-size:14px;">
+          <thead>
+            <tr style="background:#8B0000;color:white;">
+              <th style="padding:10px;text-align:left;font-weight:600;">Item</th>
+              <th style="padding:10px;text-align:right;">Turn 1 Recipe</th>
+              <th style="padding:10px;text-align:right;">Turn 1 Actual</th>
+              <th style="padding:10px;text-align:right;">Turn 2 Recipe</th>
+              <th style="padding:10px;text-align:right;">Turn 2 Actual</th>
+            </tr>
+          </thead>
+          <tbody id="brewerSheetIngredientsBody">
+            <!-- Populated dynamically -->
+          </tbody>
+        </table>
       </div>
       
-      <!-- SECTION 3: TURN 2 -->
-      <div id="turn2Section" class="brewer-section turn-section">
-        <div class="section-header" onclick="toggleSection('turn2Content')">
-          <h3>🍺 TURN 2</h3>
-          <span id="turn2Status" class="turn-status">Waiting for Turn 1</span>
-          <span class="collapse-icon">▼</span>
+      <!-- TURN 1 SECTION -->
+      <div style="margin-bottom:30px;border:1px solid #ddd;border-radius:8px;padding:20px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:15px;">
+          <h3 style="margin:0;color:#8B0000;">TURN 1</h3>
+          <div style="font-size:13px;">
+            Date: <input type="date" id="turn1Date" style="padding:4px;border:1px solid #ddd;border-radius:4px;">
+          </div>
         </div>
-        
-        <div id="turn2Content" class="section-content">
-          <!-- No Turn 2 Option -->
-          <div class="no-turn2-option">
-            <label>
-              <input type="checkbox" id="noTurn2Checkbox" onchange="toggleNoTurn2()">
-              No Turn 2 for this batch (single turn brew)
+        <div style="margin-bottom:15px;">
+          <label style="display:block;margin-bottom:5px;font-weight:600;">Brewer:</label>
+          <select id="turn1Brewer" style="padding:8px;border:1px solid #ddd;border-radius:4px;min-width:200px;">
+            <option value="">-- Select Brewer --</option>
+          </select>
+        </div>
+        <div style="margin-bottom:15px;">
+          <label style="display:block;margin-bottom:8px;font-weight:600;">Steps:</label>
+          <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;">
+            <label style="display:flex;align-items:center;gap:8px;">
+              <input type="checkbox" id="turn1Mill" style="width:18px;height:18px;"> Mill
+            </label>
+            <label style="display:flex;align-items:center;gap:8px;">
+              <input type="checkbox" id="turn1Mash" style="width:18px;height:18px;"> Mash
+            </label>
+            <label style="display:flex;align-items:center;gap:8px;">
+              <input type="checkbox" id="turn1Lauter" style="width:18px;height:18px;"> Lauter
+            </label>
+            <label style="display:flex;align-items:center;gap:8px;">
+              <input type="checkbox" id="turn1Boil" style="width:18px;height:18px;"> Boil
+            </label>
+            <label style="display:flex;align-items:center;gap:8px;">
+              <input type="checkbox" id="turn1Whirlpool" style="width:18px;height:18px;"> Whirlpool/Cool
+            </label>
+            <label style="display:flex;align-items:center;gap:8px;">
+              <input type="checkbox" id="turn1Transfer" style="width:18px;height:18px;"> Transfer to FV: 
+              <select id="turn1Vessel" style="padding:4px;border:1px solid #ddd;border-radius:4px;margin-left:5px;">
+                <option value="">-- Select --</option>
+              </select>
             </label>
           </div>
-          
-          <!-- Turn 2 Controls -->
-          <div id="turn2Controls">
-            <div class="turn-controls">
-              <div class="control-group">
-                <label>Brewer:</label>
-                <select id="turn2Brewer" onchange="updateTurn2ButtonState()" style="padding:8px;border:1px solid #ddd;border-radius:4px;min-width:150px;">
-                  <option value="">-- Select Brewer --</option>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:15px;margin-bottom:15px;">
+          <div>
+            <label style="display:block;margin-bottom:5px;font-weight:600;">Efficiency:</label>
+            <input type="number" id="turn1Efficiency" step="0.1" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:4px;">%
+          </div>
+          <div>
+            <label style="display:block;margin-bottom:5px;font-weight:600;">Pre-Boil Gravity:</label>
+            <input type="number" id="turn1PreBoilGravity" step="0.1" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:4px;">°P
+          </div>
+        </div>
+        <div>
+          <label style="display:block;margin-bottom:5px;font-weight:600;">Notes:</label>
+          <textarea id="turn1Notes" rows="3" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:4px;resize:vertical;"></textarea>
+        </div>
+      </div>
+      
+      <!-- TURN 2 SECTION -->
+      <div style="margin-bottom:30px;border:1px solid #ddd;border-radius:8px;padding:20px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:15px;">
+          <h3 style="margin:0;color:#8B0000;">TURN 2</h3>
+          <div style="font-size:13px;">
+            Date: <input type="date" id="turn2Date" style="padding:4px;border:1px solid #ddd;border-radius:4px;">
+          </div>
+        </div>
+        <div style="margin-bottom:15px;">
+          <label style="display:flex;align-items:center;gap:8px;">
+            <input type="checkbox" id="noTurn2Checkbox" onchange="toggleNoTurn2Checkbox()" style="width:18px;height:18px;"> NO TURN 2 (single turn brew)
+          </label>
+        </div>
+        <div id="turn2Controls" style="display:none;">
+          <div style="margin-bottom:15px;">
+            <label style="display:block;margin-bottom:5px;font-weight:600;">Brewer:</label>
+            <select id="turn2Brewer" style="padding:8px;border:1px solid #ddd;border-radius:4px;min-width:200px;">
+              <option value="">-- Select Brewer --</option>
+            </select>
+          </div>
+          <div style="margin-bottom:15px;">
+            <label style="display:block;margin-bottom:8px;font-weight:600;">Steps:</label>
+            <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;">
+              <label style="display:flex;align-items:center;gap:8px;">
+                <input type="checkbox" id="turn2Mill" style="width:18px;height:18px;"> Mill
+              </label>
+              <label style="display:flex;align-items:center;gap:8px;">
+                <input type="checkbox" id="turn2Mash" style="width:18px;height:18px;"> Mash
+              </label>
+              <label style="display:flex;align-items:center;gap:8px;">
+                <input type="checkbox" id="turn2Lauter" style="width:18px;height:18px;"> Lauter
+              </label>
+              <label style="display:flex;align-items:center;gap:8px;">
+                <input type="checkbox" id="turn2Boil" style="width:18px;height:18px;"> Boil
+              </label>
+              <label style="display:flex;align-items:center;gap:8px;">
+                <input type="checkbox" id="turn2Whirlpool" style="width:18px;height:18px;"> Whirlpool/Cool
+              </label>
+              <label style="display:flex;align-items:center;gap:8px;">
+                <input type="checkbox" id="turn2Transfer" style="width:18px;height:18px;"> Transfer to FV: 
+                <select id="turn2Vessel" style="padding:4px;border:1px solid #ddd;border-radius:4px;margin-left:5px;">
+                  <option value="">-- Select --</option>
                 </select>
-              </div>
-              <div class="control-group">
-                <label>Timer:</label>
-                <span id="turn2Timer" class="timer-display">00:00:00</span>
-                <button id="turn2StartBtn" onclick="startTurn2Timer()" class="btn btn-sm btn-success">▶ Start</button>
-                <button id="turn2StopBtn" onclick="stopTurn2Timer()" class="btn btn-sm btn-warning" style="display:none;">⏸ Pause</button>
-              </div>
-              <div class="control-group">
-                <label>Transfer To:</label>
-                <span id="turn2VesselDisplay">Same as Turn 1</span>
-              </div>
-            </div>
-            
-            <!-- Turn 2 Ingredients -->
-            <div class="ingredients-section">
-              <h4>Turn 2 Ingredients</h4>
-              <table class="ingredients-table">
-                <thead>
-                  <tr>
-                    <th>Ingredient</th>
-                    <th>Category</th>
-                    <th>Recipe</th>
-                    <th>Actual</th>
-                    <th>Unit</th>
-                    <th>On Hand</th>
-                  </tr>
-                </thead>
-                <tbody id="turn2IngredientsBody">
-                  <tr><td colspan="6" style="text-align:center;padding:20px;color:#999;">Waiting for Turn 1...</td></tr>
-                </tbody>
-              </table>
-            </div>
-            
-            <!-- Turn 2 Complete Button -->
-            <div class="turn-complete-section">
-              <button id="turn2CompleteBtn" onclick="completeTurn2()" class="btn btn-primary btn-lg" disabled>
-                ✅ Complete Turn 2 + Transfer to FV/LT
-              </button>
-              <p class="help-text">Depletes Turn 2 materials, logs labor, status → Fermenting</p>
+              </label>
             </div>
           </div>
-          
-          <!-- Turn 2 Completed Info -->
-          <div id="turn2CompletedInfo" class="completed-info" style="display:none;">
-            <div class="completed-badge">✅ TURN 2 COMPLETE</div>
-            <div class="completed-details">
-              <span>Brewer: <strong id="turn2CompletedBrewer"></strong></span>
-              <span>Hours: <strong id="turn2CompletedHours"></strong></span>
-              <span>Time: <strong id="turn2CompletedTime"></strong></span>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:15px;margin-bottom:15px;">
+            <div>
+              <label style="display:block;margin-bottom:5px;font-weight:600;">Efficiency:</label>
+              <input type="number" id="turn2Efficiency" step="0.1" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:4px;">%
+            </div>
+            <div>
+              <label style="display:block;margin-bottom:5px;font-weight:600;">Pre-Boil Gravity:</label>
+              <input type="number" id="turn2PreBoilGravity" step="0.1" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:4px;">°P
             </div>
           </div>
-          
-          <!-- No Turn 2 Completed Info -->
-          <div id="noTurn2CompletedInfo" class="completed-info" style="display:none;">
-            <div class="completed-badge">ℹ️ SINGLE TURN BREW</div>
-            <p>This batch was brewed in a single turn.</p>
+          <div>
+            <label style="display:block;margin-bottom:5px;font-weight:600;">Notes:</label>
+            <textarea id="turn2Notes" rows="3" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:4px;resize:vertical;"></textarea>
           </div>
         </div>
       </div>
       
-      <!-- SECTION 4: CELLAR TASKS (Phase 2C - placeholder) -->
-      <div id="cellarTasksSection" class="brewer-section locked">
-        <div class="section-header">
-          <h3>📋 Cellar Tasks</h3>
-          <span class="lock-message">🔒 Unlocks after brewing complete</span>
+      <!-- FERMENTATION SECTION -->
+      <div style="margin-bottom:30px;border:1px solid #ddd;border-radius:8px;padding:20px;">
+        <h3 style="margin:0 0 15px 0;color:#8B0000;">FERMENTATION</h3>
+        <div style="margin-bottom:10px;">
+          <label style="display:block;margin-bottom:5px;font-weight:600;">FV:</label>
+          <span id="fermentationFV" style="font-size:16px;font-weight:600;">--</span>
+        </div>
+        <div style="display:grid;grid-template-columns:2fr 1fr 1fr;gap:10px;align-items:center;margin-bottom:10px;">
+          <label style="display:flex;align-items:center;gap:8px;">
+            <input type="checkbox" id="fermYeastPitched" style="width:18px;height:18px;"> Yeast Pitched
+          </label>
+          <span>Date:</span>
+          <input type="date" id="fermYeastPitchedDate" style="padding:4px;border:1px solid #ddd;border-radius:4px;">
+        </div>
+        <div style="display:grid;grid-template-columns:2fr 1fr 1fr;gap:10px;align-items:center;margin-bottom:10px;">
+          <label style="display:flex;align-items:center;gap:8px;">
+            <input type="checkbox" id="fermComplete" style="width:18px;height:18px;"> Fermentation Complete
+          </label>
+          <span>Date:</span>
+          <input type="date" id="fermCompleteDate" style="padding:4px;border:1px solid #ddd;border-radius:4px;">
+        </div>
+        <div style="display:grid;grid-template-columns:2fr 1fr 1fr;gap:10px;align-items:center;margin-bottom:10px;">
+          <label style="display:flex;align-items:center;gap:8px;">
+            <input type="checkbox" id="fermDryHop" style="width:18px;height:18px;"> Dry Hop Added
+          </label>
+          <span>Date:</span>
+          <input type="date" id="fermDryHopDate" style="padding:4px;border:1px solid #ddd;border-radius:4px;">
+        </div>
+        <div style="display:grid;grid-template-columns:2fr 1fr 1fr 1fr 1fr;gap:10px;align-items:center;margin-bottom:10px;">
+          <label style="display:flex;align-items:center;gap:8px;">
+            <input type="checkbox" id="fermQACheck" style="width:18px;height:18px;"> QA Check
+          </label>
+          <span>OG:</span>
+          <input type="number" id="fermQAGravity" step="0.1" placeholder="14.1" style="padding:4px;border:1px solid #ddd;border-radius:4px;">
+          <span>FG:</span>
+          <input type="number" id="fermQAFG" step="0.1" placeholder="3.4" style="padding:4px;border:1px solid #ddd;border-radius:4px;">
+          <span>pH:</span>
+          <input type="number" id="fermQApH" step="0.1" placeholder="4.2" style="padding:4px;border:1px solid #ddd;border-radius:4px;">
+        </div>
+        <div style="display:grid;grid-template-columns:2fr 1fr 1fr;gap:10px;align-items:center;">
+          <label style="display:flex;align-items:center;gap:8px;">
+            <input type="checkbox" id="fermCrash" style="width:18px;height:18px;"> Crash Complete
+          </label>
+          <span>Date:</span>
+          <input type="date" id="fermCrashDate" style="padding:4px;border:1px solid #ddd;border-radius:4px;">
         </div>
       </div>
       
-      <!-- SECTION 5: PACKAGING (Phase 2E - placeholder) -->
-      <div id="packagingSection" class="brewer-section locked">
-        <div class="section-header">
-          <h3>📦 Packaging</h3>
-          <span class="lock-message">🔒 Unlocks after all cellar tasks complete</span>
+      <!-- BRITE TANK SECTION -->
+      <div style="margin-bottom:30px;border:1px solid #ddd;border-radius:8px;padding:20px;">
+        <h3 style="margin:0 0 15px 0;color:#8B0000;">BRITE TANK</h3>
+        <div style="margin-bottom:10px;">
+          <label style="display:block;margin-bottom:5px;font-weight:600;">BT:</label>
+          <select id="briteTankSelect" style="padding:8px;border:1px solid #ddd;border-radius:4px;min-width:200px;">
+            <option value="">-- Select BT --</option>
+          </select>
+        </div>
+        <div style="display:grid;grid-template-columns:2fr 1fr 1fr;gap:10px;align-items:center;margin-bottom:10px;">
+          <label style="display:flex;align-items:center;gap:8px;">
+            <input type="checkbox" id="btTransfer" style="width:18px;height:18px;"> Transfer to BT
+          </label>
+          <span>Date:</span>
+          <input type="date" id="btTransferDate" style="padding:4px;border:1px solid #ddd;border-radius:4px;">
+        </div>
+        <div style="display:grid;grid-template-columns:2fr 1fr 1fr;gap:10px;align-items:center;">
+          <label style="display:flex;align-items:center;gap:8px;">
+            <input type="checkbox" id="btCarbonate" style="width:18px;height:18px;"> Carbonate Complete
+          </label>
+          <span>Date:</span>
+          <input type="date" id="btCarbonateDate" style="padding:4px;border:1px solid #ddd;border-radius:4px;">
         </div>
       </div>
       
-      <!-- SECTION 6: SEND IT (Phase 2F - placeholder) -->
-      <div id="sendItSection" class="brewer-section locked" style="display:none;">
-        <!-- Only renders when ready -->
+      <!-- PACKAGING SECTION -->
+      <div style="margin-bottom:30px;border:1px solid #ddd;border-radius:8px;padding:20px;">
+        <h3 style="margin:0 0 15px 0;color:#8B0000;">PACKAGING</h3>
+        <div style="display:grid;grid-template-columns:2fr 1fr 1fr;gap:10px;align-items:center;margin-bottom:15px;">
+          <label style="display:flex;align-items:center;gap:8px;">
+            <input type="checkbox" id="pkgComplete" style="width:18px;height:18px;"> Package Complete
+          </label>
+          <span>Date:</span>
+          <input type="date" id="pkgCompleteDate" style="padding:4px;border:1px solid #ddd;border-radius:4px;">
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:15px;margin-bottom:15px;">
+          <div>
+            <label style="display:block;margin-bottom:5px;font-weight:600;">Half BBL:</label>
+            <input type="number" id="pkgHalfBBL" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:4px;">
+          </div>
+          <div>
+            <label style="display:block;margin-bottom:5px;font-weight:600;">Sixth BBL:</label>
+            <input type="number" id="pkgSixthBBL" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:4px;">
+          </div>
+          <div>
+            <label style="display:block;margin-bottom:5px;font-weight:600;">Cases:</label>
+            <input type="number" id="pkgCases" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:4px;">
+          </div>
+          <div>
+            <label style="display:block;margin-bottom:5px;font-weight:600;">Waste (gal):</label>
+            <input type="number" id="pkgWaste" step="0.1" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:4px;">
+          </div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:15px;font-size:14px;">
+          <div>
+            <strong>Total Packaged:</strong> <span id="pkgTotalBBL">--</span> BBL
+          </div>
+          <div>
+            <strong>Yield:</strong> <span id="pkgYield">--</span>%
+          </div>
+        </div>
+      </div>
+      
+      <!-- COSTS SECTION -->
+      <div style="margin-bottom:30px;background:linear-gradient(135deg,#8B0000,#5C0000);color:white;border-radius:8px;padding:20px;">
+        <h3 style="margin:0 0 15px 0;color:white;">COSTS</h3>
+        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:15px;margin-bottom:15px;">
+          <div>
+            <div style="font-size:12px;opacity:0.8;margin-bottom:4px;">Ingredients:</div>
+            <div style="font-size:20px;font-weight:600;">$<span id="costsIngredients">0</span></div>
+          </div>
+          <div>
+            <div style="font-size:12px;opacity:0.8;margin-bottom:4px;">Labor:</div>
+            <div style="font-size:20px;font-weight:600;">$<span id="costsLabor">0</span></div>
+          </div>
+          <div>
+            <div style="font-size:12px;opacity:0.8;margin-bottom:4px;">Overhead:</div>
+            <div style="font-size:20px;font-weight:600;">$<span id="costsOverhead">0</span></div>
+          </div>
+          <div>
+            <div style="font-size:12px;opacity:0.8;margin-bottom:4px;">TOTAL COGS:</div>
+            <div style="font-size:24px;font-weight:700;color:#FFD700;">$<span id="costsTotal">0</span></div>
+          </div>
+        </div>
+        <div style="text-align:center;padding-top:15px;border-top:1px solid rgba(255,255,255,0.2);">
+          <div style="font-size:16px;opacity:0.9;">PER BBL:</div>
+          <div style="font-size:28px;font-weight:700;color:#FFD700;">$<span id="costsPerBBL">0.00</span></div>
+        </div>
+      </div>
+      
+      <!-- COMPLETE BATCH BUTTON -->
+      <div style="text-align:center;padding:20px;">
+        <button onclick="completeBatchFromSheet()" class="btn btn-primary" style="background:#8B0000;color:white;padding:15px 40px;font-size:18px;font-weight:600;border:none;border-radius:8px;cursor:pointer;">
+          [ COMPLETE BATCH ]
+        </button>
       </div>
       
     </div>
-    <div class="modal-footer" style="padding:16px;border-top:1px solid #e5e7eb;display:flex;justify-content:flex-end;gap:12px;">
-      <button onclick="printBrewerSheet()" class="btn btn-secondary">🖨️ Print</button>
+    <div class="modal-footer" style="padding:15px 20px;border-top:1px solid #ddd;display:flex;justify-content:flex-end;gap:10px;">
       <button onclick="closeBrewerSheet()" class="btn btn-secondary">Close</button>
     </div>
   </div>
@@ -9916,185 +10724,100 @@ document.getElementById('editRecipeModal').addEventListener('click', function(e)
 </div>
 
 <!-- ═══════════════════════════════════════════════════════════════ -->
-<!-- RECIPE VIEW MODAL - Phase 2D -->
+<!-- RECIPE VIEW - COMPLETE REBUILD -->
 <!-- ═══════════════════════════════════════════════════════════════ -->
 <div id="recipeViewModal" class="modal">
-  <div class="modal-content recipe-view-modal">
-    <div class="modal-header">
-      <h2>📋 Recipe: <span id="recipeViewName"></span></h2>
-      <span class="close-btn" onclick="closeRecipeView()">&times;</span>
+  <div class="modal-content recipe-view-modal" style="max-width:1000px;">
+    <div class="modal-header" style="background:#8B0000;color:white;padding:20px;border-radius:8px 8px 0 0;">
+      <div style="display:flex;justify-content:space-between;align-items:center;">
+        <div>
+          <h2 style="margin:0;font-size:24px;"><span id="recipeViewName">Recipe Name</span></h2>
+          <div style="font-size:14px;opacity:0.9;margin-top:4px;">
+            Batch Size: <span id="recipeViewBatchSizeHeader">60</span> BBL | 
+            Style: <span id="recipeViewStyleHeader">--</span> | 
+            Est. COGS: $<span id="recipeViewCOGSHeader">85</span>/BBL
+          </div>
+        </div>
+        <div style="display:flex;gap:10px;">
+          <button onclick="openEditRecipeSimple()" class="btn btn-secondary" style="background:rgba(255,255,255,0.2);border:1px solid white;">Edit</button>
+          <button onclick="brewThisFromRecipe()" class="btn btn-primary" style="background:white;color:#8B0000;font-weight:bold;">🍺 Brew This</button>
+          <span class="close-btn" onclick="closeRecipeView()" style="color:white;font-size:28px;cursor:pointer;margin-left:10px;">&times;</span>
+        </div>
+      </div>
+      <div style="margin-top:12px;padding-top:12px;border-top:1px solid rgba(255,255,255,0.2);font-size:13px;">
+        Target OG: <span id="recipeViewOGHeader">14.2</span>°P | 
+        Target FG: <span id="recipeViewFGHeader">3.4</span>°P | 
+        ABV: <span id="recipeViewABVHeader">5.4</span>% | 
+        IBU: <span id="recipeViewIBUHeader">10.77</span>
+      </div>
     </div>
     
-    <div class="modal-body recipe-view-body">
+    <div class="modal-body recipe-view-body" style="padding:20px;">
       
-      <!-- SECTION 1: RECIPE INFO -->
-      <div class="recipe-section">
-        <div class="section-header">
-          <h3>📊 Recipe Info</h3>
-          <button class="edit-section-btn" onclick="editRecipeInfo()">✏️ Edit</button>
+      <!-- INGREDIENTS SECTION -->
+      <div style="margin-bottom:30px;">
+        <h3 style="margin:0 0 15px 0;color:#8B0000;border-bottom:2px solid #8B0000;padding-bottom:8px;">INGREDIENTS</h3>
+        <table style="width:100%;border-collapse:collapse;font-size:14px;">
+          <thead>
+            <tr style="background:#8B0000;color:white;">
+              <th style="padding:10px;text-align:left;font-weight:600;">Item</th>
+              <th style="padding:10px;text-align:right;">Turn 1</th>
+              <th style="padding:10px;text-align:right;">Turn 2</th>
+              <th style="padding:10px;text-align:right;">Total</th>
+            </tr>
+          </thead>
+          <tbody id="recipeViewIngredientsBody">
+            <!-- Populated dynamically -->
+          </tbody>
+        </table>
+      </div>
+      
+      <!-- BREW DAY SECTION -->
+      <div style="margin-bottom:30px;">
+        <h3 style="margin:0 0 15px 0;color:#8B0000;border-bottom:2px solid #8B0000;padding-bottom:8px;">BREW DAY</h3>
+        <div style="background:#f5f5f5;padding:15px;border-radius:6px;margin-bottom:10px;">
+          <div style="font-weight:600;margin-bottom:8px;">TURN 1: Mill → Mash → Lauter → Boil → Whirlpool → Transfer to FV</div>
+          <div style="font-weight:600;">TURN 2: Mill → Mash → Lauter → Boil → Whirlpool → Transfer to FV</div>
+          <label style="display:block;margin-top:10px;">
+            <input type="checkbox" id="recipeNoTurn2" style="margin-right:8px;"> No Turn 2
+          </label>
         </div>
-        <div class="section-content recipe-info-grid">
-          <div class="info-item">
-            <label>Style</label>
-            <span id="recipeViewStyle">--</span>
-          </div>
-          <div class="info-item">
-            <label>Base Batch Size</label>
-            <span id="recipeViewBatchSize">--</span>
-          </div>
-          <div class="info-item">
-            <label>Expected Yield</label>
-            <span id="recipeViewYield">--</span>
-          </div>
-          <div class="info-item">
-            <label>Fermentation Days</label>
-            <span id="recipeViewFermDays">--</span>
-          </div>
+        <div style="font-size:13px;color:#666;">
+          Target Efficiency: <span id="recipeViewEfficiency">85</span>% | 
+          Target Pre-Boil Gravity: <span id="recipeViewPreBoilGravity">12</span>°P
         </div>
       </div>
       
-      <!-- SECTION 2: TARGETS -->
-      <div class="recipe-section">
-        <div class="section-header">
-          <h3>🎯 Targets</h3>
-          <button class="edit-section-btn" onclick="editRecipeTargets()">✏️ Edit</button>
-        </div>
-        <div class="section-content targets-grid">
-          <div class="target-item">
-            <label>OG</label>
-            <span id="recipeViewOG">--</span>
-          </div>
-          <div class="target-item">
-            <label>FG</label>
-            <span id="recipeViewFG">--</span>
-          </div>
-          <div class="target-item">
-            <label>ABV</label>
-            <span id="recipeViewABV">--</span>
-          </div>
-          <div class="target-item">
-            <label>IBU</label>
-            <span id="recipeViewIBU">--</span>
-          </div>
-          <div class="target-item">
-            <label>SRM</label>
-            <span id="recipeViewSRM">--</span>
-          </div>
-          <div class="target-item">
-            <label>Mash Temp</label>
-            <span id="recipeViewMashTemp">--</span>
-          </div>
-        </div>
+      <!-- FERMENTATION & CELLAR SECTION -->
+      <div style="margin-bottom:30px;">
+        <h3 style="margin:0 0 15px 0;color:#8B0000;border-bottom:2px solid #8B0000;padding-bottom:8px;">FERMENTATION & CELLAR</h3>
+        <ul style="list-style:none;padding:0;margin:0;">
+          <li style="padding:8px 0;border-bottom:1px solid #eee;">• Yeast Pitch</li>
+          <li style="padding:8px 0;border-bottom:1px solid #eee;">• Fermentation (7-14 days)</li>
+          <li style="padding:8px 0;border-bottom:1px solid #eee;">• Dry Hop (if applicable)</li>
+          <li style="padding:8px 0;border-bottom:1px solid #eee;">• QA Check</li>
+          <li style="padding:8px 0;">• Crash</li>
+        </ul>
       </div>
       
-      <!-- SECTION 3: TURN 1 INGREDIENTS -->
-      <div class="recipe-section">
-        <div class="section-header">
-          <h3>🍺 Turn 1 Ingredients</h3>
-          <button class="edit-section-btn" onclick="editTurn1Ingredients()">✏️ Edit</button>
-        </div>
-        <div class="section-content">
-          <table class="recipe-ingredients-table">
-            <thead>
-              <tr>
-                <th>Ingredient</th>
-                <th>Category</th>
-                <th>Amount</th>
-                <th>Unit</th>
-              </tr>
-            </thead>
-            <tbody id="recipeViewTurn1Body">
-              <!-- Populated dynamically -->
-            </tbody>
-          </table>
-          <div class="section-subtotal">
-            Turn 1 Cost: <strong id="recipeViewTurn1Cost">$0.00</strong>
-          </div>
-        </div>
-      </div>
-      
-      <!-- SECTION 4: TURN 2 INGREDIENTS -->
-      <div class="recipe-section">
-        <div class="section-header">
-          <h3>🍺 Turn 2 Ingredients</h3>
-          <button class="edit-section-btn" onclick="editTurn2Ingredients()">✏️ Edit</button>
-        </div>
-        <div class="section-content">
-          <table class="recipe-ingredients-table">
-            <thead>
-              <tr>
-                <th>Ingredient</th>
-                <th>Category</th>
-                <th>Amount</th>
-                <th>Unit</th>
-              </tr>
-            </thead>
-            <tbody id="recipeViewTurn2Body">
-              <!-- Populated dynamically -->
-            </tbody>
-          </table>
-          <div class="section-subtotal">
-            Turn 2 Cost: <strong id="recipeViewTurn2Cost">$0.00</strong>
-          </div>
-        </div>
-      </div>
-      
-      <!-- SECTION 5: CELLAR TASKS -->
-      <div class="recipe-section">
-        <div class="section-header">
-          <h3>📋 Cellar Tasks</h3>
-          <button class="edit-section-btn" onclick="editCellarTasks()">✏️ Edit</button>
-        </div>
-        <div class="section-content">
-          <table class="cellar-tasks-table">
-            <thead>
-              <tr>
-                <th>Day</th>
-                <th>Task</th>
-                <th>Materials</th>
-                <th>Target</th>
-              </tr>
-            </thead>
-            <tbody id="recipeViewTasksBody">
-              <!-- Populated dynamically -->
-            </tbody>
-          </table>
-          <button class="add-task-inline-btn" onclick="addCellarTaskToRecipe()">+ Add Task</button>
-        </div>
-      </div>
-      
-      <!-- SECTION 6: COST SUMMARY -->
-      <div class="recipe-section cost-summary-section">
-        <div class="section-header">
-          <h3>💰 Cost Summary</h3>
-        </div>
-        <div class="section-content cost-summary-grid">
-          <div class="cost-item">
-            <label>Ingredient Cost</label>
-            <span id="recipeViewIngredientCost">$0.00</span>
-          </div>
-          <div class="cost-item">
-            <label>Est. Labor Cost</label>
-            <span id="recipeViewLaborCost">$0.00</span>
-          </div>
-          <div class="cost-item">
-            <label>Est. Overhead</label>
-            <span id="recipeViewOverhead">$0.00</span>
-          </div>
-          <div class="cost-item total">
-            <label>Est. COGS/BBL</label>
-            <span id="recipeViewCOGSPerBBL">$0.00</span>
-          </div>
+      <!-- BRITE & PACKAGING SECTION -->
+      <div style="margin-bottom:30px;">
+        <h3 style="margin:0 0 15px 0;color:#8B0000;border-bottom:2px solid #8B0000;padding-bottom:8px;">BRITE & PACKAGING</h3>
+        <ul style="list-style:none;padding:0;margin:0 0 15px 0;">
+          <li style="padding:8px 0;border-bottom:1px solid #eee;">• Transfer to BT</li>
+          <li style="padding:8px 0;border-bottom:1px solid #eee;">• Carbonate</li>
+          <li style="padding:8px 0;">• Package</li>
+        </ul>
+        <div style="background:#f5f5f5;padding:12px;border-radius:6px;font-size:13px;">
+          <strong>Default Packaging:</strong> 
+          <span id="recipeViewDefaultPackaging">10 Half BBL, 5 Sixth BBL, 20 Cases</span>
         </div>
       </div>
       
     </div>
     
-    <div class="modal-footer">
-      <button onclick="viewRecipeInSheet()" class="btn btn-secondary">📊 View in Sheet</button>
-      <button onclick="viewChangeHistory()" class="btn btn-secondary">📜 Change History</button>
+    <div class="modal-footer" style="padding:15px 20px;border-top:1px solid #ddd;display:flex;justify-content:flex-end;gap:10px;">
       <button onclick="closeRecipeView()" class="btn btn-secondary">Close</button>
-      <button onclick="brewThis()" class="btn btn-primary btn-lg">🍺 Brew This</button>
     </div>
   </div>
 </div>

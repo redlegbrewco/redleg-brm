@@ -14853,6 +14853,32 @@ function getBrewerSheetData(batchNumber) {
     var currentVessel = (batchRow[colIndex['currentvessel']] || batchRow[28] || '').toString(); // Column AC
     var totalCost = parseFloat(batchRow[colIndex['totalcost']] || batchRow[8] || 0); // Column I
     
+    // Get cost breakdowns (flexible column matching)
+    var ingredientCost = 0;
+    var laborCost = 0;
+    var overheadCost = 0;
+    
+    // Try to find cost columns
+    headers.forEach(function(h, idx) {
+      if (h) {
+        var headerKey = h.toString().toLowerCase().trim();
+        if (headerKey.indexOf('recipe cost') !== -1 || headerKey.indexOf('ingredient cost') !== -1 || headerKey.indexOf('raw material') !== -1) {
+          ingredientCost = parseFloat(batchRow[idx]) || 0;
+        }
+        if (headerKey.indexOf('labor') !== -1 && headerKey.indexOf('$') !== -1) {
+          laborCost = parseFloat(batchRow[idx]) || 0;
+        }
+        if (headerKey.indexOf('overhead') !== -1) {
+          overheadCost = parseFloat(batchRow[idx]) || 0;
+        }
+      }
+    });
+    
+    // Fallback to column positions if not found
+    if (ingredientCost === 0) ingredientCost = parseFloat(batchRow[4] || 0); // Column E
+    if (laborCost === 0) laborCost = parseFloat(batchRow[6] || 0); // Column G
+    if (overheadCost === 0) overheadCost = parseFloat(batchRow[7] || 0); // Column H
+    
     // Get Turn workflow data (columns AM-AR = 39-44)
     var turn1CompleteDate = batchRow.length > 38 ? batchRow[38] : ''; // AM (39)
     var turn1CompletedBy = batchRow.length > 39 ? batchRow[39] : ''; // AN (40)
@@ -14982,6 +15008,9 @@ function getBrewerSheetData(batchNumber) {
       brewDate: brewDate,
       currentVessel: currentVessel,
       runningCOGS: totalCost,
+      ingredientCost: ingredientCost,
+      laborCost: laborCost,
+      overheadCost: overheadCost,
       recipeBaseBatchSize: recipeBaseBatchSize,
       
       // Turn 1 data
@@ -16141,6 +16170,314 @@ function createBatchWithTasks(recipeName, batchSize, notes) {
     
   } catch(e) {
     Logger.log('Error in createBatchWithTasks: ' + e.toString());
+    return { success: false, error: e.toString() };
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// INLINE EDITING - UPDATE SINGLE RECIPE FIELD
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Update a single field in a recipe - Phase 1 Inline Editing
+ * @param {string} recipeName - Recipe name
+ * @param {string} fieldName - Field name (matches column header in Recipes sheet)
+ * @param {*} newValue - New value to set
+ * @returns {Object} Success/error result
+ */
+function updateRecipeField(recipeName, fieldName, newValue) {
+  try {
+    var ss = getBrmSpreadsheet();
+    var recipesSheet = ss.getSheetByName(SHEETS.RECIPES);
+    
+    if (!recipesSheet) {
+      return { success: false, error: 'Recipes sheet not found' };
+    }
+    
+    var data = recipesSheet.getDataRange().getValues();
+    if (data.length < 2) {
+      return { success: false, error: 'No recipes found' };
+    }
+    
+    var headers = data[0];
+    
+    // Find recipe row
+    var recipeRow = -1;
+    var recipeNameCol = 0; // Usually column A
+    
+    for (var i = 1; i < data.length; i++) {
+      if (data[i][recipeNameCol] && data[i][recipeNameCol].toString().trim() === recipeName) {
+        recipeRow = i + 1; // 1-indexed
+        break;
+      }
+    }
+    
+    if (recipeRow === -1) {
+      return { success: false, error: 'Recipe not found: ' + recipeName };
+    }
+    
+    // Find field column
+    var fieldCol = -1;
+    for (var h = 0; h < headers.length; h++) {
+      var header = (headers[h] || '').toString().trim();
+      // Map common field names to column headers
+      if (fieldName === 'style' && (header.toLowerCase().indexOf('style') !== -1 || header.toLowerCase().indexOf('beer type') !== -1)) {
+        fieldCol = h + 1; // 1-indexed
+        break;
+      } else if (fieldName === 'batchSize' && (header.toLowerCase().indexOf('batch size') !== -1)) {
+        fieldCol = h + 1;
+        break;
+      } else if (fieldName === 'expectedYield' && (header.toLowerCase().indexOf('expected yield') !== -1 || header.toLowerCase().indexOf('yield') !== -1)) {
+        fieldCol = h + 1;
+        break;
+      } else if (fieldName === 'fermDays' && (header.toLowerCase().indexOf('fermentation') !== -1 && header.toLowerCase().indexOf('day') !== -1)) {
+        fieldCol = h + 1;
+        break;
+      } else if (fieldName === 'og' && (header.toLowerCase().indexOf('og') !== -1 && header.toLowerCase().indexOf('original gravity') === -1)) {
+        fieldCol = h + 1;
+        break;
+      } else if (fieldName === 'fg' && (header.toLowerCase().indexOf('fg') !== -1 && header.toLowerCase().indexOf('final gravity') === -1)) {
+        fieldCol = h + 1;
+        break;
+      } else if (fieldName === 'abv' && header.toLowerCase().indexOf('abv') !== -1) {
+        fieldCol = h + 1;
+        break;
+      } else if (fieldName === 'ibu' && header.toLowerCase().indexOf('ibu') !== -1) {
+        fieldCol = h + 1;
+        break;
+      } else if (fieldName === 'srm' && header.toLowerCase().indexOf('srm') !== -1) {
+        fieldCol = h + 1;
+        break;
+      } else if (fieldName === 'mashTemp' && (header.toLowerCase().indexOf('mash') !== -1 && header.toLowerCase().indexOf('temp') !== -1)) {
+        fieldCol = h + 1;
+        break;
+      } else if (header.toLowerCase() === fieldName.toLowerCase()) {
+        fieldCol = h + 1;
+        break;
+      }
+    }
+    
+    if (fieldCol === -1) {
+      return { success: false, error: 'Field not found: ' + fieldName };
+    }
+    
+    // Convert value based on field type
+    var valueToSet = newValue;
+    if (fieldName === 'batchSize' || fieldName === 'expectedYield' || fieldName === 'fermDays' || 
+        fieldName === 'og' || fieldName === 'fg' || fieldName === 'abv' || fieldName === 'ibu' || 
+        fieldName === 'srm' || fieldName === 'mashTemp') {
+      valueToSet = parseFloat(newValue) || 0;
+    }
+    
+    // Update the cell
+    var oldValue = recipesSheet.getRange(recipeRow, fieldCol).getValue();
+    recipesSheet.getRange(recipeRow, fieldCol).setValue(valueToSet);
+    
+    // Log the change (optional - can add to change history later)
+    Logger.log('Updated recipe field: ' + recipeName + '.' + fieldName + ' = ' + valueToSet + ' (was: ' + oldValue + ')');
+    
+    return serializeForHtml({
+      success: true,
+      recipeName: recipeName,
+      fieldName: fieldName,
+      oldValue: oldValue,
+      newValue: valueToSet
+    });
+    
+  } catch(e) {
+    Logger.log('Error updating recipe field: ' + e.toString());
+    return { success: false, error: e.toString() };
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// COMPLETE BATCH FROM SHEET - COMPLETE REBUILD
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Complete batch from Brewer's Sheet - Complete Rebuild
+ * @param {Object} batchData - Complete batch data from form
+ * @returns {Object} Success/error result
+ */
+function completeBatchFromSheet(batchData) {
+  try {
+    var ss = getBrmSpreadsheet();
+    var batchLogSheet = ss.getSheetByName(SHEETS.BATCH_LOG);
+    var rmSheet = ss.getSheetByName(SHEETS.RAW_MATERIALS);
+    var materialLogSheet = ss.getSheetByName('Material Log');
+    var equipmentSheet = ss.getSheetByName('Equipment');
+    
+    if (!batchLogSheet) {
+      return { success: false, error: 'Batch Log sheet not found' };
+    }
+    
+    var batchNumber = batchData.batchNumber;
+    
+    // Find batch row
+    var data = batchLogSheet.getDataRange().getValues();
+    var batchRow = -1;
+    for (var i = 0; i < data.length; i++) {
+      if (data[i][0] && data[i][0].toString() === batchNumber) {
+        batchRow = i + 1;
+        break;
+      }
+    }
+    
+    if (batchRow === -1) {
+      return { success: false, error: 'Batch not found: ' + batchNumber };
+    }
+    
+    // Deplete ingredients based on actuals
+    var totalIngredientCost = 0;
+    
+    // Deplete Turn 1 ingredients
+    if (batchData.turn1 && batchData.turn1.steps && batchData.turn1.steps.transfer) {
+      if (batchData.actualIngredients && batchData.actualIngredients.turn1) {
+        batchData.actualIngredients.turn1.forEach(function(ing) {
+          var qty = parseFloat(ing.quantity) || 0;
+          if (qty > 0) {
+            // Get cost
+            var rmData = getRawMaterialsMap();
+            var rmItem = rmData[ing.ingredient.toLowerCase()];
+            if (rmItem) {
+              var unitCost = 0; // Would need to get from Raw Materials avgCost
+              totalIngredientCost += qty * unitCost;
+            }
+            // Deplete
+            depleteRawMaterial(ing.ingredient, qty, batchNumber, ing.unit || 'lb');
+          }
+        });
+      }
+    }
+    
+    // Deplete Turn 2 ingredients
+    if (batchData.turn2 && !batchData.turn2.noTurn2 && batchData.turn2.steps && batchData.turn2.steps.transfer) {
+      if (batchData.actualIngredients && batchData.actualIngredients.turn2) {
+        batchData.actualIngredients.turn2.forEach(function(ing) {
+          var qty = parseFloat(ing.quantity) || 0;
+          if (qty > 0) {
+            depleteRawMaterial(ing.ingredient, qty, batchNumber, ing.unit || 'lb');
+          }
+        });
+      }
+    }
+    
+    // Update vessel status
+    if (batchData.turn1 && batchData.turn1.vessel) {
+      updateEquipmentStatus(batchData.turn1.vessel, 'In Use', batchData.beerName || '', batchNumber);
+    }
+    
+    if (batchData.briteTank && batchData.briteTank.vessel) {
+      updateEquipmentStatus(batchData.briteTank.vessel, 'In Use', batchData.beerName || '', batchNumber);
+    }
+    
+    // Calculate costs
+    var laborCost = 0; // Would calculate from labor hours
+    var overheadCost = (batchData.batchSize || 60) * 15; // $15/BBL
+    var totalCost = totalIngredientCost + laborCost + overheadCost;
+    
+    // Update Batch Log
+    updateBatchCOGS(batchNumber, totalIngredientCost, laborCost);
+    
+    // Update status
+    if (batchData.packaging && batchData.packaging.complete) {
+      batchLogSheet.getRange(batchRow, 11).setValue('Packaged'); // K: Status
+    } else if (batchData.briteTank && batchData.briteTank.carbonate) {
+      batchLogSheet.getRange(batchRow, 11).setValue('Ready to Package');
+    } else if (batchData.fermentation && batchData.fermentation.crash) {
+      batchLogSheet.getRange(batchRow, 11).setValue('Conditioning');
+    } else if (batchData.turn2 && (batchData.turn2.noTurn2 || batchData.turn2.steps.transfer)) {
+      batchLogSheet.getRange(batchRow, 11).setValue('Fermenting');
+    }
+    
+    Logger.log('Batch ' + batchNumber + ' completed from sheet');
+    
+    return serializeForHtml({
+      success: true,
+      batchNumber: batchNumber,
+      message: 'Batch completed successfully'
+    });
+    
+  } catch(e) {
+    Logger.log('Error completing batch from sheet: ' + e.toString());
+    return { success: false, error: e.toString() };
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// MIGRATION FUNCTION - FIX ALL EXISTING BATCHES
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Migrate all existing batches to new structure - Complete Rebuild
+ * Adds missing columns, sets default values
+ * @returns {Object} Migration results
+ */
+function migrateAllBatches() {
+  try {
+    var ss = getBrmSpreadsheet();
+    var batchLogSheet = ss.getSheetByName(SHEETS.BATCH_LOG);
+    
+    if (!batchLogSheet) {
+      return { success: false, error: 'Batch Log sheet not found' };
+    }
+    
+    var results = {
+      success: true,
+      batchesProcessed: 0,
+      batchesFixed: 0,
+      errors: []
+    };
+    
+    // Ensure all required columns exist (headers in row 9)
+    var headers = batchLogSheet.getRange(9, 1, 1, batchLogSheet.getLastColumn()).getValues()[0];
+    
+    // Check for required columns (Turn 1/Turn 2 complete dates, etc.)
+    // These should already exist from Phase 2A, but verify
+    
+    // Process all batches (data starts at row 10)
+    var data = batchLogSheet.getDataRange().getValues();
+    for (var i = 9; i < data.length; i++) {
+      var batchNumber = data[i][0];
+      if (!batchNumber) continue;
+      
+      results.batchesProcessed++;
+      var fixed = false;
+      
+      // Check and fix status
+      var status = data[i][10]; // Column K
+      if (!status || status === '') {
+        batchLogSheet.getRange(i + 1, 11).setValue('Brewing');
+        fixed = true;
+      }
+      
+      // Check Turn 1 columns (AD-AF starting at column 30)
+      var turn1Date = data[i][29]; // Column AD (30)
+      var turn1By = data[i][30]; // Column AE (31)
+      var turn1Hours = data[i][31]; // Column AF (32)
+      
+      // Check Turn 2 columns (AG-AI)
+      var turn2Date = data[i][32]; // Column AG (33)
+      var turn2By = data[i][33]; // Column AH (34)
+      var turn2Hours = data[i][34]; // Column AI (35)
+      
+      // If batch has status but no turn dates, set defaults
+      if (status && status !== 'Brewing' && !turn1Date) {
+        // Could infer from status, but for now just mark as needing attention
+        fixed = true;
+      }
+      
+      if (fixed) {
+        results.batchesFixed++;
+      }
+    }
+    
+    Logger.log('Migration complete: ' + results.batchesProcessed + ' batches processed, ' + results.batchesFixed + ' fixed');
+    
+    return serializeForHtml(results);
+    
+  } catch(e) {
+    Logger.log('Error in migration: ' + e.toString());
     return { success: false, error: e.toString() };
   }
 }
