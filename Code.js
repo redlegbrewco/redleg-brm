@@ -1201,26 +1201,40 @@ function getAvailableVessels() {
     var vessels = [];
     
     // Headers in row 1: Equipment Name, Type, Capacity (BBL), Status, Current Beer, Start Date, Est. Ready Date, Notes
+    // Skip row 0 (headers), start from row 1
     for (var i = 1; i < data.length; i++) {
       var row = data[i];
-      if (!row[0]) continue;
+      var vesselName = (row[0] || '').toString().trim();
       
-      var status = (row[3] || 'Available').toString();
-      var isAvailable = status.toLowerCase() === 'available';
+      // Skip empty rows, header-like rows, or invalid vessel names
+      if (!vesselName || 
+          vesselName === 'Equipment Name' || 
+          vesselName === 'Name' ||
+          vesselName.toLowerCase().indexOf('equipment') !== -1 ||
+          vesselName.toLowerCase().indexOf('type') !== -1) {
+        continue;
+      }
       
+      var vesselType = (row[1] || 'Fermenter').toString().trim();
+      var status = (row[3] || 'Available').toString().trim();
+      var isAvailable = status.toLowerCase() === 'available' || status === '';
+      
+      // Include ALL vessels regardless of status (frontend can filter if needed)
       vessels.push({
-        name: row[0],
-        type: row[1] || 'Fermenter',
+        name: vesselName,
+        type: vesselType,
         capacity: parseFloat(row[2]) || 60,
-        status: status,
-        currentBeer: row[4] || '',
+        status: status || 'Available',
+        currentBeer: (row[4] || '').toString(),
         startDate: row[5] ? formatDate(row[5]) : '',
         estReadyDate: row[6] ? formatDate(row[6]) : '',
-        notes: row[7] || '',
+        notes: (row[7] || '').toString(),
         available: isAvailable,
         inUse: !isAvailable
       });
     }
+    
+    Logger.log('Found ' + vessels.length + ' vessels from Equipment sheet');
     
     // Summary stats
     var available = vessels.filter(function(v) { return v.available; }).length;
@@ -15262,30 +15276,81 @@ function getBrewersList() {
     
     if (!laborSheet) {
       // Fallback to hardcoded list
-      return ['Richard Mar', 'Alex Velasco', 'Ian', 'Tyler', 'Todd'];
+      return ['Richard Mar', 'Alex Velasco', 'Jeremy Ueberroth', 'Zach Schneider', 'Dwayne Klaus'];
     }
     
     var data = laborSheet.getDataRange().getValues();
     var brewers = [];
+    var inSalariedSection = false;
+    var inHourlySection = false;
     
-    // Assuming first column is employee name
-    for (var i = 1; i < data.length; i++) {
-      var name = (data[i][0] || '').toString().trim();
-      if (name && name !== '') {
-        brewers.push(name);
+    // Find brewing staff sections and extract only actual brewer names
+    for (var i = 0; i < data.length; i++) {
+      var cellA = (data[i][0] || '').toString().trim();
+      var cellB = data[i][1]; // Salary or Hourly Rate
+      
+      // Detect section headers
+      if (cellA.toUpperCase().indexOf('SALARIED BREWING STAFF') !== -1) {
+        inSalariedSection = true;
+        inHourlySection = false;
+        continue;
+      }
+      if (cellA.toUpperCase().indexOf('HOURLY BREWING STAFF') !== -1) {
+        inSalariedSection = false;
+        inHourlySection = true;
+        continue;
+      }
+      if (cellA.toUpperCase().indexOf('PACKAGING STAFF') !== -1 || 
+          cellA.toUpperCase().indexOf('LABOR COST SUMMARY') !== -1 ||
+          cellA.toUpperCase().indexOf('ANNUAL') !== -1 ||
+          cellA.toUpperCase().indexOf('ESTIMATED') !== -1) {
+        // End of brewing staff sections
+        inSalariedSection = false;
+        inHourlySection = false;
+        continue;
+      }
+      
+      // Skip header rows, subtotals, empty rows, placeholders, config values
+      if (cellA === '' || 
+          cellA === 'Name' || 
+          cellA.indexOf('Subtotal') !== -1 ||
+          cellA.indexOf('Enter Name') !== -1 ||
+          cellA.indexOf('[') !== -1 ||
+          cellA.indexOf('Annual') !== -1 ||
+          cellA.indexOf('Estimated') !== -1 ||
+          cellA.indexOf('BBL') !== -1 ||
+          cellA.indexOf('Per Batch') !== -1 ||
+          cellA.indexOf('Per BBL') !== -1 ||
+          !isNaN(parseFloat(cellA)) && cellA.indexOf('.') === -1) { // Skip pure numbers
+        continue;
+      }
+      
+      // Only add brewers from active brewing sections with valid salary/rate
+      if ((inSalariedSection || inHourlySection) && cellB && (parseFloat(cellB) > 0 || cellB.toString().indexOf('$') !== -1)) {
+        // Valid brewer name
+        if (cellA && cellA.length > 1 && cellA.length < 50) { // Reasonable name length
+          brewers.push(cellA);
+        }
       }
     }
     
+    // Remove duplicates
+    brewers = brewers.filter(function(name, index) {
+      return brewers.indexOf(name) === index;
+    });
+    
     // If no brewers found, use fallback
     if (brewers.length === 0) {
-      brewers = ['Richard Mar', 'Alex Velasco', 'Ian', 'Tyler', 'Todd'];
+      brewers = ['Richard Mar', 'Alex Velasco', 'Jeremy Ueberroth', 'Zach Schneider', 'Dwayne Klaus'];
     }
+    
+    Logger.log('Found ' + brewers.length + ' brewers: ' + brewers.join(', '));
     
     return brewers;
     
   } catch (e) {
     Logger.log('Error in getBrewersList: ' + e.toString());
-    return ['Richard Mar', 'Alex Velasco'];
+    return ['Richard Mar', 'Alex Velasco', 'Jeremy Ueberroth', 'Zach Schneider', 'Dwayne Klaus'];
   }
 }
 
@@ -16854,19 +16919,19 @@ function completeBatchFromSheet(batchData) {
     var ss = getBrmSpreadsheet();
     var batchLogSheet = ss.getSheetByName(SHEETS.BATCH_LOG);
     var rmSheet = ss.getSheetByName(SHEETS.RAW_MATERIALS);
-    var materialLogSheet = ss.getSheetByName('Material Log');
-    var equipmentSheet = ss.getSheetByName('Equipment');
     
     if (!batchLogSheet) {
       return { success: false, error: 'Batch Log sheet not found' };
     }
     
     var batchNumber = batchData.batchNumber;
+    var beerName = batchData.beerName || '';
+    var batchSize = parseFloat(batchData.batchSize) || 60;
     
-    // Find batch row
+    // Find batch row (header row is 9, data starts at 10)
     var data = batchLogSheet.getDataRange().getValues();
     var batchRow = -1;
-    for (var i = 0; i < data.length; i++) {
+    for (var i = 9; i < data.length; i++) { // Start from row 10 (0-indexed: 9)
       if (data[i][0] && data[i][0].toString() === batchNumber) {
         batchRow = i + 1;
         break;
@@ -16877,81 +16942,549 @@ function completeBatchFromSheet(batchData) {
       return { success: false, error: 'Batch not found: ' + batchNumber };
     }
     
-    // Deplete ingredients based on actuals
+    // Get beer name from batch if not provided
+    if (!beerName && data[batchRow - 1][1]) {
+      beerName = data[batchRow - 1][1].toString();
+    }
+    
+    // ============================================================================
+    // 1. DEPLETE RAW MATERIALS (Turn 1 + Turn 2 ingredients)
+    // ============================================================================
     var totalIngredientCost = 0;
+    var rmData = rmSheet.getDataRange().getValues();
+    var cols = RAW_MATERIAL_CONFIG.columns;
+    var rmStartRow = RAW_MATERIAL_CONFIG.dataStartRow - 1;
+    
+    // Helper: Get ingredient cost from Raw Materials
+    function getIngredientCost(ingredientName) {
+      for (var i = rmStartRow; i < rmData.length; i++) {
+        var itemName = (rmData[i][cols.item - 1] || '').toString().trim();
+        if (itemName.toLowerCase() === ingredientName.toLowerCase()) {
+          return parseFloat(rmData[i][cols.avgCost - 1]) || 0;
+        }
+      }
+      return 0;
+    }
     
     // Deplete Turn 1 ingredients
-    if (batchData.turn1 && batchData.turn1.steps && batchData.turn1.steps.transfer) {
-      if (batchData.actualIngredients && batchData.actualIngredients.turn1) {
-        batchData.actualIngredients.turn1.forEach(function(ing) {
-          var qty = parseFloat(ing.quantity) || 0;
-          if (qty > 0) {
-            // Get cost
-            var rmData = getRawMaterialsMap();
-            var rmItem = rmData[ing.ingredient.toLowerCase()];
-            if (rmItem) {
-              var unitCost = 0; // Would need to get from Raw Materials avgCost
-              totalIngredientCost += qty * unitCost;
-            }
-            // Deplete
-            depleteRawMaterial(ing.ingredient, qty, batchNumber, ing.unit || 'lb');
-          }
-        });
-      }
+    if (batchData.actualIngredients && batchData.actualIngredients.turn1) {
+      batchData.actualIngredients.turn1.forEach(function(ing) {
+        var qty = parseFloat(ing.quantity) || 0;
+        var unit = ing.unit || 'lb';
+        if (qty > 0) {
+          // Get cost
+          var unitCost = getIngredientCost(ing.ingredient);
+          totalIngredientCost += qty * unitCost;
+          // Deplete
+          depleteRawMaterial(ing.ingredient, qty, batchNumber, unit);
+        }
+      });
     }
     
     // Deplete Turn 2 ingredients
-    if (batchData.turn2 && !batchData.turn2.noTurn2 && batchData.turn2.steps && batchData.turn2.steps.transfer) {
-      if (batchData.actualIngredients && batchData.actualIngredients.turn2) {
-        batchData.actualIngredients.turn2.forEach(function(ing) {
-          var qty = parseFloat(ing.quantity) || 0;
-          if (qty > 0) {
-            depleteRawMaterial(ing.ingredient, qty, batchNumber, ing.unit || 'lb');
-          }
-        });
+    if (batchData.actualIngredients && batchData.actualIngredients.turn2) {
+      batchData.actualIngredients.turn2.forEach(function(ing) {
+        var qty = parseFloat(ing.quantity) || 0;
+        var unit = ing.unit || 'lb';
+        if (qty > 0) {
+          // Get cost
+          var unitCost = getIngredientCost(ing.ingredient);
+          totalIngredientCost += qty * unitCost;
+          // Deplete
+          depleteRawMaterial(ing.ingredient, qty, batchNumber, unit);
+        }
+      });
+    }
+    
+    // ============================================================================
+    // 2. DEPLETE PACKAGING MATERIALS
+    // ============================================================================
+    var packagingCost = 0;
+    if (batchData.packaging) {
+      var halfBBL = parseFloat(batchData.packaging.halfBBL) || 0;
+      var sixthBBL = parseFloat(batchData.packaging.sixthBBL) || 0;
+      var cases = parseFloat(batchData.packaging.cases) || 0;
+      
+      if (halfBBL > 0) {
+        var kegCost = getIngredientCost('Half BBL Keg') || getIngredientCost('1/2 BBL Keg') || 0;
+        packagingCost += halfBBL * kegCost;
+        depleteRawMaterial('Half BBL Keg', halfBBL, batchNumber, 'each');
+      }
+      if (sixthBBL > 0) {
+        var sixthKegCost = getIngredientCost('Sixth BBL Keg') || getIngredientCost('1/6 BBL Keg') || 0;
+        packagingCost += sixthBBL * sixthKegCost;
+        depleteRawMaterial('Sixth BBL Keg', sixthBBL, batchNumber, 'each');
+      }
+      if (cases > 0) {
+        // Cases might need cans/bottles - deplete case packaging
+        var caseCost = getIngredientCost('Case') || 0;
+        packagingCost += cases * caseCost;
+        depleteRawMaterial('Case', cases, batchNumber, 'each');
       }
     }
     
-    // Update vessel status
-    if (batchData.turn1 && batchData.turn1.vessel) {
-      updateEquipmentStatus(batchData.turn1.vessel, 'In Use', batchData.beerName || '', batchNumber);
+    totalIngredientCost += packagingCost;
+    
+    // ============================================================================
+    // 3. CALCULATE TOTAL COGS
+    // ============================================================================
+    // Get labor cost from batch (if stored) or calculate
+    var laborCost = 0;
+    var headerRow = 8; // Row 9 is headers (0-indexed: 8)
+    if (data[headerRow]) {
+      var headers = data[headerRow];
+      var laborCol = -1;
+      for (var h = 0; h < headers.length; h++) {
+        var header = (headers[h] || '').toString().toLowerCase();
+        if (header.indexOf('labor') !== -1 && header.indexOf('$') !== -1) {
+          laborCol = h;
+          break;
+        }
+      }
+      if (laborCol !== -1) {
+        laborCost = parseFloat(data[batchRow - 1][laborCol]) || 0;
+      }
     }
     
-    if (batchData.briteTank && batchData.briteTank.vessel) {
-      updateEquipmentStatus(batchData.briteTank.vessel, 'In Use', batchData.beerName || '', batchNumber);
+    // Overhead: $15/BBL
+    var overheadCost = batchSize * 15;
+    var totalCOGS = totalIngredientCost + laborCost + overheadCost;
+    
+    // Calculate actual yield from packaging
+    var actualYieldBBL = 0;
+    if (batchData.packaging) {
+      var halfBBL = parseFloat(batchData.packaging.halfBBL) || 0;
+      var sixthBBL = parseFloat(batchData.packaging.sixthBBL) || 0;
+      var cases = parseFloat(batchData.packaging.cases) || 0;
+      
+      actualYieldBBL += halfBBL * 0.5; // Half BBL = 0.5 BBL
+      actualYieldBBL += sixthBBL * 0.167; // Sixth BBL = 0.167 BBL
+      actualYieldBBL += cases * 0.0581; // Case (24pk 12oz) = 0.0581 BBL
     }
     
-    // Calculate costs
-    var laborCost = 0; // Would calculate from labor hours
-    var overheadCost = (batchData.batchSize || 60) * 15; // $15/BBL
-    var totalCost = totalIngredientCost + laborCost + overheadCost;
+    var cogsPerBBL = actualYieldBBL > 0 ? totalCOGS / actualYieldBBL : 0;
     
-    // Update Batch Log
+    // ============================================================================
+    // 4. UPDATE FINISHED GOODS INVENTORY
+    // ============================================================================
+    if (batchData.packaging && batchData.packaging.complete && actualYieldBBL > 0) {
+      var packageBreakdown = {};
+      if (batchData.packaging.halfBBL > 0) {
+        packageBreakdown['1/2 BBL Keg'] = parseFloat(batchData.packaging.halfBBL) || 0;
+      }
+      if (batchData.packaging.sixthBBL > 0) {
+        packageBreakdown['1/6 BBL Keg'] = parseFloat(batchData.packaging.sixthBBL) || 0;
+      }
+      if (batchData.packaging.cases > 0) {
+        packageBreakdown['12oz Case (24pk)'] = parseFloat(batchData.packaging.cases) || 0;
+      }
+      
+      if (Object.keys(packageBreakdown).length > 0) {
+        var fgResult = addToFinishedGoods(beerName, packageBreakdown, cogsPerBBL, batchNumber);
+        Logger.log('Finished Goods updated: ' + JSON.stringify(fgResult));
+      }
+    }
+    
+    // ============================================================================
+    // 5. UPDATE BATCH LOG with final data
+    // ============================================================================
     updateBatchCOGS(batchNumber, totalIngredientCost, laborCost);
     
     // Update status
     if (batchData.packaging && batchData.packaging.complete) {
-      batchLogSheet.getRange(batchRow, 11).setValue('Packaged'); // K: Status
-    } else if (batchData.briteTank && batchData.briteTank.carbonate) {
-      batchLogSheet.getRange(batchRow, 11).setValue('Ready to Package');
-    } else if (batchData.fermentation && batchData.fermentation.crash) {
-      batchLogSheet.getRange(batchRow, 11).setValue('Conditioning');
-    } else if (batchData.turn2 && (batchData.turn2.noTurn2 || batchData.turn2.steps.transfer)) {
-      batchLogSheet.getRange(batchRow, 11).setValue('Fermenting');
+      // Find Status column (usually column K = 11)
+      var statusCol = 11;
+      for (var h = 0; h < data[headerRow].length; h++) {
+        var header = (data[headerRow][h] || '').toString().toLowerCase();
+        if (header.indexOf('status') !== -1) {
+          statusCol = h + 1;
+          break;
+        }
+      }
+      batchLogSheet.getRange(batchRow, statusCol).setValue('Packaged');
     }
     
-    Logger.log('Batch ' + batchNumber + ' completed from sheet');
+    // ============================================================================
+    // 6. UPDATE BEER COGS MASTER
+    // ============================================================================
+    try {
+      var cogsSheet = ss.getSheetByName(SHEETS.BEER_COGS_MASTER);
+      if (cogsSheet && beerName) {
+        var cogsData = cogsSheet.getDataRange().getValues();
+        var cogsHeaders = cogsData[0] || [];
+        var nameCol = 0;
+        var cogsCol = -1;
+        var lastBatchCol = -1;
+        
+        for (var c = 0; c < cogsHeaders.length; c++) {
+          var h = (cogsHeaders[c] || '').toString().toLowerCase();
+          if (h.indexOf('cogs') !== -1 && h.indexOf('bbl') !== -1) cogsCol = c;
+          if (h.indexOf('last batch') !== -1) lastBatchCol = c;
+        }
+        
+        for (var i = 1; i < cogsData.length; i++) {
+          if ((cogsData[i][nameCol] || '').toString() === beerName) {
+            if (cogsCol !== -1) cogsSheet.getRange(i + 1, cogsCol + 1).setValue(cogsPerBBL);
+            if (lastBatchCol !== -1) cogsSheet.getRange(i + 1, lastBatchCol + 1).setValue(batchNumber);
+            break;
+          }
+        }
+      }
+    } catch (e) {
+      Logger.log('Warning: Could not update Beer COGS Master: ' + e.toString());
+    }
+    
+    // ============================================================================
+    // 7. UPDATE PRICING SHEETS
+    // ============================================================================
+    try {
+      // Update Fully Loaded Pricing
+      var fullyLoadedSheet = ss.getSheetByName('Fully Loaded Pricing');
+      if (fullyLoadedSheet && beerName) {
+        var flData = fullyLoadedSheet.getDataRange().getValues();
+        for (var i = 1; i < flData.length; i++) {
+          if ((flData[i][0] || '').toString() === beerName) {
+            fullyLoadedSheet.getRange(i + 1, 2).setValue(cogsPerBBL);
+            break;
+          }
+        }
+      }
+      
+      // Update Floor Pricing
+      var floorSheet = ss.getSheetByName('Floor Pricing');
+      if (floorSheet && beerName) {
+        var floorData = floorSheet.getDataRange().getValues();
+        for (var i = 1; i < floorData.length; i++) {
+          if ((floorData[i][0] || '').toString() === beerName) {
+            floorSheet.getRange(i + 1, 2).setValue(cogsPerBBL);
+            break;
+          }
+        }
+      }
+    } catch (e) {
+      Logger.log('Warning: Could not update Pricing Sheets: ' + e.toString());
+    }
+    
+    // ============================================================================
+    // 8. UPDATE EQUIPMENT - Free the vessels
+    // ============================================================================
+    if (batchData.packaging && batchData.packaging.complete) {
+      // Free FV/LT vessel
+      if (batchData.turn1 && batchData.turn1.vessel) {
+        updateEquipmentStatus(batchData.turn1.vessel, 'Available', '', '');
+      }
+      // Free Brite Tank
+      if (batchData.briteTank && batchData.briteTank.vessel) {
+        updateEquipmentStatus(batchData.briteTank.vessel, 'Available', '', '');
+      }
+    }
+    
+    // ============================================================================
+    // 9. SAVE BREWER'S SHEET PDF TO GOOGLE DRIVE
+    // ============================================================================
+    var pdfResult = { success: false, fileUrl: '', error: '' };
+    if (batchData.packaging && batchData.packaging.complete) {
+      try {
+        // Prepare data for PDF
+        var pdfData = {
+          batchNumber: batchNumber,
+          beerName: beerName,
+          batchSize: batchSize,
+          ingredients: [],
+          yeast: {
+            strain: batchData.fermentation ? (batchData.fermentation.yeastStrain || '') : '',
+            generation: batchData.fermentation ? (batchData.fermentation.yeastGeneration || '') : '',
+            propagationBatch: batchData.fermentation ? (batchData.fermentation.propagationBatch || '') : ''
+          },
+          fvVessel: batchData.turn1 ? (batchData.turn1.vessel || '') : '',
+          btVessel: batchData.briteTank ? (batchData.briteTank.vessel || '') : '',
+          qaChecks: batchData.qaChecks || [],
+          packaging: {
+            halfBBL: batchData.packaging.halfBBL || 0,
+            sixthBBL: batchData.packaging.sixthBBL || 0,
+            cases: batchData.packaging.cases || 0,
+            waste: batchData.packaging.waste || 0,
+            totalBBL: actualYieldBBL,
+            yield: batchSize > 0 ? ((actualYieldBBL / batchSize) * 100).toFixed(1) : '0'
+          },
+          costs: {
+            ingredients: totalIngredientCost,
+            labor: laborCost,
+            overhead: overheadCost,
+            total: totalCOGS,
+            perBBL: cogsPerBBL
+          }
+        };
+        
+        // Format ingredients for PDF
+        var ingredientMap = {};
+        if (batchData.actualIngredients && batchData.actualIngredients.turn1) {
+          batchData.actualIngredients.turn1.forEach(function(ing) {
+            var key = ing.ingredient.toLowerCase();
+            if (!ingredientMap[key]) {
+              ingredientMap[key] = {
+                name: ing.ingredient,
+                unit: ing.unit || 'lb',
+                turn1Actual: parseFloat(ing.quantity) || 0,
+                turn2Actual: 0,
+                recipeQty: 0
+              };
+            } else {
+              ingredientMap[key].turn1Actual = parseFloat(ing.quantity) || 0;
+            }
+          });
+        }
+        if (batchData.actualIngredients && batchData.actualIngredients.turn2) {
+          batchData.actualIngredients.turn2.forEach(function(ing) {
+            var key = ing.ingredient.toLowerCase();
+            if (!ingredientMap[key]) {
+              ingredientMap[key] = {
+                name: ing.ingredient,
+                unit: ing.unit || 'lb',
+                turn1Actual: 0,
+                turn2Actual: parseFloat(ing.quantity) || 0,
+                recipeQty: 0
+              };
+            } else {
+              ingredientMap[key].turn2Actual = parseFloat(ing.quantity) || 0;
+            }
+          });
+        }
+        pdfData.ingredients = Object.values(ingredientMap);
+        
+        pdfResult = saveBrewerSheetPDF(pdfData);
+        if (pdfResult.success) {
+          Logger.log('✅ PDF saved: ' + pdfResult.fileUrl);
+        } else {
+          Logger.log('⚠️ PDF save failed: ' + pdfResult.error);
+        }
+      } catch (e) {
+        Logger.log('⚠️ Error saving PDF: ' + e.toString());
+        pdfResult.error = e.toString();
+      }
+    }
+    
+    // ============================================================================
+    // 10. LOG COMPLETION
+    // ============================================================================
+    Logger.log('✅ Batch ' + batchNumber + ' completed:');
+    Logger.log('  - Ingredients depleted: $' + totalIngredientCost.toFixed(2));
+    Logger.log('  - Labor: $' + laborCost.toFixed(2));
+    Logger.log('  - Overhead: $' + overheadCost.toFixed(2));
+    Logger.log('  - Total COGS: $' + totalCOGS.toFixed(2));
+    Logger.log('  - COGS/BBL: $' + cogsPerBBL.toFixed(2));
+    Logger.log('  - Yield: ' + actualYieldBBL.toFixed(2) + ' BBL');
     
     return serializeForHtml({
       success: true,
       batchNumber: batchNumber,
-      message: 'Batch completed successfully'
+      beerName: beerName,
+      ingredientCost: totalIngredientCost,
+      laborCost: laborCost,
+      overheadCost: overheadCost,
+      totalCOGS: totalCOGS,
+      cogsPerBBL: cogsPerBBL,
+      actualYield: actualYieldBBL,
+      pdfUrl: pdfResult.fileUrl || '',
+      message: 'Batch completed successfully. All cascades fired.' + (pdfResult.success ? ' PDF saved to Drive.' : '')
     });
     
   } catch(e) {
     Logger.log('Error completing batch from sheet: ' + e.toString());
+    Logger.log('Stack: ' + e.stack);
     return { success: false, error: e.toString() };
   }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// BREWER'S SHEET PDF GENERATION
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Save Brewer's Sheet as PDF to Google Drive
+ * @param {Object} batchData - Batch data for PDF generation
+ * @returns {Object} Success/error result with file URL
+ */
+function saveBrewerSheetPDF(batchData) {
+  try {
+    var BATCH_RECORDS_FOLDER_ID = '1wjwR9hqF6wGtBIsgSrjYL65CdV0nVJ5f';
+    
+    // Get or create monthly subfolder (yyyy-MM)
+    var now = new Date();
+    var monthFolder = Utilities.formatDate(now, Session.getScriptTimeZone(), 'yyyy-MM');
+    var parentFolder = DriveApp.getFolderById(BATCH_RECORDS_FOLDER_ID);
+    
+    var subfolders = parentFolder.getFoldersByName(monthFolder);
+    var targetFolder;
+    if (subfolders.hasNext()) {
+      targetFolder = subfolders.next();
+    } else {
+      targetFolder = parentFolder.createFolder(monthFolder);
+    }
+    
+    // Generate PDF content
+    var pdfContent = generateBrewerSheetPDFContent(batchData);
+    
+    // Create HTML blob and convert to PDF
+    var blob = Utilities.newBlob(pdfContent, 'text/html', batchData.batchNumber + '.html');
+    var pdfBlob = blob.getAs('application/pdf').setName(batchData.batchNumber + '_BrewerSheet.pdf');
+    
+    // Save to folder
+    var file = targetFolder.createFile(pdfBlob);
+    
+    return { 
+      success: true, 
+      fileUrl: file.getUrl(), 
+      fileId: file.getId(),
+      fileName: file.getName()
+    };
+    
+  } catch(e) {
+    Logger.log('Error saving Brewer Sheet PDF: ' + e.toString());
+    Logger.log('Stack: ' + e.stack);
+    return { success: false, error: e.toString() };
+  }
+}
+
+/**
+ * Generate HTML content for Brewer's Sheet PDF
+ * @param {Object} batchData - Batch data
+ * @returns {string} HTML content
+ */
+function generateBrewerSheetPDFContent(batchData) {
+  var ingredientsHtml = '';
+  if (batchData.ingredients && batchData.ingredients.length > 0) {
+    ingredientsHtml = batchData.ingredients.map(function(ing) {
+      var total = (parseFloat(ing.turn1Actual) || 0) + (parseFloat(ing.turn2Actual) || 0);
+      return '<tr>' +
+        '<td>' + escapeHtml(ing.name || '') + '</td>' +
+        '<td>' + (ing.recipeQty || '') + ' ' + (ing.unit || '') + '</td>' +
+        '<td>' + (ing.turn1Actual || 0) + ' ' + (ing.unit || '') + '</td>' +
+        '<td>' + (ing.turn2Actual || 0) + ' ' + (ing.unit || '') + '</td>' +
+        '<td>' + total.toFixed(2) + ' ' + (ing.unit || '') + '</td>' +
+        '</tr>';
+    }).join('');
+  } else {
+    ingredientsHtml = '<tr><td colspan="5" style="text-align:center;color:#999;">No ingredients recorded</td></tr>';
+  }
+  
+  var qaChecksHtml = '';
+  if (batchData.qaChecks && batchData.qaChecks.length > 0) {
+    qaChecksHtml = batchData.qaChecks.map(function(qa, i) {
+      return '<tr>' +
+        '<td>' + (i + 1) + '</td>' +
+        '<td>' + (qa.date || '') + '</td>' +
+        '<td>' + (qa.gravity || '') + '</td>' +
+        '<td>' + (qa.pH || qa.ph || '') + '</td>' +
+        '<td>' + (qa.co2 || '') + '</td>' +
+        '<td>' + (qa.do || '') + '</td>' +
+        '<td>' + escapeHtml(qa.notes || '') + '</td>' +
+        '</tr>';
+    }).join('');
+  } else {
+    qaChecksHtml = '<tr><td colspan="7" style="text-align:center;color:#999;">No QA checks recorded</td></tr>';
+  }
+  
+  var html = '<!DOCTYPE html>' +
+    '<html>' +
+    '<head>' +
+    '<meta charset="UTF-8">' +
+    '<style>' +
+    'body { font-family: Arial, sans-serif; padding: 20px; font-size: 12px; }' +
+    'h1 { color: #8B0000; border-bottom: 2px solid #8B0000; padding-bottom: 10px; margin-bottom: 20px; }' +
+    'h2 { color: #8B0000; margin-top: 20px; margin-bottom: 10px; font-size: 14px; }' +
+    'table { width: 100%; border-collapse: collapse; margin: 10px 0; font-size: 11px; }' +
+    'th, td { border: 1px solid #ddd; padding: 6px; text-align: left; }' +
+    'th { background: #8B0000; color: white; font-weight: bold; }' +
+    '.header-info { display: flex; justify-content: space-between; margin-bottom: 20px; flex-wrap: wrap; }' +
+    '.header-info div { flex: 1; min-width: 150px; margin: 5px 0; }' +
+    '.costs { background: #f5f5f5; padding: 15px; margin-top: 20px; border: 1px solid #ddd; }' +
+    '.costs p { margin: 5px 0; }' +
+    '.signature-line { margin-top: 40px; border-top: 1px solid #000; width: 200px; padding-top: 5px; }' +
+    '.section { margin-bottom: 20px; }' +
+    '</style>' +
+    '</head>' +
+    '<body>' +
+    '<h1>RED LEG BREWING COMPANY - BREWER\'S SHEET</h1>' +
+    
+    '<div class="header-info">' +
+    '<div><strong>Batch #:</strong> ' + escapeHtml(batchData.batchNumber || '') + '</div>' +
+    '<div><strong>Beer:</strong> ' + escapeHtml(batchData.beerName || '') + '</div>' +
+    '<div><strong>Batch Size:</strong> ' + (batchData.batchSize || 0) + ' BBL</div>' +
+    '<div><strong>Date:</strong> ' + Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'MM/dd/yyyy') + '</div>' +
+    '</div>' +
+    
+    '<div class="section">' +
+    '<h2>INGREDIENTS</h2>' +
+    '<table>' +
+    '<tr><th>Item</th><th>Recipe</th><th>Turn 1 Actual</th><th>Turn 2 Actual</th><th>Total</th></tr>' +
+    ingredientsHtml +
+    '</table>' +
+    '</div>' +
+    
+    '<div class="section">' +
+    '<h2>YEAST</h2>' +
+    '<p><strong>Strain:</strong> ' + escapeHtml((batchData.yeast && batchData.yeast.strain) || '--') + '</p>' +
+    '<p><strong>Generation:</strong> ' + ((batchData.yeast && batchData.yeast.generation) || '--') + '</p>' +
+    '<p><strong>Propagation Batch:</strong> ' + escapeHtml((batchData.yeast && batchData.yeast.propagationBatch) || '--') + '</p>' +
+    '</div>' +
+    
+    '<div class="section">' +
+    '<h2>FERMENTATION</h2>' +
+    '<p><strong>FV:</strong> ' + escapeHtml(batchData.fvVessel || '--') + '</p>' +
+    '<p><strong>BT:</strong> ' + escapeHtml(batchData.btVessel || '--') + '</p>' +
+    '</div>' +
+    
+    '<div class="section">' +
+    '<h2>QA CHECKS</h2>' +
+    '<table>' +
+    '<tr><th>#</th><th>Date</th><th>°P</th><th>pH</th><th>CO2</th><th>DO</th><th>Notes</th></tr>' +
+    qaChecksHtml +
+    '</table>' +
+    '</div>' +
+    
+    '<div class="section">' +
+    '<h2>PACKAGING</h2>' +
+    '<p><strong>Half BBL:</strong> ' + ((batchData.packaging && batchData.packaging.halfBBL) || 0) + '</p>' +
+    '<p><strong>Sixth BBL:</strong> ' + ((batchData.packaging && batchData.packaging.sixthBBL) || 0) + '</p>' +
+    '<p><strong>Cases:</strong> ' + ((batchData.packaging && batchData.packaging.cases) || 0) + '</p>' +
+    '<p><strong>Waste:</strong> ' + ((batchData.packaging && batchData.packaging.waste) || 0) + ' gal</p>' +
+    '<p><strong>Total Packaged:</strong> ' + (parseFloat((batchData.packaging && batchData.packaging.totalBBL) || 0).toFixed(2)) + ' BBL</p>' +
+    '<p><strong>Yield:</strong> ' + ((batchData.packaging && batchData.packaging.yield) || '0') + '%</p>' +
+    '</div>' +
+    
+    '<div class="costs">' +
+    '<h2>COSTS</h2>' +
+    '<p><strong>Ingredient Cost:</strong> $' + (parseFloat((batchData.costs && batchData.costs.ingredients) || 0).toFixed(2)) + '</p>' +
+    '<p><strong>Labor Cost:</strong> $' + (parseFloat((batchData.costs && batchData.costs.labor) || 0).toFixed(2)) + '</p>' +
+    '<p><strong>Overhead:</strong> $' + (parseFloat((batchData.costs && batchData.costs.overhead) || 0).toFixed(2)) + '</p>' +
+    '<p><strong>TOTAL COGS:</strong> $' + (parseFloat((batchData.costs && batchData.costs.total) || 0).toFixed(2)) + '</p>' +
+    '<p><strong>COGS/BBL:</strong> $' + (parseFloat((batchData.costs && batchData.costs.perBBL) || 0).toFixed(2)) + '</p>' +
+    '</div>' +
+    
+    '<div class="signature-line">' +
+    '<p>Brewer Signature: _________________________</p>' +
+    '</div>' +
+    
+    '</body>' +
+    '</html>';
+  
+  return html;
+}
+
+/**
+ * Escape HTML special characters
+ * @param {string} text - Text to escape
+ * @returns {string} Escaped text
+ */
+function escapeHtml(text) {
+  if (!text) return '';
+  return text.toString()
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════

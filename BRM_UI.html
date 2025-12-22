@@ -5876,96 +5876,124 @@ function renderOpExCategories(categories) {
         }
       });
       
-      // Collect yeast data
-      var yeastStrain = document.getElementById('brewerSheetYeastStrain').value;
-      var yeastGeneration = parseInt(document.getElementById('brewerSheetYeastGeneration').value) || 1;
+      // Helper functions to safely get element values (with null checks)
+      function getElementValue(id, defaultValue) {
+        var el = document.getElementById(id);
+        return el ? (el.value || defaultValue || '') : (defaultValue || '');
+      }
       
-      // Collect all data from form
+      function getElementNumber(id, defaultValue) {
+        var el = document.getElementById(id);
+        return el ? (parseFloat(el.value) || defaultValue || 0) : (defaultValue || 0);
+      }
+      
+      function getElementChecked(id) {
+        var el = document.getElementById(id);
+        return el ? el.checked : false;
+      }
+      
+      // Collect yeast data (with null checks)
+      var yeastStrainEl = document.getElementById('brewerSheetYeastStrain');
+      var yeastStrain = yeastStrainEl ? yeastStrainEl.value : '';
+      var yeastGenEl = document.getElementById('brewerSheetYeastGeneration');
+      var yeastGeneration = yeastGenEl ? (parseInt(yeastGenEl.value) || 1) : 1;
+      
+      // Get beer name and batch size from state or DOM
+      var beerName = '';
+      var batchSize = 60;
+      
+      // Try to get from brewerSheetState.batchData first
+      if (brewerSheetState.batchData) {
+        beerName = brewerSheetState.batchData.beerName || brewerSheetState.batchData.recipeName || '';
+        batchSize = parseFloat(brewerSheetState.batchData.batchSize) || parseFloat(brewerSheetState.batchData.recipeBaseBatchSize) || 60;
+      }
+      
+      // Fallback to DOM elements
+      if (!beerName) {
+        var beerNameEl = document.getElementById('batchRecipeHeader');
+        if (beerNameEl) beerName = beerNameEl.textContent.trim() || '';
+      }
+      if (!beerName) {
+        beerName = getElementValue('brewerSheetBeerName', '');
+      }
+      
+      if (!batchSize || batchSize === 60) {
+        var batchSizeEl = document.getElementById('batchSizeHeader');
+        if (batchSizeEl) {
+          var sizeText = batchSizeEl.textContent.trim();
+          var sizeMatch = sizeText.match(/(\d+(?:\.\d+)?)/);
+          if (sizeMatch) batchSize = parseFloat(sizeMatch[1]);
+        }
+      }
+      if (!batchSize || batchSize === 60) {
+        batchSize = getElementNumber('brewerSheetBatchSize', 60);
+      }
+      
+      // Collect all data from form (with null checks)
       var batchData = {
         batchNumber: brewerSheetState.batchNumber,
+        beerName: beerName,
+        batchSize: batchSize,
         turn1: {
-          date: document.getElementById('turn1Date').value,
-          brewer: document.getElementById('turn1Brewer').value,
-          vessel: document.getElementById('turn1Vessel').value,
-          efficiency: parseFloat(document.getElementById('turn1Efficiency').value) || 0,
-          preBoilGravity: parseFloat(document.getElementById('turn1PreBoilGravity').value) || 0,
-          notes: document.getElementById('turn1Notes').value,
+          date: getElementValue('turn1Date', ''),
+          brewer: getElementValue('turn1Brewer', ''),
+          vessel: getElementValue('turn1Vessel', ''),
+          efficiency: getElementNumber('turn1Efficiency', 0),
+          preBoilGravity: getElementNumber('turn1PreBoilGravity', 0),
+          notes: getElementValue('turn1Notes', ''),
           steps: {
-            mill: document.getElementById('turn1Mill').checked,
-            mash: document.getElementById('turn1Mash').checked,
-            lauter: document.getElementById('turn1Lauter').checked,
-            boil: document.getElementById('turn1Boil').checked,
-            whirlpool: document.getElementById('turn1Whirlpool').checked,
-            transfer: document.getElementById('turn1Transfer').checked
+            mill: getElementChecked('turn1Mill'),
+            mash: getElementChecked('turn1Mash'),
+            lauter: getElementChecked('turn1Lauter'),
+            boil: getElementChecked('turn1Boil'),
+            whirlpool: getElementChecked('turn1Whirlpool'),
+            transfer: getElementChecked('turn1Transfer')
           }
         },
         turn2: {
-          noTurn2: document.getElementById('noTurn2Checkbox').checked,
-          date: document.getElementById('turn2Date').value,
-          brewer: document.getElementById('turn2Brewer').value,
-          vessel: document.getElementById('turn2Vessel').value,
-          efficiency: parseFloat(document.getElementById('turn2Efficiency').value) || 0,
-          preBoilGravity: parseFloat(document.getElementById('turn2PreBoilGravity').value) || 0,
-          notes: document.getElementById('turn2Notes').value,
+          noTurn2: getElementChecked('noTurn2Checkbox'),
+          date: getElementValue('turn2Date', ''),
+          brewer: getElementValue('turn2Brewer', ''),
+          vessel: getElementValue('turn2Vessel', ''),
+          efficiency: getElementNumber('turn2Efficiency', 0),
+          preBoilGravity: getElementNumber('turn2PreBoilGravity', 0),
+          notes: getElementValue('turn2Notes', ''),
           steps: {
-            mill: document.getElementById('turn2Mill').checked,
-            mash: document.getElementById('turn2Mash').checked,
-            lauter: document.getElementById('turn2Lauter').checked,
-            boil: document.getElementById('turn2Boil').checked,
-            whirlpool: document.getElementById('turn2Whirlpool').checked,
-            transfer: document.getElementById('turn2Transfer').checked
+            mill: getElementChecked('turn2Mill'),
+            mash: getElementChecked('turn2Mash'),
+            lauter: getElementChecked('turn2Lauter'),
+            boil: getElementChecked('turn2Boil'),
+            whirlpool: getElementChecked('turn2Whirlpool'),
+            transfer: getElementChecked('turn2Transfer')
           }
         },
         fermentation: {
-          yeastGeneration: parseInt(document.getElementById('brewerSheetYeastGeneration').value) || 1,
-          propagationBatch: document.getElementById('brewerSheetYeastPropBatch').value,
-          pitchDate: document.getElementById('brewerSheetYeastPitchDate').value,
-          yeastPitched: document.getElementById('brewerSheetYeastPitched').checked,
-          complete: document.getElementById('fermComplete').checked,
-          completeDate: document.getElementById('fermCompleteDate').value,
-          dryHop: document.getElementById('fermDryHop').checked,
-          dryHopDate: document.getElementById('fermDryHopDate').value,
-          crash: document.getElementById('fermCrash').checked,
-          crashDate: document.getElementById('fermCrashDate').value
+          yeastGeneration: yeastGeneration,
+          propagationBatch: getElementValue('brewerSheetYeastPropBatch', ''),
+          pitchDate: getElementValue('brewerSheetYeastPitchDate', ''),
+          yeastPitched: getElementChecked('brewerSheetYeastPitched'),
+          complete: getElementChecked('fermComplete'),
+          completeDate: getElementValue('fermCompleteDate', ''),
+          dryHop: getElementChecked('fermDryHop'),
+          dryHopDate: getElementValue('fermDryHopDate', ''),
+          crash: getElementChecked('fermCrash'),
+          crashDate: getElementValue('fermCrashDate', '')
         },
-        qaChecks: (function() {
-          var qaChecks = [];
-          var qaRows = document.querySelectorAll('#brewerSheetQAChecksBody tr');
-          qaRows.forEach(function(row) {
-            var dateInput = row.querySelector('.qa-date-input');
-            var gravityInput = row.querySelector('.qa-gravity-input');
-            var phInput = row.querySelector('.qa-ph-input');
-            var co2Input = row.querySelector('.qa-co2-input');
-            var doInput = row.querySelector('.qa-do-input');
-            var notesInput = row.querySelector('.qa-notes-input');
-            
-            if (dateInput || gravityInput || phInput) {
-              qaChecks.push({
-                date: dateInput ? dateInput.value : '',
-                gravity: gravityInput ? gravityInput.value : '',
-                pH: phInput ? phInput.value : '',
-                co2: co2Input ? co2Input.value : '',
-                do: doInput ? doInput.value : '',
-                notes: notesInput ? notesInput.value : ''
-              });
-            }
-          });
-          return qaChecks;
-        })(),
+        qaChecks: qaChecks,
         briteTank: {
-          vessel: document.getElementById('briteTankSelect').value,
-          transfer: document.getElementById('btTransfer').checked,
-          transferDate: document.getElementById('btTransferDate').value,
-          carbonate: document.getElementById('btCarbonate').checked,
-          carbonateDate: document.getElementById('btCarbonateDate').value
+          vessel: getElementValue('briteTankSelect', ''),
+          transfer: getElementChecked('btTransfer'),
+          transferDate: getElementValue('btTransferDate', ''),
+          carbonate: getElementChecked('btCarbonate'),
+          carbonateDate: getElementValue('btCarbonateDate', '')
         },
         packaging: {
-          complete: document.getElementById('pkgComplete').checked,
-          completeDate: document.getElementById('pkgCompleteDate').value,
-          halfBBL: parseFloat(document.getElementById('pkgHalfBBL').value) || 0,
-          sixthBBL: parseFloat(document.getElementById('pkgSixthBBL').value) || 0,
-          cases: parseFloat(document.getElementById('pkgCases').value) || 0,
-          waste: parseFloat(document.getElementById('pkgWaste').value) || 0
+          complete: getElementChecked('pkgComplete'),
+          completeDate: getElementValue('pkgCompleteDate', ''),
+          halfBBL: getElementNumber('pkgHalfBBL', 0),
+          sixthBBL: getElementNumber('pkgSixthBBL', 0),
+          cases: getElementNumber('pkgCases', 0),
+          waste: getElementNumber('pkgWaste', 0)
         },
         actualIngredients: collectActualIngredients()
       };
@@ -5994,23 +6022,46 @@ function renderOpExCategories(categories) {
     function collectActualIngredients() {
       var actuals = { turn1: [], turn2: [] };
       
-      // Collect Turn 1 actuals
-      var t1Inputs = document.querySelectorAll('[id^="ing_t1_"]');
-      t1Inputs.forEach(function(input) {
-        var key = input.id.replace('ing_t1_', '').replace(/_/g, ' ');
-        var value = parseFloat(input.value) || 0;
-        if (value > 0) {
-          actuals.turn1.push({ ingredient: key, quantity: value });
+      // Collect Turn 1 actuals from ingredients table
+      var t1Rows = document.querySelectorAll('#brewerSheetIngredientsBody tr');
+      t1Rows.forEach(function(row) {
+        var cells = row.querySelectorAll('td');
+        if (cells.length >= 5) {
+          var ingredientName = (cells[0].textContent || '').trim();
+          var unit = (cells[1].textContent || '').trim(); // Unit column
+          var turn1Input = cells[2].querySelector('input'); // Turn 1 Actual column
+          
+          if (ingredientName && turn1Input) {
+            var qty = parseFloat(turn1Input.value) || 0;
+            if (qty > 0) {
+              actuals.turn1.push({
+                ingredient: ingredientName,
+                quantity: qty,
+                unit: unit || 'lb'
+              });
+            }
+          }
         }
       });
       
-      // Collect Turn 2 actuals
-      var t2Inputs = document.querySelectorAll('[id^="ing_t2_"]');
-      t2Inputs.forEach(function(input) {
-        var key = input.id.replace('ing_t2_', '').replace(/_/g, ' ');
-        var value = parseFloat(input.value) || 0;
-        if (value > 0) {
-          actuals.turn2.push({ ingredient: key, quantity: value });
+      // Collect Turn 2 actuals from ingredients table
+      t1Rows.forEach(function(row) {
+        var cells = row.querySelectorAll('td');
+        if (cells.length >= 5) {
+          var ingredientName = (cells[0].textContent || '').trim();
+          var unit = (cells[1].textContent || '').trim(); // Unit column
+          var turn2Input = cells[3].querySelector('input'); // Turn 2 Actual column
+          
+          if (ingredientName && turn2Input) {
+            var qty = parseFloat(turn2Input.value) || 0;
+            if (qty > 0) {
+              actuals.turn2.push({
+                ingredient: ingredientName,
+                quantity: qty,
+                unit: unit || 'lb'
+              });
+            }
+          }
         }
       });
       
@@ -6474,18 +6525,35 @@ function renderOpExCategories(categories) {
           var btHtml = '<option value="">-- Select BT --</option>';
           
           vessels.forEach(function(vessel) {
-            if (vessel.available || vessel.status === 'Available') {
-              var name = vessel.name || vessel.vessel || '';
-              var type = (vessel.type || '').toLowerCase();
-              var capacity = vessel.capacity || 60;
-              
-              if (type.indexOf('fermenter') !== -1 || type === 'lt' || type === 'fv' || type.indexOf('ferment') !== -1) {
-                fvHtml += '<option value="' + escapeHtml(name) + '">' + escapeHtml(name) + ' (' + capacity + ' BBL)</option>';
+            // Include ALL vessels (not just available) - user can see status
+            var name = vessel.name || vessel.vessel || '';
+            if (!name) return;
+            
+            var type = (vessel.type || '').toLowerCase();
+            var capacity = vessel.capacity || 60;
+            var status = vessel.status || 'Available';
+            var statusText = (vessel.available || status === 'Available') ? '' : ' (' + status + ')';
+
+              // Match FV, LT, PFV (Fermenter, Lager Tank, Pilot Fermenter)
+              if (type.indexOf('fermenter') !== -1 || 
+                  type === 'lt' || 
+                  type === 'fv' || 
+                  type.indexOf('ferment') !== -1 ||
+                  type.indexOf('lager') !== -1 ||
+                  type.indexOf('pilot') !== -1 ||
+                  name.toUpperCase().indexOf('FV-') === 0 ||
+                  name.toUpperCase().indexOf('LT-') === 0 ||
+                  name.toUpperCase().indexOf('PFV') === 0) {
+                fvHtml += '<option value="' + escapeHtml(name) + '">' + escapeHtml(name) + ' (' + capacity + ' BBL)' + statusText + '</option>';
               }
-              if (type.indexOf('brite') !== -1 || type === 'bt' || type.indexOf('bright') !== -1) {
-                btHtml += '<option value="' + escapeHtml(name) + '">' + escapeHtml(name) + ' (' + capacity + ' BBL)</option>';
+              // Match BT, PBT (Brite Tank, Pilot Brite Tank)
+              if (type.indexOf('brite') !== -1 || 
+                  type === 'bt' || 
+                  type.indexOf('bright') !== -1 ||
+                  name.toUpperCase().indexOf('BT-') === 0 ||
+                  name.toUpperCase().indexOf('PBT') === 0) {
+                btHtml += '<option value="' + escapeHtml(name) + '">' + escapeHtml(name) + ' (' + capacity + ' BBL)' + statusText + '</option>';
               }
-            }
           });
           
           // Populate FV/LT dropdowns
