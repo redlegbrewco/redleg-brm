@@ -493,6 +493,56 @@ function updateOpExActual(category, month, amount) {
 }
 
 /**
+ * Update OpEx actuals from purchase order
+ * Called when PO is approved or received
+ */
+function updateOpExFromPurchase(category, total, purchaseDate) {
+  try {
+    if (!category || !total || total <= 0) return { success: false, error: 'Invalid data' };
+    
+    // Get current month (0-11, where 0 = January)
+    var month = purchaseDate ? purchaseDate.getMonth() : new Date().getMonth();
+    
+    // Get current OpEx actual for this category and month
+    var ss = getBrmSpreadsheet();
+    var sheet = ss.getSheetByName(SHEETS.OPEX);
+    if (!sheet) return { success: false, error: 'OpEx sheet not found' };
+    
+    var data = sheet.getDataRange().getValues();
+    var monthCol = 4 + month; // Jan=5(E), Feb=6(F), etc. (0-indexed in array)
+    var ytdActualCol = 16; // Column Q (0-indexed)
+    
+    for (var i = 5; i < data.length; i++) {
+      var catName = (data[i][0] || '').toString().toLowerCase();
+      if (catName === category.toLowerCase()) {
+        // Get current month actual
+        var currentMonthActual = parseFloat(data[i][monthCol]) || 0;
+        // Add purchase total to current month
+        var newMonthActual = currentMonthActual + total;
+        sheet.getRange(i + 1, monthCol + 1).setValue(newMonthActual);
+        
+        // Recalculate YTD Actual (sum of Jan through current month)
+        var ytdSum = 0;
+        for (var m = 0; m <= month; m++) {
+          ytdSum += parseFloat(data[i][4 + m]) || 0;
+        }
+        sheet.getRange(i + 1, ytdActualCol + 1).setValue(ytdSum);
+        
+        Logger.log('Updated OpEx: ' + category + ' - Month ' + (month + 1) + ' + $' + total);
+        return { success: true, message: 'OpEx updated' };
+      }
+    }
+    
+    Logger.log('OpEx category not found: ' + category);
+    return { success: false, error: 'Category not found: ' + category };
+    
+  } catch (e) {
+    Logger.log('Error updating OpEx from purchase: ' + e.toString());
+    return { success: false, error: e.toString() };
+  }
+}
+
+/**
  * Get pending purchase requests for approval
  */
 function getPendingPurchaseRequests() {
@@ -632,12 +682,13 @@ function getRawMaterialsInventory(filters) {
       // Determine status based on qty vs reorder point
       var status = row[cols.status - 1] || '';
       var isOutOfStock = qtyOnHand <= 0;
-      var needsReorder = qtyOnHand > 0 && qtyOnHand <= reorderPoint && reorderPoint > 0;
       
       if (isOutOfStock) {
+        // Out of stock items always need reorder
         status = 'OUT';
         outOfStockCount++;
-      } else if (needsReorder) {
+      } else if (qtyOnHand > 0 && qtyOnHand <= reorderPoint && reorderPoint > 0) {
+        // Low stock items (at or below reorder point) need reorder
         status = 'LOW';
         lowStockCount++;
       } else {
@@ -1769,11 +1820,61 @@ function updateEquipmentStatus(vesselName, status, beer, batchNumber) {
     if (!sheet) return;
     
     var data = sheet.getDataRange().getValues();
+    var headers = data[0] || [];
+    
+    // Find column indices dynamically
+    var nameCol = 0; // Column A
+    var statusCol = -1;
+    var currentBeerCol = -1;
+    var currentBatchCol = -1;
+    var startDateCol = -1;
+    
+    for (var h = 0; h < headers.length; h++) {
+      var header = (headers[h] || '').toString().toLowerCase();
+      if (header.indexOf('status') !== -1) statusCol = h;
+      if (header.indexOf('current beer') !== -1 || header.indexOf('beer') !== -1) currentBeerCol = h;
+      if (header.indexOf('current batch') !== -1 || header.indexOf('batch') !== -1) currentBatchCol = h;
+      if (header.indexOf('start date') !== -1 || header.indexOf('date') !== -1) startDateCol = h;
+    }
+    
+    // Fallback to default positions if not found
+    if (statusCol === -1) statusCol = 3; // Column D
+    if (currentBeerCol === -1) currentBeerCol = 4; // Column E
+    if (currentBatchCol === -1) currentBatchCol = 5; // Column F (or find it)
+    if (startDateCol === -1) startDateCol = 5; // Column F
+    
+    // Find vessel row
     for (var i = 1; i < data.length; i++) {
-      if (data[i][0] === vesselName) {
-        sheet.getRange(i + 1, 4).setValue(status);
-        sheet.getRange(i + 1, 5).setValue(beer);
-        sheet.getRange(i + 1, 6).setValue(new Date());
+      if ((data[i][nameCol] || '').toString() === vesselName) {
+        var row = i + 1;
+        
+        // Update status
+        if (statusCol !== -1) {
+          sheet.getRange(row, statusCol + 1).setValue(status);
+        }
+        
+        // Update current beer
+        if (currentBeerCol !== -1 && beer) {
+          sheet.getRange(row, currentBeerCol + 1).setValue(beer);
+        } else if (currentBeerCol !== -1 && !beer && status === 'Available') {
+          // Clear beer when freeing vessel
+          sheet.getRange(row, currentBeerCol + 1).setValue('');
+        }
+        
+        // Update current batch
+        if (currentBatchCol !== -1 && batchNumber) {
+          sheet.getRange(row, currentBatchCol + 1).setValue(batchNumber);
+        } else if (currentBatchCol !== -1 && !batchNumber && status === 'Available') {
+          // Clear batch when freeing vessel
+          sheet.getRange(row, currentBatchCol + 1).setValue('');
+        }
+        
+        // Update start date
+        if (startDateCol !== -1) {
+          sheet.getRange(row, startDateCol + 1).setValue(new Date());
+        }
+        
+        Logger.log('Equipment updated: ' + vesselName + ' → ' + status + (batchNumber ? ' (Batch: ' + batchNumber + ')' : ''));
         break;
       }
     }
@@ -2008,7 +2109,18 @@ function updatePurchaseStatus(poNumber, newStatus, notes) {
     
     for (var i = 4; i < data.length; i++) { // Start from row 5 (0-indexed = 4)
       if (data[i][1] === poNumber) { // Column B = PO Number
+        var oldStatus = (data[i][statusCol - 1] || '').toString().toLowerCase();
         sheet.getRange(i + 1, statusCol).setValue(newStatus);
+        
+        var category = data[i][4] || '';      // Column E = Category
+        var total = parseFloat(data[i][8]) || 0; // Column I = Total Cost
+        var poDate = data[i][0] instanceof Date ? data[i][0] : new Date(data[i][0]); // Column A = Date
+        
+        // If status is "Approved" or "Received", update OpEx
+        if ((newStatus.toLowerCase() === 'approved' || newStatus.toLowerCase() === 'received') && 
+            oldStatus !== 'approved' && oldStatus !== 'received' && category && total > 0) {
+          updateOpExFromPurchase(category, total, poDate);
+        }
         
         // If status is "Received", update Raw Materials
         if (newStatus.toLowerCase() === 'received') {
@@ -2087,10 +2199,13 @@ function receivePurchaseOrder(poNumber) {
     var headers = data[0];
     
     var cols = {
+      date: findColumnIndex(headers, 'date'),
       poNumber: findColumnIndex(headers, 'po', 'number'),
       item: findColumnIndex(headers, 'item'),
+      category: findColumnIndex(headers, 'category'),
       qty: findColumnIndex(headers, 'qty', 'quantity'),
       unitCost: findColumnIndex(headers, 'unit cost'),
+      total: findColumnIndex(headers, 'total'),
       status: findColumnIndex(headers, 'status')
     };
     
@@ -2098,8 +2213,21 @@ function receivePurchaseOrder(poNumber) {
     
     for (var i = 1; i < data.length; i++) {
       if (data[i][cols.poNumber] && data[i][cols.poNumber].toString() === poNumber) {
+        var oldStatus = (data[i][cols.status] || '').toString().toLowerCase();
+        
         // Mark as received
         sheet.getRange(i + 1, cols.status + 1).setValue('Received');
+        
+        // Update OpEx if not already updated
+        if (oldStatus !== 'received' && oldStatus !== 'approved') {
+          var category = data[i][cols.category] || '';
+          var total = parseFloat(data[i][cols.total]) || 0;
+          var poDate = data[i][cols.date] instanceof Date ? data[i][cols.date] : new Date(data[i][cols.date] || new Date());
+          
+          if (category && total > 0) {
+            updateOpExFromPurchase(category, total, poDate);
+          }
+        }
         
         // Add to inventory
         var item = data[i][cols.item];
@@ -14608,7 +14736,7 @@ function getRecipeIngredientsByTurn(recipeName, turnNumber) {
  * @param {Object} actualIngredients - Actual ingredients used {grains: [], hops: [], other: []}
  * @returns {Object} Result with success status
  */
-function completeTurn(batchNumber, turnNumber, brewerId, laborHours, vesselName, actualIngredients) {
+function completeTurn(batchNumber, turnNumber, brewerId, laborHours, vesselName, actualIngredients, turnData) {
   try {
     var ss = getBrmSpreadsheet();
     var batchSheet = ss.getSheetByName(SHEETS.BATCH_LOG);
@@ -14770,22 +14898,114 @@ function completeTurn(batchNumber, turnNumber, brewerId, laborHours, vesselName,
       }
     }
     
-    // 7. Update Batch Log Turn columns
+    // 7. Update Batch Log Turn columns with all turn data
+    var headerRow = 8; // Row 9 is headers (0-indexed: 8)
+    var headers = data[headerRow] || [];
+    
+    // Helper to find or create column
+    function findOrCreateColumn(headerName) {
+      var colIndex = -1;
+      for (var h = 0; h < headers.length; h++) {
+        if (headers[h] && headers[h].toString().toLowerCase() === headerName.toLowerCase()) {
+          colIndex = h;
+          break;
+        }
+      }
+      if (colIndex === -1) {
+        // Create new column
+        colIndex = headers.length;
+        batchSheet.getRange(headerRow + 1, colIndex + 1).setValue(headerName);
+        headers[colIndex] = headerName;
+      }
+      return colIndex;
+    }
+    
+    var prefix = 'Turn' + turnNumber;
+    
+    // Save all turn data (use turnData if provided, otherwise use function parameters)
+    // IMPORTANT: Always use the brewer name from the dropdown (turnData.brewer), never use email
+    var turnDate = turnData && turnData.date ? (turnData.date instanceof Date ? turnData.date : new Date(turnData.date)) : now;
+    // Use turnData.brewer first (from dropdown), then brewerId parameter (also from dropdown), never fall back to email
+    var turnBrewer = (turnData && turnData.brewer) ? turnData.brewer : (brewerId || '');
+    var turnVessel = (turnData && turnData.vessel) || vesselName || '';
+    var turnEfficiency = (turnData && turnData.efficiency) || 0;
+    var turnGravity = (turnData && turnData.gravity) || 0;
+    var turnNotes = (turnData && turnData.notes) || '';
+    var turnActualsJson = JSON.stringify((turnData && turnData.actuals) || actualIngredients || {});
+    
+    // Update standard columns (if they exist)
     if (turnNumber === 1) {
       // AM (39): Turn 1 Complete Date
-      batchSheet.getRange(batchRow, 39).setValue(now);
+      if (data[batchRow - 1].length > 38) {
+        batchSheet.getRange(batchRow, 39).setValue(turnDate);
+      } else {
+        var col = findOrCreateColumn(prefix + ' Complete Date');
+        batchSheet.getRange(batchRow, col + 1).setValue(turnDate);
+      }
       // AN (40): Turn 1 Complete By
-      batchSheet.getRange(batchRow, 40).setValue(userEmail);
+      if (data[batchRow - 1].length > 39) {
+        batchSheet.getRange(batchRow, 40).setValue(turnBrewer);
+      } else {
+        var col = findOrCreateColumn(prefix + ' Complete By');
+        batchSheet.getRange(batchRow, col + 1).setValue(turnBrewer);
+      }
       // AO (41): Turn 1 Labor Hours
-      batchSheet.getRange(batchRow, 41).setValue(laborHours);
+      if (data[batchRow - 1].length > 40) {
+        batchSheet.getRange(batchRow, 41).setValue(laborHours);
+      } else {
+        var col = findOrCreateColumn(prefix + ' Labor Hours');
+        batchSheet.getRange(batchRow, col + 1).setValue(laborHours);
+      }
     } else {
       // AP (42): Turn 2 Complete Date
-      batchSheet.getRange(batchRow, 42).setValue(now);
+      if (data[batchRow - 1].length > 41) {
+        batchSheet.getRange(batchRow, 42).setValue(turnDate);
+      } else {
+        var col = findOrCreateColumn(prefix + ' Complete Date');
+        batchSheet.getRange(batchRow, col + 1).setValue(turnDate);
+      }
       // AQ (43): Turn 2 Complete By
-      batchSheet.getRange(batchRow, 43).setValue(userEmail);
+      if (data[batchRow - 1].length > 42) {
+        batchSheet.getRange(batchRow, 43).setValue(turnBrewer);
+      } else {
+        var col = findOrCreateColumn(prefix + ' Complete By');
+        batchSheet.getRange(batchRow, col + 1).setValue(turnBrewer);
+      }
       // AR (44): Turn 2 Labor Hours
-      batchSheet.getRange(batchRow, 44).setValue(laborHours);
+      if (data[batchRow - 1].length > 43) {
+        batchSheet.getRange(batchRow, 44).setValue(laborHours);
+      } else {
+        var col = findOrCreateColumn(prefix + ' Labor Hours');
+        batchSheet.getRange(batchRow, col + 1).setValue(laborHours);
+      }
     }
+    
+    // Save additional turn data (brewer, date, vessel, efficiency, gravity, notes, actuals)
+    // Also save to "TurnX Brewer" column for consistency (in addition to "TurnX Complete By")
+    var brewerCol = findOrCreateColumn(prefix + ' Brewer');
+    batchSheet.getRange(batchRow, brewerCol + 1).setValue(turnBrewer);
+    
+    // Also save to "TurnX Date" column for consistency (in addition to "TurnX Complete Date")
+    var dateCol = findOrCreateColumn(prefix + ' Date');
+    batchSheet.getRange(batchRow, dateCol + 1).setValue(turnDate);
+    
+    var vesselCol = findOrCreateColumn(prefix + ' Vessel');
+    batchSheet.getRange(batchRow, vesselCol + 1).setValue(turnVessel);
+    
+    var efficiencyCol = findOrCreateColumn(prefix + ' Efficiency');
+    batchSheet.getRange(batchRow, efficiencyCol + 1).setValue(turnEfficiency);
+    
+    var gravityCol = findOrCreateColumn(prefix + ' Pre-Boil Gravity');
+    batchSheet.getRange(batchRow, gravityCol + 1).setValue(turnGravity);
+    
+    var notesCol = findOrCreateColumn(prefix + ' Notes');
+    batchSheet.getRange(batchRow, notesCol + 1).setValue(turnNotes);
+    
+    var actualsCol = findOrCreateColumn(prefix + ' Actuals');
+    batchSheet.getRange(batchRow, actualsCol + 1).setValue(turnActualsJson);
+    
+    var completeCol = findOrCreateColumn(prefix + ' Complete');
+    batchSheet.getRange(batchRow, completeCol + 1).setValue(true);
     
     // 8. Update batch status after Turn 2 completes
     if (turnNumber === 2) {
@@ -14967,15 +15187,220 @@ function getBrewerSheetData(batchNumber) {
     if (laborCost === 0) laborCost = parseFloat(batchRow[6] || 0); // Column G
     if (overheadCost === 0) overheadCost = parseFloat(batchRow[7] || 0); // Column H
     
-    // Get Turn workflow data (columns AM-AR = 39-44)
+    // Helper to find column by header name
+    function findColumn(headerName) {
+      for (var h = 0; h < headers.length; h++) {
+        if (headers[h] && headers[h].toString().toLowerCase() === headerName.toLowerCase()) {
+          return h;
+        }
+      }
+      return -1;
+    }
+    
+    // Get Turn 1 workflow data
     var turn1CompleteDate = batchRow.length > 38 ? batchRow[38] : ''; // AM (39)
-    var turn1CompletedBy = batchRow.length > 39 ? batchRow[39] : ''; // AN (40)
+    var turn1CompletedBy = batchRow.length > 39 ? batchRow[39] : ''; // AN (40) - "Turn1 Complete By"
     var turn1LaborHours = batchRow.length > 40 ? parseFloat(batchRow[40]) || 0 : 0; // AO (41)
     var turn1Vessel = batchRow.length > 31 ? batchRow[31] : ''; // AF (32) FV/LT Vessel
     
+    // Get additional Turn 1 data (if saved)
+    // Try "Turn1 Brewer" column first, fallback to "Turn1 Complete By"
+    var turn1BrewerCol = findColumn('Turn1 Brewer');
+    var turn1Brewer = turn1BrewerCol !== -1 ? (batchRow[turn1BrewerCol] || '').toString() : turn1CompletedBy;
+    
+    // Try "Turn1 Date" column first, fallback to "Turn1 Complete Date"
+    var turn1DateCol = findColumn('Turn1 Date');
+    var turn1Date = turn1DateCol !== -1 ? batchRow[turn1DateCol] : turn1CompleteDate;
+    
+    var turn1EfficiencyCol = findColumn('Turn1 Efficiency');
+    var turn1Efficiency = turn1EfficiencyCol !== -1 ? parseFloat(batchRow[turn1EfficiencyCol]) || 0 : 0;
+    var turn1GravityCol = findColumn('Turn1 Pre-Boil Gravity');
+    var turn1Gravity = turn1GravityCol !== -1 ? parseFloat(batchRow[turn1GravityCol]) || 0 : 0;
+    var turn1NotesCol = findColumn('Turn1 Notes');
+    var turn1Notes = turn1NotesCol !== -1 ? (batchRow[turn1NotesCol] || '').toString() : '';
+    var turn1ActualsCol = findColumn('Turn1 Actuals');
+    var turn1ActualsJson = turn1ActualsCol !== -1 ? (batchRow[turn1ActualsCol] || '').toString() : '';
+    var turn1CompleteCol = findColumn('Turn1 Complete');
+    var turn1Complete = turn1CompleteCol !== -1 ? (batchRow[turn1CompleteCol] === true || batchRow[turn1CompleteCol] === 'TRUE') : !!turn1CompleteDate;
+    
+    // Parse actuals JSON
+    var turn1Actuals = [];
+    try {
+      if (turn1ActualsJson) {
+        var parsed = JSON.parse(turn1ActualsJson);
+        if (parsed.grains) turn1Actuals = turn1Actuals.concat(parsed.grains.map(function(g) { return { name: g.ingredient, actual: g.amount, unit: g.uom }; }));
+        if (parsed.hops) turn1Actuals = turn1Actuals.concat(parsed.hops.map(function(h) { return { name: h.ingredient, actual: h.amount, unit: h.uom }; }));
+        if (parsed.other) turn1Actuals = turn1Actuals.concat(parsed.other.map(function(o) { return { name: o.ingredient, actual: o.amount, unit: o.uom }; }));
+      }
+    } catch (e) {
+      Logger.log('Error parsing Turn 1 actuals: ' + e.toString());
+    }
+    
+    // Get Turn 2 workflow data
     var turn2CompleteDate = batchRow.length > 41 ? batchRow[41] : ''; // AP (42)
     var turn2CompletedBy = batchRow.length > 42 ? batchRow[42] : ''; // AQ (43)
     var turn2LaborHours = batchRow.length > 43 ? parseFloat(batchRow[43]) || 0 : 0; // AR (44)
+    
+    // Get additional Turn 2 data (if saved)
+    // Try "Turn2 Brewer" column first, fallback to "Turn2 Complete By"
+    var turn2BrewerCol = findColumn('Turn2 Brewer');
+    var turn2Brewer = turn2BrewerCol !== -1 ? (batchRow[turn2BrewerCol] || '').toString() : turn2CompletedBy;
+    
+    // Try "Turn2 Date" column first, fallback to "Turn2 Complete Date"
+    var turn2DateCol = findColumn('Turn2 Date');
+    var turn2Date = turn2DateCol !== -1 ? batchRow[turn2DateCol] : turn2CompleteDate;
+    
+    var turn2EfficiencyCol = findColumn('Turn2 Efficiency');
+    var turn2Efficiency = turn2EfficiencyCol !== -1 ? parseFloat(batchRow[turn2EfficiencyCol]) || 0 : 0;
+    var turn2GravityCol = findColumn('Turn2 Pre-Boil Gravity');
+    var turn2Gravity = turn2GravityCol !== -1 ? parseFloat(batchRow[turn2GravityCol]) || 0 : 0;
+    var turn2NotesCol = findColumn('Turn2 Notes');
+    var turn2Notes = turn2NotesCol !== -1 ? (batchRow[turn2NotesCol] || '').toString() : '';
+    var turn2ActualsCol = findColumn('Turn2 Actuals');
+    var turn2ActualsJson = turn2ActualsCol !== -1 ? (batchRow[turn2ActualsCol] || '').toString() : '';
+    var turn2CompleteCol = findColumn('Turn2 Complete');
+    var turn2Complete = turn2CompleteCol !== -1 ? (batchRow[turn2CompleteCol] === true || batchRow[turn2CompleteCol] === 'TRUE') : !!turn2CompleteDate;
+    
+    // Parse Turn 2 actuals JSON
+    var turn2Actuals = [];
+    try {
+      if (turn2ActualsJson) {
+        var parsed2 = JSON.parse(turn2ActualsJson);
+        if (parsed2.grains) turn2Actuals = turn2Actuals.concat(parsed2.grains.map(function(g) { return { name: g.ingredient, actual: g.amount, unit: g.uom }; }));
+        if (parsed2.hops) turn2Actuals = turn2Actuals.concat(parsed2.hops.map(function(h) { return { name: h.ingredient, actual: h.amount, unit: h.uom }; }));
+        if (parsed2.other) turn2Actuals = turn2Actuals.concat(parsed2.other.map(function(o) { return { name: o.ingredient, actual: o.amount, unit: o.uom }; }));
+      }
+    } catch (e) {
+      Logger.log('Error parsing Turn 2 actuals: ' + e.toString());
+    }
+    
+    // Get fermentation and transfer data from Batch Log
+    var actualYeastGeneration = '';
+    var propagationBatch = '';
+    var yeastPitchDate = '';
+    var yeastPitched = false;
+    
+    var yeastPitchedBy = '';
+    var yeastPitchedDate = '';
+    var fermentationCompleteBy = '';
+    var fermentationCompleteDate = '';
+    var dryHopAddedBy = '';
+    var dryHopAddedDate = '';
+    var qaCheckBy = '';
+    var qaCheckDate = '';
+    var crashCompleteBy = '';
+    var crashCompleteDate = '';
+    
+    var fermYeastPitched = false;
+    var fermComplete = false;
+    var fermDryHop = false;
+    var fermQACheck = false;
+    var fermCrash = false;
+    
+    var btVessel = '';
+    var transferredBy = '';
+    var transferDate = '';
+    var transferComplete = false;
+    var co2Level = '';
+    var carbonatedBy = '';
+    var carbonationDate = '';
+    var carbonationComplete = false;
+    var qaChecksJson = '';
+    
+    // Load saved fermentation and transfer data
+    var actualGenCol = findColumn('Actual Yeast Generation');
+    if (actualGenCol !== -1) actualYeastGeneration = (batchRow[actualGenCol] || '').toString();
+    
+    var propBatchCol = findColumn('Propagation Batch');
+    if (propBatchCol !== -1) propagationBatch = (batchRow[propBatchCol] || '').toString();
+    
+    var yeastPitchDateCol = findColumn('Yeast Pitch Date');
+    if (yeastPitchDateCol !== -1) yeastPitchDate = batchRow[yeastPitchDateCol];
+    
+    var yeastPitchedCol = findColumn('Yeast Pitched');
+    if (yeastPitchedCol !== -1) yeastPitched = batchRow[yeastPitchedCol] === true || batchRow[yeastPitchedCol] === 'TRUE';
+    
+    var yeastPitchedByCol = findColumn('Yeast Pitched By');
+    if (yeastPitchedByCol !== -1) yeastPitchedBy = (batchRow[yeastPitchedByCol] || '').toString();
+    
+    var yeastPitchedDateCol = findColumn('Yeast Pitched Date');
+    if (yeastPitchedDateCol !== -1) yeastPitchedDate = batchRow[yeastPitchedDateCol];
+    
+    var fermCompleteByCol = findColumn('Fermentation Complete By');
+    if (fermCompleteByCol !== -1) fermentationCompleteBy = (batchRow[fermCompleteByCol] || '').toString();
+    
+    var fermCompleteDateCol = findColumn('Fermentation Complete Date');
+    if (fermCompleteDateCol !== -1) fermentationCompleteDate = batchRow[fermCompleteDateCol];
+    
+    var dryHopByCol = findColumn('Dry Hop Added By');
+    if (dryHopByCol !== -1) dryHopAddedBy = (batchRow[dryHopByCol] || '').toString();
+    
+    var dryHopDateCol = findColumn('Dry Hop Added Date');
+    if (dryHopDateCol !== -1) dryHopAddedDate = batchRow[dryHopDateCol];
+    
+    var qaCheckByCol = findColumn('QA Check By');
+    if (qaCheckByCol !== -1) qaCheckBy = (batchRow[qaCheckByCol] || '').toString();
+    
+    var qaCheckDateCol = findColumn('QA Check Date');
+    if (qaCheckDateCol !== -1) qaCheckDate = batchRow[qaCheckDateCol];
+    
+    var crashByCol = findColumn('Crash Complete By');
+    if (crashByCol !== -1) crashCompleteBy = (batchRow[crashByCol] || '').toString();
+    
+    var crashDateCol = findColumn('Crash Complete Date');
+    if (crashDateCol !== -1) crashCompleteDate = batchRow[crashDateCol];
+    
+    var fermYeastPitchedCol = findColumn('Ferm Yeast Pitched');
+    if (fermYeastPitchedCol !== -1) fermYeastPitched = batchRow[fermYeastPitchedCol] === true || batchRow[fermYeastPitchedCol] === 'TRUE';
+    
+    var fermCompleteCol = findColumn('Ferm Complete');
+    if (fermCompleteCol !== -1) fermComplete = batchRow[fermCompleteCol] === true || batchRow[fermCompleteCol] === 'TRUE';
+    
+    var fermDryHopCol = findColumn('Ferm Dry Hop');
+    if (fermDryHopCol !== -1) fermDryHop = batchRow[fermDryHopCol] === true || batchRow[fermDryHopCol] === 'TRUE';
+    
+    var fermQACheckCol = findColumn('Ferm QA Check');
+    if (fermQACheckCol !== -1) fermQACheck = batchRow[fermQACheckCol] === true || batchRow[fermQACheckCol] === 'TRUE';
+    
+    var fermCrashCol = findColumn('Ferm Crash');
+    if (fermCrashCol !== -1) fermCrash = batchRow[fermCrashCol] === true || batchRow[fermCrashCol] === 'TRUE';
+    
+    var btVesselCol = findColumn('BT Vessel');
+    if (btVesselCol !== -1) btVessel = (batchRow[btVesselCol] || '').toString();
+    
+    var transferredByCol = findColumn('Transferred By');
+    if (transferredByCol !== -1) transferredBy = (batchRow[transferredByCol] || '').toString();
+    
+    var transferDateCol = findColumn('Transfer Date');
+    if (transferDateCol !== -1) transferDate = batchRow[transferDateCol];
+    
+    var transferCompleteCol = findColumn('Transfer Complete');
+    if (transferCompleteCol !== -1) transferComplete = batchRow[transferCompleteCol] === true || batchRow[transferCompleteCol] === 'TRUE';
+    
+    var co2LevelCol = findColumn('CO2 Level');
+    if (co2LevelCol !== -1) co2Level = (batchRow[co2LevelCol] || '').toString();
+    
+    var carbonatedByCol = findColumn('Carbonated By');
+    if (carbonatedByCol !== -1) carbonatedBy = (batchRow[carbonatedByCol] || '').toString();
+    
+    var carbonationDateCol = findColumn('Carbonation Date');
+    if (carbonationDateCol !== -1) carbonationDate = batchRow[carbonationDateCol];
+    
+    var carbonationCompleteCol = findColumn('Carbonation Complete');
+    if (carbonationCompleteCol !== -1) carbonationComplete = batchRow[carbonationCompleteCol] === true || batchRow[carbonationCompleteCol] === 'TRUE';
+    
+    var qaChecksCol = findColumn('QA Checks');
+    if (qaChecksCol !== -1) qaChecksJson = (batchRow[qaChecksCol] || '').toString();
+    
+    // Parse QA Checks JSON
+    var qaChecks = [];
+    try {
+      if (qaChecksJson) {
+        qaChecks = JSON.parse(qaChecksJson);
+      }
+    } catch (e) {
+      Logger.log('Error parsing QA Checks: ' + e.toString());
+    }
     
     // Get recipe base batch size and yeast/QA data
     var recipeBaseBatchSize = batchSize; // Default to batch size
@@ -15132,24 +15557,101 @@ function getBrewerSheetData(batchNumber) {
       recipeBaseBatchSize: recipeBaseBatchSize,
       
       // Turn 1 data
-      turn1Complete: !!turn1CompleteDate,
+      turn1Complete: turn1Complete,
       turn1CompleteDate: turn1CompleteDate,
       turn1CompletedBy: turn1CompletedBy,
       turn1LaborHours: turn1LaborHours,
       turn1Vessel: turn1Vessel,
       turn1Ingredients: turn1Ingredients,
+      turn1Data: turn1Complete ? {
+        brewer: turn1Brewer || turn1CompletedBy,
+        date: turn1Date ? formatDate(turn1Date) : (turn1CompleteDate ? formatDate(turn1CompleteDate) : ''),
+        vessel: turn1Vessel,
+        efficiency: turn1Efficiency,
+        gravity: turn1Gravity,
+        notes: turn1Notes,
+        actuals: turn1Actuals
+      } : null,
       
       // Turn 2 data
-      turn2Complete: !!turn2CompleteDate,
+      turn2Complete: turn2Complete,
       turn2CompleteDate: turn2CompleteDate,
       turn2CompletedBy: turn2CompletedBy,
       turn2LaborHours: turn2LaborHours,
       turn2Ingredients: turn2Ingredients,
+      turn2Data: turn2Complete ? {
+        brewer: turn2Brewer || turn2CompletedBy,
+        date: turn2Date ? formatDate(turn2Date) : (turn2CompleteDate ? formatDate(turn2CompleteDate) : ''),
+        vessel: turn1Vessel, // Turn 2 uses same vessel as Turn 1
+        efficiency: turn2Efficiency,
+        gravity: turn2Gravity,
+        notes: turn2Notes,
+        actuals: turn2Actuals
+      } : null,
       noTurn2: status === 'Fermenting' && !turn2CompleteDate && turn1CompleteDate, // Single turn brew
       
       // Cellar Tasks data
       cellarTasks: cellarTasks,
       brewers: brewers,
+      
+      // Fermentation and Transfer data
+      actualYeastGeneration: actualYeastGeneration,
+      propagationBatch: propagationBatch,
+      yeastPitchDate: yeastPitchDate,
+      yeastPitched: yeastPitched,
+      
+      yeastPitchedBy: yeastPitchedBy,
+      yeastPitchedDate: yeastPitchedDate,
+      fermentationCompleteBy: fermentationCompleteBy,
+      fermentationCompleteDate: fermentationCompleteDate,
+      dryHopAddedBy: dryHopAddedBy,
+      dryHopAddedDate: dryHopAddedDate,
+      qaCheckBy: qaCheckBy,
+      qaCheckDate: qaCheckDate,
+      crashCompleteBy: crashCompleteBy,
+      crashCompleteDate: crashCompleteDate,
+      
+      fermYeastPitched: fermYeastPitched,
+      fermComplete: fermComplete,
+      fermDryHop: fermDryHop,
+      fermQACheck: fermQACheck,
+      fermCrash: fermCrash,
+      
+      btVessel: btVessel,
+      transferredBy: transferredBy,
+      transferDate: transferDate,
+      transferComplete: transferComplete,
+      co2Level: co2Level,
+      carbonatedBy: carbonatedBy,
+      carbonationDate: carbonationDate,
+      carbonationComplete: carbonationComplete,
+      qaChecks: qaChecks,
+      
+      // Legacy fermentation data structure (for backward compatibility)
+      fermentation: {
+        yeastGeneration: actualYeastGeneration,
+        propagationBatch: propagationBatch,
+        pitchDate: yeastPitchDate,
+        yeastPitched: yeastPitched,
+        complete: fermComplete,
+        completeDate: fermentationCompleteDate,
+        dryHop: fermDryHop,
+        dryHopDate: dryHopAddedDate,
+        crash: fermCrash,
+        crashDate: crashCompleteDate
+      },
+      
+      // Legacy brite tank data structure (for backward compatibility)
+      briteTankData: {
+        vessel: btVessel,
+        transferredBy: transferredBy,
+        transferDate: transferDate,
+        transfer: transferComplete,
+        co2Level: co2Level,
+        carbonatedBy: carbonatedBy,
+        carbonateDate: carbonationDate,
+        carbonate: carbonationComplete
+      },
       
       // Yeast data - get from recipe and batch
       recipeYeastStrain: recipeYeastStrain,
@@ -15160,7 +15662,20 @@ function getBrewerSheetData(batchNumber) {
       recipeQATargets: recipeQATargets,
       
       // QA Checks from batch (would need to be stored in Batch Details or separate sheet)
-      qaChecks: [] // TODO: Load from Batch Details or QA Checks sheet
+      qaChecks: [], // TODO: Load from Batch Details or QA Checks sheet
+      
+      // Packaging runs
+      packagingRuns: (function() {
+        try {
+          var runsResult = getPackagingRuns(batchNumber);
+          if (runsResult && runsResult.success) {
+            return runsResult.runs || [];
+          }
+        } catch (e) {
+          Logger.log('Warning: Could not load packaging runs: ' + e.toString());
+        }
+        return [];
+      })()
     });
     
   } catch (e) {
@@ -16948,15 +17463,17 @@ function completeBatchFromSheet(batchData) {
     }
     
     // ============================================================================
-    // 1. DEPLETE RAW MATERIALS (Turn 1 + Turn 2 ingredients)
+    // 1. RAW MATERIALS (Already depleted at Turn Complete)
     // ============================================================================
+    // Ingredients are depleted when "Complete Turn 1" and "Complete Turn 2" are clicked
+    // No need to deplete again here - just calculate cost for COGS
     var totalIngredientCost = 0;
     var rmData = rmSheet.getDataRange().getValues();
     var cols = RAW_MATERIAL_CONFIG.columns;
     var rmStartRow = RAW_MATERIAL_CONFIG.dataStartRow - 1;
     
     // Helper: Get ingredient cost from Raw Materials
-    function getIngredientCost(ingredientName) {
+    function getIngredientCostLocal(ingredientName) {
       for (var i = rmStartRow; i < rmData.length; i++) {
         var itemName = (rmData[i][cols.item - 1] || '').toString().trim();
         if (itemName.toLowerCase() === ingredientName.toLowerCase()) {
@@ -16966,61 +17483,98 @@ function completeBatchFromSheet(batchData) {
       return 0;
     }
     
-    // Deplete Turn 1 ingredients
-    if (batchData.actualIngredients && batchData.actualIngredients.turn1) {
-      batchData.actualIngredients.turn1.forEach(function(ing) {
-        var qty = parseFloat(ing.quantity) || 0;
-        var unit = ing.unit || 'lb';
-        if (qty > 0) {
-          // Get cost
-          var unitCost = getIngredientCost(ing.ingredient);
-          totalIngredientCost += qty * unitCost;
-          // Deplete
-          depleteRawMaterial(ing.ingredient, qty, batchNumber, unit);
-        }
-      });
-    }
-    
-    // Deplete Turn 2 ingredients
-    if (batchData.actualIngredients && batchData.actualIngredients.turn2) {
-      batchData.actualIngredients.turn2.forEach(function(ing) {
-        var qty = parseFloat(ing.quantity) || 0;
-        var unit = ing.unit || 'lb';
-        if (qty > 0) {
-          // Get cost
-          var unitCost = getIngredientCost(ing.ingredient);
-          totalIngredientCost += qty * unitCost;
-          // Deplete
-          depleteRawMaterial(ing.ingredient, qty, batchNumber, unit);
-        }
-      });
-    }
-    
-    // ============================================================================
-    // 2. DEPLETE PACKAGING MATERIALS
-    // ============================================================================
-    var packagingCost = 0;
-    if (batchData.packaging) {
-      var halfBBL = parseFloat(batchData.packaging.halfBBL) || 0;
-      var sixthBBL = parseFloat(batchData.packaging.sixthBBL) || 0;
-      var cases = parseFloat(batchData.packaging.cases) || 0;
+    // Calculate ingredient cost from actual ingredients used (if provided for COGS calculation)
+    // Note: Actual depletion happened at turn complete
+    if (batchData.actualIngredients) {
+      // Handle both formats: {turn1: [], turn2: []} or {grains: [], hops: [], other: []}
+      var ingredientsToCost = [];
       
-      if (halfBBL > 0) {
-        var kegCost = getIngredientCost('Half BBL Keg') || getIngredientCost('1/2 BBL Keg') || 0;
-        packagingCost += halfBBL * kegCost;
-        depleteRawMaterial('Half BBL Keg', halfBBL, batchNumber, 'each');
+      if (batchData.actualIngredients.turn1) {
+        batchData.actualIngredients.turn1.forEach(function(ing) {
+          ingredientsToCost.push({ ingredient: ing.ingredient || ing.name, quantity: parseFloat(ing.quantity || ing.amount) || 0 });
+        });
       }
-      if (sixthBBL > 0) {
-        var sixthKegCost = getIngredientCost('Sixth BBL Keg') || getIngredientCost('1/6 BBL Keg') || 0;
-        packagingCost += sixthBBL * sixthKegCost;
-        depleteRawMaterial('Sixth BBL Keg', sixthBBL, batchNumber, 'each');
+      if (batchData.actualIngredients.turn2) {
+        batchData.actualIngredients.turn2.forEach(function(ing) {
+          ingredientsToCost.push({ ingredient: ing.ingredient || ing.name, quantity: parseFloat(ing.quantity || ing.amount) || 0 });
+        });
       }
-      if (cases > 0) {
-        // Cases might need cans/bottles - deplete case packaging
-        var caseCost = getIngredientCost('Case') || 0;
-        packagingCost += cases * caseCost;
-        depleteRawMaterial('Case', cases, batchNumber, 'each');
+      
+      // Also handle old format
+      if (batchData.actualIngredients.grains) {
+        batchData.actualIngredients.grains.forEach(function(ing) {
+          ingredientsToCost.push({ ingredient: ing.ingredient || ing.name, quantity: parseFloat(ing.amount || ing.quantity) || 0 });
+        });
       }
+      if (batchData.actualIngredients.hops) {
+        batchData.actualIngredients.hops.forEach(function(ing) {
+          ingredientsToCost.push({ ingredient: ing.ingredient || ing.name, quantity: parseFloat(ing.amount || ing.quantity) || 0 });
+        });
+      }
+      if (batchData.actualIngredients.other) {
+        batchData.actualIngredients.other.forEach(function(ing) {
+          ingredientsToCost.push({ ingredient: ing.ingredient || ing.name, quantity: parseFloat(ing.amount || ing.quantity) || 0 });
+        });
+      }
+      
+      // Calculate total cost
+      ingredientsToCost.forEach(function(ing) {
+        if (ing.quantity > 0) {
+          var unitCost = getIngredientCostLocal(ing.ingredient);
+          totalIngredientCost += ing.quantity * unitCost;
+        }
+      });
+    }
+    
+    // If no ingredient cost calculated, try to get from batch log
+    if (totalIngredientCost === 0) {
+      var headerRow = 8;
+      if (data[headerRow]) {
+        var headers = data[headerRow];
+        var ingredientCostCol = -1;
+        for (var h = 0; h < headers.length; h++) {
+          var header = (headers[h] || '').toString().toLowerCase();
+          if ((header.indexOf('ingredient') !== -1 || header.indexOf('recipe') !== -1) && header.indexOf('cost') !== -1) {
+            ingredientCostCol = h;
+            break;
+          }
+        }
+        if (ingredientCostCol !== -1 && data[batchRow - 1]) {
+          totalIngredientCost = parseFloat(data[batchRow - 1][ingredientCostCol]) || 0;
+        }
+      }
+    }
+    
+    // ============================================================================
+    // 2. PACKAGING MATERIALS (Already depleted in packaging runs)
+    // ============================================================================
+    // Packaging materials are depleted when each run is added via addPackagingRun()
+    // No need to deplete again here - just calculate cost from runs for COGS
+    var packagingCost = 0;
+    try {
+      var runsResult = getPackagingRuns(batchNumber);
+      if (runsResult && runsResult.success && runsResult.runs) {
+        runsResult.runs.forEach(function(run) {
+          var halfBBL = parseFloat(run.halfBBL) || 0;
+          var sixthBBL = parseFloat(run.sixthBBL) || 0;
+          var cases = parseFloat(run.cases) || 0;
+          
+          if (halfBBL > 0) {
+            var kegCost = getIngredientCost('Half BBL Keg') || getIngredientCost('1/2 BBL Keg') || 0;
+            packagingCost += halfBBL * kegCost;
+          }
+          if (sixthBBL > 0) {
+            var sixthKegCost = getIngredientCost('Sixth BBL Keg') || getIngredientCost('1/6 BBL Keg') || 0;
+            packagingCost += sixthBBL * sixthKegCost;
+          }
+          if (cases > 0) {
+            var caseCost = getIngredientCost('Case') || 0;
+            packagingCost += cases * caseCost;
+          }
+        });
+      }
+    } catch (e) {
+      Logger.log('Warning: Could not calculate packaging cost from runs: ' + e.toString());
     }
     
     totalIngredientCost += packagingCost;
@@ -17050,9 +17604,13 @@ function completeBatchFromSheet(batchData) {
     var overheadCost = batchSize * 15;
     var totalCOGS = totalIngredientCost + laborCost + overheadCost;
     
-    // Calculate actual yield from packaging
+    // Calculate actual yield from packaging runs (not from single packaging entry)
     var actualYieldBBL = 0;
-    if (batchData.packaging) {
+    if (batchData.packaging && batchData.packaging.totalBBL) {
+      // Use total from packaging runs if provided
+      actualYieldBBL = parseFloat(batchData.packaging.totalBBL) || 0;
+    } else if (batchData.packaging) {
+      // Fallback: calculate from individual quantities
       var halfBBL = parseFloat(batchData.packaging.halfBBL) || 0;
       var sixthBBL = parseFloat(batchData.packaging.sixthBBL) || 0;
       var cases = parseFloat(batchData.packaging.cases) || 0;
@@ -17062,12 +17620,41 @@ function completeBatchFromSheet(batchData) {
       actualYieldBBL += cases * 0.0581; // Case (24pk 12oz) = 0.0581 BBL
     }
     
+    // If still 0, get from packaging runs
+    if (actualYieldBBL === 0) {
+      try {
+        var runsResult = getPackagingRuns(batchNumber);
+        if (runsResult && runsResult.success && runsResult.totals) {
+          actualYieldBBL = parseFloat(runsResult.totals.totalBBL) || 0;
+        }
+      } catch (e) {
+        Logger.log('Warning: Could not get packaging runs for yield: ' + e.toString());
+      }
+    }
+    
     var cogsPerBBL = actualYieldBBL > 0 ? totalCOGS / actualYieldBBL : 0;
     
     // ============================================================================
     // 4. UPDATE FINISHED GOODS INVENTORY
     // ============================================================================
-    if (batchData.packaging && batchData.packaging.complete && actualYieldBBL > 0) {
+    // Finished Goods are already updated when each packaging run is added via addPackagingRun()
+    // No need to update again here - runs are already in Finished Goods
+    // Just verify and log
+    var packagingRunsCount = 0;
+    try {
+      var runsResult = getPackagingRuns(batchNumber);
+      if (runsResult && runsResult.success && runsResult.runs) {
+        packagingRunsCount = runsResult.runs.length;
+        Logger.log('Finished Goods already updated from ' + packagingRunsCount + ' packaging runs');
+      } else {
+        Logger.log('Warning: No packaging runs found for batch ' + batchNumber);
+      }
+    } catch (e) {
+      Logger.log('Warning: Could not verify packaging runs: ' + e.toString());
+    }
+    
+    // If no packaging runs but packaging data provided, add to Finished Goods (backward compatibility)
+    if (packagingRunsCount === 0 && batchData.packaging && actualYieldBBL > 0) {
       var packageBreakdown = {};
       if (batchData.packaging.halfBBL > 0) {
         packageBreakdown['1/2 BBL Keg'] = parseFloat(batchData.packaging.halfBBL) || 0;
@@ -17081,7 +17668,7 @@ function completeBatchFromSheet(batchData) {
       
       if (Object.keys(packageBreakdown).length > 0) {
         var fgResult = addToFinishedGoods(beerName, packageBreakdown, cogsPerBBL, batchNumber);
-        Logger.log('Finished Goods updated: ' + JSON.stringify(fgResult));
+        Logger.log('Finished Goods updated (backward compatibility): ' + JSON.stringify(fgResult));
       }
     }
     
@@ -17090,18 +17677,31 @@ function completeBatchFromSheet(batchData) {
     // ============================================================================
     updateBatchCOGS(batchNumber, totalIngredientCost, laborCost);
     
-    // Update status
-    if (batchData.packaging && batchData.packaging.complete) {
-      // Find Status column (usually column K = 11)
-      var statusCol = 11;
+    // Update status to Packaged
+    // Find Status column (usually column K = 11)
+    var statusCol = 11;
+    for (var h = 0; h < data[headerRow].length; h++) {
+      var header = (data[headerRow][h] || '').toString().toLowerCase();
+      if (header.indexOf('status') !== -1) {
+        statusCol = h + 1;
+        break;
+      }
+    }
+    batchLogSheet.getRange(batchRow, statusCol).setValue('Packaged');
+    
+    // Update actual yield if we have it
+    if (actualYieldBBL > 0) {
+      var yieldCol = -1;
       for (var h = 0; h < data[headerRow].length; h++) {
         var header = (data[headerRow][h] || '').toString().toLowerCase();
-        if (header.indexOf('status') !== -1) {
-          statusCol = h + 1;
+        if ((header.indexOf('actual') !== -1 || header.indexOf('yield') !== -1) && header.indexOf('expected') === -1) {
+          yieldCol = h + 1;
           break;
         }
       }
-      batchLogSheet.getRange(batchRow, statusCol).setValue('Packaged');
+      if (yieldCol !== -1) {
+        batchLogSheet.getRange(batchRow, yieldCol).setValue(actualYieldBBL);
+      }
     }
     
     // ============================================================================
@@ -17170,12 +17770,41 @@ function completeBatchFromSheet(batchData) {
     // ============================================================================
     if (batchData.packaging && batchData.packaging.complete) {
       // Free FV/LT vessel
+      var fvVessel = null;
       if (batchData.turn1 && batchData.turn1.vessel) {
-        updateEquipmentStatus(batchData.turn1.vessel, 'Available', '', '');
+        fvVessel = batchData.turn1.vessel;
+      } else if (data[batchRow - 1].length > 31) {
+        // Try to get from Batch Log column AF (32) - FV/LT Vessel
+        fvVessel = (data[batchRow - 1][31] || '').toString();
       }
-      // Free Brite Tank
+      if (fvVessel && fvVessel !== '') {
+        updateEquipmentStatus(fvVessel, 'Available', '', '');
+        Logger.log('Freed FV/LT vessel: ' + fvVessel);
+      }
+      
+      // Free Brite Tank - check multiple sources
+      var btVessel = null;
       if (batchData.briteTank && batchData.briteTank.vessel) {
-        updateEquipmentStatus(batchData.briteTank.vessel, 'Available', '', '');
+        btVessel = batchData.briteTank.vessel;
+      } else if (batchData.btVessel) {
+        btVessel = batchData.btVessel;
+      } else {
+        // Try to get from Batch Log - look for "BT Vessel" column
+        var headerRow = 8;
+        var headers = data[headerRow] || [];
+        for (var h = 0; h < headers.length; h++) {
+          var header = (headers[h] || '').toString().toLowerCase();
+          if (header.indexOf('bt vessel') !== -1 || (header.indexOf('brite') !== -1 && header.indexOf('vessel') !== -1)) {
+            btVessel = (data[batchRow - 1][h] || '').toString();
+            break;
+          }
+        }
+      }
+      if (btVessel && btVessel !== '') {
+        updateEquipmentStatus(btVessel, 'Available', '', '');
+        Logger.log('Freed Brite Tank: ' + btVessel);
+      } else {
+        Logger.log('Warning: No BT vessel found to free for batch ' + batchNumber);
       }
     }
     
@@ -17485,6 +18114,394 @@ function escapeHtml(text) {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#039;');
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// PACKAGING RUNS - PARTIAL PACKAGING SUPPORT
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Add a packaging run to a batch (partial packaging)
+ * @param {string} batchNumber - Batch number
+ * @param {Object} runData - Packaging run data
+ * @returns {Object} Success/error result
+ */
+function addPackagingRun(batchNumber, runData) {
+  try {
+    var ss = getBrmSpreadsheet();
+    var batchSheet = ss.getSheetByName(SHEETS.BATCH_LOG);
+    
+    if (!batchSheet) {
+      return { success: false, error: 'Batch Log sheet not found' };
+    }
+    
+    // Get or create Packaging Runs sheet
+    var runsSheet = ss.getSheetByName('Packaging Runs');
+    if (!runsSheet) {
+      runsSheet = ss.insertSheet('Packaging Runs');
+      runsSheet.appendRow(['Batch #', 'Run #', 'Date', 'Half BBL', 'Sixth BBL', 'Cases', 'Waste (gal)', 'By', 'Total BBL']);
+    }
+    
+    // Get next run number for this batch
+    var runsData = runsSheet.getDataRange().getValues();
+    var maxRun = 0;
+    for (var i = 1; i < runsData.length; i++) {
+      if (runsData[i][0] && runsData[i][0].toString() === batchNumber) {
+        var runNum = parseInt(runsData[i][1]) || 0;
+        if (runNum > maxRun) maxRun = runNum;
+      }
+    }
+    var runNumber = maxRun + 1;
+    
+    // Calculate BBL from packaging
+    var halfBBL = parseFloat(runData.halfBBL) || 0;
+    var sixthBBL = parseFloat(runData.sixthBBL) || 0;
+    var cases = parseFloat(runData.cases) || 0;
+    var totalBBL = (halfBBL * 0.5) + (sixthBBL * 0.167) + (cases * 0.0581);
+    
+    // Save run to sheet
+    runsSheet.appendRow([
+      batchNumber,
+      runNumber,
+      runData.date || new Date(),
+      halfBBL,
+      sixthBBL,
+      cases,
+      parseFloat(runData.waste) || 0,
+      runData.by || '',
+      totalBBL
+    ]);
+    
+    // Deplete packaging materials
+    var packagingCost = 0;
+    if (halfBBL > 0) {
+      var kegCost = getIngredientCost('Half BBL Keg') || getIngredientCost('1/2 BBL Keg') || 0;
+      packagingCost += halfBBL * kegCost;
+      depleteRawMaterial('Half BBL Keg', halfBBL, batchNumber, 'each');
+    }
+    if (sixthBBL > 0) {
+      var sixthKegCost = getIngredientCost('Sixth BBL Keg') || getIngredientCost('1/6 BBL Keg') || 0;
+      packagingCost += sixthBBL * sixthKegCost;
+      depleteRawMaterial('Sixth BBL Keg', sixthBBL, batchNumber, 'each');
+    }
+    if (cases > 0) {
+      var caseCost = getIngredientCost('Case') || 0;
+      packagingCost += cases * caseCost;
+      depleteRawMaterial('Case', cases, batchNumber, 'each');
+    }
+    
+    // Add to Finished Goods
+    var beerName = '';
+    var batchData = batchSheet.getDataRange().getValues();
+    for (var i = 9; i < batchData.length; i++) {
+      if (batchData[i][0] && batchData[i][0].toString() === batchNumber) {
+        beerName = (batchData[i][1] || '').toString();
+        break;
+      }
+    }
+    
+    if (beerName) {
+      var packageBreakdown = {};
+      if (halfBBL > 0) packageBreakdown['1/2 BBL Keg'] = halfBBL;
+      if (sixthBBL > 0) packageBreakdown['1/6 BBL Keg'] = sixthBBL;
+      if (cases > 0) packageBreakdown['12oz Case (24pk)'] = cases;
+      
+      // Get current COGS per BBL for this batch
+      var cogsPerBBL = 0;
+      var headerRow = 8;
+      if (batchData[headerRow]) {
+        var headers = batchData[headerRow];
+        var cogsCol = -1;
+        for (var h = 0; h < headers.length; h++) {
+          var header = (headers[h] || '').toString().toLowerCase();
+          if (header.indexOf('cogs') !== -1 && header.indexOf('bbl') !== -1) {
+            cogsCol = h;
+            break;
+          }
+        }
+        if (cogsCol !== -1 && batchData[i]) {
+          cogsPerBBL = parseFloat(batchData[i][cogsCol]) || 0;
+        }
+      }
+      
+      // If no COGS yet, calculate from batch costs
+      if (cogsPerBBL === 0) {
+        // Would need to calculate from batch costs - for now use placeholder
+        cogsPerBBL = 85; // Default, will be updated on final completion
+      }
+      
+      var fgResult = addToFinishedGoods(beerName, packageBreakdown, cogsPerBBL, batchNumber + '-RUN' + runNumber);
+      Logger.log('Finished Goods updated for run: ' + JSON.stringify(fgResult));
+    }
+    
+    Logger.log('Packaging run added: ' + batchNumber + ' Run #' + runNumber + ', ' + totalBBL.toFixed(2) + ' BBL');
+    
+    return serializeForHtml({
+      success: true,
+      batchNumber: batchNumber,
+      runNumber: runNumber,
+      totalBBL: totalBBL,
+      packagingCost: packagingCost,
+      message: 'Packaging run #' + runNumber + ' added. ' + totalBBL.toFixed(2) + ' BBL packaged.'
+    });
+    
+  } catch (e) {
+    Logger.log('Error adding packaging run: ' + e.toString());
+    return { success: false, error: e.toString() };
+  }
+}
+
+/**
+ * Get all packaging runs for a batch
+ * @param {string} batchNumber - Batch number
+ * @returns {Object} Success/error result with runs array
+ */
+function getPackagingRuns(batchNumber) {
+  try {
+    var ss = getBrmSpreadsheet();
+    var runsSheet = ss.getSheetByName('Packaging Runs');
+    
+    if (!runsSheet) {
+      return serializeForHtml({ success: true, runs: [] });
+    }
+    
+    var data = runsSheet.getDataRange().getValues();
+    var runs = [];
+    
+    for (var i = 1; i < data.length; i++) {
+      if (data[i][0] && data[i][0].toString() === batchNumber) {
+        runs.push({
+          runNumber: parseInt(data[i][1]) || 0,
+          date: data[i][2] ? formatDate(data[i][2]) : '',
+          halfBBL: parseFloat(data[i][3]) || 0,
+          sixthBBL: parseFloat(data[i][4]) || 0,
+          cases: parseFloat(data[i][5]) || 0,
+          waste: parseFloat(data[i][6]) || 0,
+          by: (data[i][7] || '').toString(),
+          totalBBL: parseFloat(data[i][8]) || 0
+        });
+      }
+    }
+    
+    // Sort by run number
+    runs.sort(function(a, b) { return a.runNumber - b.runNumber; });
+    
+    // Calculate totals
+    var totals = {
+      halfBBL: 0,
+      sixthBBL: 0,
+      cases: 0,
+      waste: 0,
+      totalBBL: 0
+    };
+    
+    runs.forEach(function(run) {
+      totals.halfBBL += run.halfBBL;
+      totals.sixthBBL += run.sixthBBL;
+      totals.cases += run.cases;
+      totals.waste += run.waste;
+      totals.totalBBL += run.totalBBL;
+    });
+    
+    return serializeForHtml({
+      success: true,
+      runs: runs,
+      totals: totals
+    });
+    
+  } catch (e) {
+    Logger.log('Error getting packaging runs: ' + e.toString());
+    return { success: false, error: e.toString(), runs: [] };
+  }
+}
+
+/**
+ * Complete FV to BT transfer
+ * @param {string} batchNumber - Batch number
+ * @param {string} fvVessel - FV vessel name
+ * @param {string} btVessel - BT vessel name
+ * @param {string} transferredBy - Who did the transfer
+ * @param {string} transferDate - Transfer date
+ * @returns {Object} Success/error result
+ */
+/**
+ * Save fermentation and transfer data to Batch Log
+ * @param {string} batchNumber - Batch number
+ * @param {string} fvVessel - Fermentation vessel
+ * @param {string} btVessel - Brite tank vessel
+ * @param {string} transferredBy - Who transferred
+ * @param {string} transferDate - Transfer date
+ * @param {Object} transferData - All fermentation and transfer data
+ * @returns {Object} Success/error result
+ */
+function saveFermentationAndTransferData(batchNumber, fvVessel, btVessel, transferredBy, transferDate, transferData) {
+  try {
+    var ss = getBrmSpreadsheet();
+    var batchSheet = ss.getSheetByName(SHEETS.BATCH_LOG);
+    
+    if (!batchSheet) {
+      return { success: false, error: 'Batch Log sheet not found' };
+    }
+    
+    // Find batch row
+    var data = batchSheet.getDataRange().getValues();
+    var headerRow = 8; // Row 9 is headers (0-indexed: 8)
+    var headers = data[headerRow] || [];
+    var batchRow = -1;
+    var beerName = '';
+    
+    for (var i = 9; i < data.length; i++) {
+      if (data[i][0] && data[i][0].toString() === batchNumber) {
+        batchRow = i + 1;
+        beerName = (data[i][1] || '').toString();
+        break;
+      }
+    }
+    
+    if (batchRow === -1) {
+      return { success: false, error: 'Batch not found: ' + batchNumber };
+    }
+    
+    // Helper to find or create column
+    function findOrCreateColumn(headerName) {
+      var colIndex = -1;
+      for (var h = 0; h < headers.length; h++) {
+        if (headers[h] && headers[h].toString().toLowerCase() === headerName.toLowerCase()) {
+          colIndex = h;
+          break;
+        }
+      }
+      if (colIndex === -1) {
+        // Create new column
+        colIndex = headers.length;
+        batchSheet.getRange(headerRow + 1, colIndex + 1).setValue(headerName);
+        headers[colIndex] = headerName;
+      }
+      return colIndex;
+    }
+    
+    // Free FV
+    if (fvVessel) {
+      updateEquipmentStatus(fvVessel, 'Available', '', '');
+    }
+    
+    // Assign BT
+    if (btVessel) {
+      updateEquipmentStatus(btVessel, 'In Use', beerName, batchNumber);
+    }
+    
+    // Save all fermentation and transfer data
+    var fieldsToSave = {
+      // Yeast data
+      'Actual Yeast Generation': transferData.actualYeastGeneration || '',
+      'Propagation Batch': transferData.propagationBatch || '',
+      'Yeast Pitch Date': transferData.yeastPitchDate || '',
+      'Yeast Pitched': transferData.yeastPitched || false,
+      
+      // Fermentation tasks
+      'Yeast Pitched By': transferData.yeastPitchedBy || '',
+      'Yeast Pitched Date': transferData.yeastPitchedDate || '',
+      'Fermentation Complete By': transferData.fermentationCompleteBy || '',
+      'Fermentation Complete Date': transferData.fermentationCompleteDate || '',
+      'Dry Hop Added By': transferData.dryHopAddedBy || '',
+      'Dry Hop Added Date': transferData.dryHopAddedDate || '',
+      'QA Check By': transferData.qaCheckBy || '',
+      'QA Check Date': transferData.qaCheckDate || '',
+      'Crash Complete By': transferData.crashCompleteBy || '',
+      'Crash Complete Date': transferData.crashCompleteDate || '',
+      
+      // Fermentation checkboxes
+      'Ferm Yeast Pitched': transferData.fermYeastPitched || false,
+      'Ferm Complete': transferData.fermComplete || false,
+      'Ferm Dry Hop': transferData.fermDryHop || false,
+      'Ferm QA Check': transferData.fermQACheck || false,
+      'Ferm Crash': transferData.fermCrash || false,
+      
+      // BT/Transfer data
+      'BT Vessel': transferData.btVessel || btVessel || '',
+      'Transferred By': transferData.transferredBy || transferredBy || '',
+      'Transfer Date': transferData.transferDate || transferDate || '',
+      'Transfer Complete': transferData.transferComplete || false,
+      'CO2 Level': transferData.co2Level || '',
+      'Carbonated By': transferData.carbonatedBy || '',
+      'Carbonation Date': transferData.carbonationDate || '',
+      'Carbonation Complete': transferData.carbonationComplete || false
+    };
+    
+    // Save each field
+    for (var fieldName in fieldsToSave) {
+      var col = findOrCreateColumn(fieldName);
+      var value = fieldsToSave[fieldName];
+      // Convert dates
+      if (fieldName.indexOf('Date') !== -1 && value && value !== '') {
+        value = new Date(value);
+      }
+      batchSheet.getRange(batchRow, col + 1).setValue(value);
+    }
+    
+    // Save QA Checks as JSON
+    if (transferData.qaChecks && transferData.qaChecks.length > 0) {
+      var qaChecksCol = findOrCreateColumn('QA Checks');
+      batchSheet.getRange(batchRow, qaChecksCol + 1).setValue(JSON.stringify(transferData.qaChecks));
+    }
+    
+    Logger.log('Fermentation and transfer data saved for batch: ' + batchNumber);
+    
+    return serializeForHtml({
+      success: true,
+      batchNumber: batchNumber,
+      fvVessel: fvVessel,
+      btVessel: btVessel,
+      message: 'Transfer complete. FV freed, BT assigned, all data saved.'
+    });
+    
+  } catch (e) {
+    Logger.log('Error saving fermentation and transfer data: ' + e.toString());
+    return { success: false, error: e.toString() };
+  }
+}
+
+/**
+ * Legacy function - kept for backward compatibility
+ * @deprecated Use saveFermentationAndTransferData() instead
+ */
+function completeFVToBTTransfer(batchNumber, fvVessel, btVessel, transferredBy, transferDate) {
+  // Call new function with minimal data
+  return saveFermentationAndTransferData(batchNumber, fvVessel, btVessel, transferredBy, transferDate, {
+    btVessel: btVessel,
+    transferredBy: transferredBy,
+    transferDate: transferDate,
+    transferComplete: true
+  });
+}
+
+/**
+ * Helper function to get ingredient cost from Raw Materials
+ * Used in packaging runs and batch completion
+ * @param {string} ingredientName - Name of ingredient
+ * @returns {number} Cost per unit
+ */
+function getIngredientCost(ingredientName) {
+  try {
+    var ss = getBrmSpreadsheet();
+    var rmSheet = ss.getSheetByName(SHEETS.RAW_MATERIALS);
+    if (!rmSheet) return 0;
+    
+    var data = rmSheet.getDataRange().getValues();
+    var cols = RAW_MATERIAL_CONFIG.columns;
+    var startRow = RAW_MATERIAL_CONFIG.dataStartRow - 1;
+    
+    for (var i = startRow; i < data.length; i++) {
+      var itemName = (data[i][cols.item - 1] || '').toString().trim();
+      if (itemName.toLowerCase() === ingredientName.toLowerCase()) {
+        return parseFloat(data[i][cols.avgCost - 1]) || 0;
+      }
+    }
+    return 0;
+  } catch (e) {
+    Logger.log('Error getting ingredient cost for ' + ingredientName + ': ' + e.toString());
+    return 0;
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════

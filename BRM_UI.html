@@ -984,12 +984,12 @@
           <table class="data-table">
             <thead>
               <tr>
-                <th>Date</th>
                 <th>PO #</th>
+                <th>Date</th>
                 <th>Supplier</th>
                 <th>Item</th>
+                <th>Category</th>
                 <th style="text-align:right;">Qty</th>
-                <th style="text-align:right;">Cost/Unit</th>
                 <th style="text-align:right;">Total</th>
                 <th>Status</th>
                 <th>Actions</th>
@@ -1914,6 +1914,69 @@
     <div class="modal-actions">
       <button class="btn btn-secondary" onclick="closeEditRMModal()">Cancel</button>
       <button class="btn btn-primary" onclick="saveEditRM()">💾 Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- New Purchase Request Modal -->
+<div id="newPOModal" class="modal">
+  <div class="modal-content" style="max-width:500px;">
+    <div class="modal-header">
+      <h2>🛒 New Purchase Request</h2>
+      <button class="close-btn" onclick="closeNewPOModal()">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-group">
+        <label>Item <span style="color:red;">*</span></label>
+        <input type="text" id="poItem" required>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Category</label>
+          <select id="poCategory" onchange="checkPOBudget(this.value)">
+            <option value="">-- Select --</option>
+            <option value="Grain">🌾 Grain</option>
+            <option value="Hops">🌿 Hops</option>
+            <option value="Yeast">🧫 Yeast</option>
+            <option value="Adjuncts">🍯 Adjuncts</option>
+            <option value="Finings">✨ Finings</option>
+            <option value="Packaging">📦 Packaging</option>
+            <option value="Chemicals">🧪 Chemicals</option>
+            <option value="Other">Other</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Unit</label>
+          <input type="text" id="poUnit" value="lb" placeholder="lb, oz, etc.">
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Quantity <span style="color:red;">*</span></label>
+          <input type="number" id="poQty" step="0.01" min="0" required oninput="updatePOTotal()">
+        </div>
+        <div class="form-group">
+          <label>Unit Cost ($) <span style="color:red;">*</span></label>
+          <input type="number" id="poUnitCost" step="0.01" min="0" required oninput="updatePOTotal()">
+        </div>
+      </div>
+      <div class="form-group">
+        <label>Total Cost</label>
+        <input type="text" id="poTotal" readonly style="background:#f3f4f6;font-weight:600;font-size:16px;">
+      </div>
+      <div class="form-group">
+        <label>Supplier</label>
+        <input type="text" id="poSupplier">
+      </div>
+      <div class="form-group">
+        <label>Notes</label>
+        <textarea id="poNotes" rows="2"></textarea>
+      </div>
+      <div id="poBudgetWarning" style="display:none;"></div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" onclick="closeNewPOModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="submitPurchaseRequest()">📝 Submit Request</button>
     </div>
   </div>
 </div>
@@ -4314,7 +4377,8 @@
       el = document.getElementById('rmTotalValue');
       if (el) el.textContent = '$' + formatNumber(summary.totalValue || 0);
       el = document.getElementById('rmLowStock');
-      if (el) el.textContent = summary.lowStock || 0;
+      // "Need Reorder" should include both low stock AND out of stock items
+      if (el) el.textContent = summary.needReorder || (summary.lowStock || 0) + (summary.outOfStock || 0);
       el = document.getElementById('rmOutOfStock');
       if (el) el.textContent = summary.outOfStock || 0;
       renderMaterials(allMaterials);
@@ -4340,6 +4404,8 @@
           '<td class="action-cell">' +
             '<button class="btn-icon" onclick="editMaterial(\'' + escapeHtml(m.item).replace(/'/g, "\\'") + '\')" title="Edit">✏️</button>' +
             '<button class="btn-icon" onclick="adjustMaterial(\'' + escapeHtml(m.item).replace(/'/g, "\\'") + '\', ' + m.qtyOnHand + ')" title="Adjust">📦</button>' +
+            ((m.status === 'LOW' || m.status === 'OUT' || (m.status || '').includes('REORDER') || (m.status || '').includes('OUT')) ? 
+              '<button class="btn-icon" style="color:#f59e0b;" onclick="createPOFromMaterial(\'' + escapeHtml(m.item).replace(/'/g, "\\'") + '\', \'' + escapeHtml(m.category).replace(/'/g, "\\'") + '\', ' + (m.reorderQty || m.reorderPoint || 0) + ', \'' + escapeHtml(m.unit).replace(/'/g, "\\'") + '\', \'' + escapeHtml(m.supplier || '').replace(/'/g, "\\'") + '\', ' + (m.avgCost || 0) + ')" title="Create PO Request">🛒</button>' : '') +
           '</td></tr>';
       }).join('');
     }
@@ -4423,10 +4489,66 @@
       var mat = allMaterials.find(function(m) { return m.item === item; });
       if (!mat) { showToast('Material not found', 'error'); return; }
       
-      showToast('Edit in Raw Materials sheet for full control', 'info');
-      google.script.run.withSuccessHandler(function(url) {
-        if (url) window.open(url, '_blank');
-      }).getSheetUrl('Raw Materials');
+      // Populate edit modal with material data
+      document.getElementById('editRMItem').value = mat.item || '';
+      document.getElementById('editRMCategory').value = mat.category || '';
+      document.getElementById('editRMQty').value = mat.qtyOnHand || 0;
+      document.getElementById('editRMUnit').value = mat.unit || '';
+      document.getElementById('editRMCost').value = mat.avgCost || 0;
+      document.getElementById('editRMReorderPoint').value = mat.reorderPoint || 0;
+      document.getElementById('editRMReorderQty').value = mat.reorderQty || 0;
+      document.getElementById('editRMSupplier').value = mat.supplier || '';
+      document.getElementById('editRMNotes').value = mat.notes || '';
+      
+      // Show the modal
+      document.getElementById('editRMModal').style.display = 'flex';
+    }
+    
+    function closeEditRMModal() {
+      document.getElementById('editRMModal').style.display = 'none';
+      // Clear form
+      document.getElementById('editRMItem').value = '';
+      document.getElementById('editRMCategory').value = '';
+      document.getElementById('editRMQty').value = '';
+      document.getElementById('editRMUnit').value = '';
+      document.getElementById('editRMCost').value = '';
+      document.getElementById('editRMReorderPoint').value = '';
+      document.getElementById('editRMReorderQty').value = '';
+      document.getElementById('editRMSupplier').value = '';
+      document.getElementById('editRMNotes').value = '';
+    }
+    
+    function saveEditRM() {
+      var item = document.getElementById('editRMItem').value;
+      if (!item) { showToast('Item name required', 'error'); return; }
+      
+      var data = {
+        item: item,
+        qtyOnHand: parseFloat(document.getElementById('editRMQty').value) || 0,
+        avgCost: parseFloat(document.getElementById('editRMCost').value) || 0,
+        reorderPoint: parseFloat(document.getElementById('editRMReorderPoint').value) || 0,
+        reorderQty: parseFloat(document.getElementById('editRMReorderQty').value) || 0,
+        supplier: document.getElementById('editRMSupplier').value || '',
+        notes: document.getElementById('editRMNotes').value || ''
+      };
+      
+      showLoading('Saving changes...');
+      google.script.run
+        .withSuccessHandler(function(result) {
+          hideLoading();
+          if (result.success) {
+            showToast('Material updated successfully!', 'success');
+            closeEditRMModal();
+            loadRawMaterials(); // Reload the list
+          } else {
+            showToast('Error: ' + result.error, 'error');
+          }
+        })
+        .withFailureHandler(function(error) {
+          hideLoading();
+          showToast('Error: ' + error.message, 'error');
+        })
+        .updateRawMaterialItem(data);
     }
     
     function adjustMaterial(item, currentQty) {
@@ -4599,23 +4721,73 @@ function saveEditFG() {
     
     function renderPurchases(purchases) {
       if (purchases.length === 0) {
-        document.getElementById('purchaseTableBody').innerHTML = '<tr><td colspan="8">No purchases found</td></tr>';
+        document.getElementById('purchaseTableBody').innerHTML = '<tr><td colspan="9">No purchases found</td></tr>';
         return;
       }
-      document.getElementById('purchaseTableBody').innerHTML = purchases.map(function(p) {
-        var isReceived = (p.status || '').toLowerCase().includes('received');
-        return '<tr>' +
-          '<td><strong>' + escapeHtml(p.poNumber || p.po) + '</strong></td>' +
-          '<td>' + formatDate(p.date || p.orderDate) + '</td>' +
-          '<td>' + escapeHtml(p.supplier || p.vendor) + '</td>' +
-          '<td>' + escapeHtml(p.item || p.description) + '</td>' +
-          '<td style="text-align:right;">' + formatNumber(p.qty || p.quantity) + '</td>' +
-          '<td style="text-align:right;">$' + formatNumber(p.total || p.amount) + '</td>' +
-          '<td><span class="badge ' + (isReceived ? 'badge-success' : 'badge-warning') + '">' + (p.status || 'Pending') + '</span></td>' +
-          '<td class="action-cell">' +
-            (isReceived ? '' : '<button class="btn-icon" onclick="receivePO(\'' + escapeHtml(p.poNumber || p.po).replace(/'/g, "\\'") + '\')" title="Receive">📦</button>') +
-          '</td></tr>';
-      }).join('');
+      // Load OpEx budget data for budget warnings
+      google.script.run
+        .withSuccessHandler(function(opexResult) {
+          var budgetMap = {};
+          if (opexResult.success) {
+            opexResult.categories.forEach(function(cat) {
+              budgetMap[cat.category.toLowerCase()] = {
+                remaining: cat.budget2026 - cat.ytdActual,
+                budget: cat.budget2026
+              };
+            });
+          }
+          
+          document.getElementById('purchaseTableBody').innerHTML = purchases.map(function(p) {
+            var isReceived = (p.status || '').toLowerCase().includes('received');
+            var isApproved = (p.status || '').toLowerCase().includes('approved');
+            var isPending = (p.status || '').toLowerCase() === 'pending';
+            var category = (p.category || '').toLowerCase();
+            var budgetInfo = budgetMap[category];
+            var budgetWarning = '';
+            
+            if (budgetInfo && isPending) {
+              var remaining = budgetInfo.remaining;
+              var total = parseFloat(p.total || p.amount) || 0;
+              if (total > remaining) {
+                budgetWarning = ' <span style="color:#ef4444;font-size:11px;" title="Exceeds budget by $' + formatNumber(total - remaining) + '">⚠️</span>';
+              } else if (remaining < (budgetInfo.budget * 0.1)) {
+                budgetWarning = ' <span style="color:#f59e0b;font-size:11px;" title="Only $' + formatNumber(remaining) + ' remaining">⚠️</span>';
+              }
+            }
+            
+            return '<tr>' +
+              '<td><strong>' + escapeHtml(p.poNumber || p.po) + '</strong></td>' +
+              '<td>' + formatDate(p.date || p.orderDate) + '</td>' +
+              '<td>' + escapeHtml(p.supplier || p.vendor) + '</td>' +
+              '<td>' + escapeHtml(p.item || p.description) + '</td>' +
+              '<td>' + escapeHtml(p.category || '') + '</td>' +
+              '<td style="text-align:right;">' + formatNumber(p.qty || p.quantity) + '</td>' +
+              '<td style="text-align:right;">$' + formatNumber(p.total || p.amount) + '</td>' +
+              '<td><span class="badge ' + (isReceived ? 'badge-success' : isApproved ? 'badge-info' : 'badge-warning') + '">' + (p.status || 'Pending') + '</span>' + budgetWarning + '</td>' +
+              '<td class="action-cell">' +
+                (isReceived ? '' : '<button class="btn-icon" onclick="receivePO(\'' + escapeHtml(p.poNumber || p.po).replace(/'/g, "\\'") + '\')" title="Receive">📦</button>') +
+              '</td></tr>';
+          }).join('');
+        })
+        .withFailureHandler(function(err) {
+          // Fallback without budget info
+          document.getElementById('purchaseTableBody').innerHTML = purchases.map(function(p) {
+            var isReceived = (p.status || '').toLowerCase().includes('received');
+            return '<tr>' +
+              '<td><strong>' + escapeHtml(p.poNumber || p.po) + '</strong></td>' +
+              '<td>' + formatDate(p.date || p.orderDate) + '</td>' +
+              '<td>' + escapeHtml(p.supplier || p.vendor) + '</td>' +
+              '<td>' + escapeHtml(p.item || p.description) + '</td>' +
+              '<td>' + escapeHtml(p.category || '') + '</td>' +
+              '<td style="text-align:right;">' + formatNumber(p.qty || p.quantity) + '</td>' +
+              '<td style="text-align:right;">$' + formatNumber(p.total || p.amount) + '</td>' +
+              '<td><span class="badge ' + (isReceived ? 'badge-success' : 'badge-warning') + '">' + (p.status || 'Pending') + '</span></td>' +
+              '<td class="action-cell">' +
+                (isReceived ? '' : '<button class="btn-icon" onclick="receivePO(\'' + escapeHtml(p.poNumber || p.po).replace(/'/g, "\\'") + '\')" title="Receive">📦</button>') +
+              '</td></tr>';
+          }).join('');
+        })
+        .getOpExStatus();
     }
     
     function filterPurchases() {
@@ -4627,10 +4799,144 @@ function saveEditFG() {
     }
     
     function showNewPurchaseModal() {
-      showToast('Add purchases in Purchase Log sheet', 'info');
-      google.script.run.withSuccessHandler(function(url) {
-        if (url) window.open(url, '_blank');
-      }).getSheetUrl('Purchase Log');
+      // Open purchase request modal
+      document.getElementById('newPOModal').style.display = 'flex';
+      // Clear form
+      document.getElementById('poItem').value = '';
+      document.getElementById('poCategory').value = '';
+      document.getElementById('poQty').value = '';
+      document.getElementById('poUnit').value = 'lb';
+      document.getElementById('poSupplier').value = '';
+      document.getElementById('poUnitCost').value = '';
+      document.getElementById('poTotal').value = '';
+      document.getElementById('poNotes').value = '';
+      document.getElementById('poBudgetWarning').style.display = 'none';
+    }
+    
+    function createPOFromMaterial(item, category, reorderQty, unit, supplier, avgCost) {
+      // Pre-fill purchase request modal with raw material data
+      document.getElementById('poItem').value = item;
+      document.getElementById('poCategory').value = category;
+      document.getElementById('poQty').value = reorderQty || '';
+      document.getElementById('poUnit').value = unit || 'lb';
+      document.getElementById('poSupplier').value = supplier || '';
+      document.getElementById('poUnitCost').value = avgCost || '';
+      document.getElementById('poNotes').value = 'Auto-generated from Raw Materials - Low Stock';
+      
+      // Calculate total
+      updatePOTotal();
+      
+      // Check OpEx budget
+      checkPOBudget(category);
+      
+      // Show modal
+      document.getElementById('newPOModal').style.display = 'flex';
+    }
+    
+    function updatePOTotal() {
+      var qty = parseFloat(document.getElementById('poQty').value) || 0;
+      var unitCost = parseFloat(document.getElementById('poUnitCost').value) || 0;
+      var total = qty * unitCost;
+      document.getElementById('poTotal').value = total.toFixed(2);
+      
+      // Check budget if category is set
+      var category = document.getElementById('poCategory').value;
+      if (category) {
+        checkPOBudget(category);
+      }
+    }
+    
+    function checkPOBudget(category) {
+      if (!category) return;
+      
+      var total = parseFloat(document.getElementById('poTotal').value) || 0;
+      if (total <= 0) {
+        document.getElementById('poBudgetWarning').style.display = 'none';
+        return;
+      }
+      
+      google.script.run
+        .withSuccessHandler(function(result) {
+          if (result.success) {
+            var categoryData = result.categories.find(function(c) {
+              return c.category.toLowerCase() === category.toLowerCase();
+            });
+            
+            var warningDiv = document.getElementById('poBudgetWarning');
+            if (categoryData) {
+              var remaining = categoryData.budget2026 - categoryData.ytdActual;
+              var withinBudget = total <= remaining;
+              
+              warningDiv.innerHTML = withinBudget ? 
+                '<div style="background:#d1fae5;border:1px solid #10b981;padding:10px;border-radius:6px;margin-top:10px;">' +
+                  '✅ Budget OK: $' + formatNumber(remaining) + ' remaining in ' + category +
+                '</div>' :
+                '<div style="background:#fee2e2;border:1px solid #ef4444;padding:10px;border-radius:6px;margin-top:10px;">' +
+                  '⚠️ Budget Warning: Only $' + formatNumber(remaining) + ' remaining in ' + category + '. Request exceeds budget by $' + formatNumber(total - remaining) +
+                '</div>';
+              warningDiv.style.display = 'block';
+            } else {
+              warningDiv.style.display = 'none';
+            }
+          }
+        })
+        .withFailureHandler(function(err) {
+          console.log('Budget check error: ' + err);
+        })
+        .getOpExStatus();
+    }
+    
+    function closeNewPOModal() {
+      document.getElementById('newPOModal').style.display = 'none';
+    }
+    
+    function submitPurchaseRequest() {
+      var item = document.getElementById('poItem').value.trim();
+      if (!item) {
+        showToast('Item name is required', 'error');
+        return;
+      }
+      
+      var qty = parseFloat(document.getElementById('poQty').value);
+      if (!qty || qty <= 0) {
+        showToast('Quantity must be greater than 0', 'error');
+        return;
+      }
+      
+      var unitCost = parseFloat(document.getElementById('poUnitCost').value);
+      if (!unitCost || unitCost < 0) {
+        showToast('Unit cost is required', 'error');
+        return;
+      }
+      
+      var data = {
+        item: item,
+        category: document.getElementById('poCategory').value || '',
+        qty: qty,
+        unit: document.getElementById('poUnit').value || 'lb',
+        supplier: document.getElementById('poSupplier').value || '',
+        unitCost: unitCost,
+        notes: document.getElementById('poNotes').value || ''
+      };
+      
+      showLoading('Submitting purchase request...');
+      google.script.run
+        .withSuccessHandler(function(result) {
+          hideLoading();
+          if (result.success) {
+            showToast('Purchase request submitted! PO#: ' + result.poNumber, 'success');
+            closeNewPOModal();
+            loadPurchases();
+            loadRawMaterials(); // Refresh to update status
+          } else {
+            showToast('Error: ' + result.error, 'error');
+          }
+        })
+        .withFailureHandler(function(error) {
+          hideLoading();
+          showToast('Error: ' + error.message, 'error');
+        })
+        .addPurchaseRequest(data);
     }
     
     function receivePO(poNumber) {
@@ -5302,7 +5608,74 @@ function renderOpExCategories(categories) {
       renderBrewerSheetCosts(data);
       
       // Load dropdowns
-      loadBrewersDropdown();
+      loadBrewersDropdown(function() {
+        // After dropdowns are loaded, set saved values
+        if (data.yeastPitchedBy) {
+          var select = document.getElementById('fermYeastPitchedBy');
+          if (select && select.options.length > 1) {
+            var optionExists = Array.from(select.options).some(function(opt) {
+              return opt.value === data.yeastPitchedBy;
+            });
+            if (optionExists) select.value = data.yeastPitchedBy;
+          }
+        }
+        if (data.fermentationCompleteBy) {
+          var select = document.getElementById('fermCompleteBy');
+          if (select && select.options.length > 1) {
+            var optionExists = Array.from(select.options).some(function(opt) {
+              return opt.value === data.fermentationCompleteBy;
+            });
+            if (optionExists) select.value = data.fermentationCompleteBy;
+          }
+        }
+        if (data.dryHopAddedBy) {
+          var select = document.getElementById('fermDryHopBy');
+          if (select && select.options.length > 1) {
+            var optionExists = Array.from(select.options).some(function(opt) {
+              return opt.value === data.dryHopAddedBy;
+            });
+            if (optionExists) select.value = data.dryHopAddedBy;
+          }
+        }
+        if (data.qaCheckBy) {
+          var select = document.getElementById('fermQACheckBy');
+          if (select && select.options.length > 1) {
+            var optionExists = Array.from(select.options).some(function(opt) {
+              return opt.value === data.qaCheckBy;
+            });
+            if (optionExists) select.value = data.qaCheckBy;
+          }
+        }
+        if (data.crashCompleteBy) {
+          var select = document.getElementById('fermCrashBy');
+          if (select && select.options.length > 1) {
+            var optionExists = Array.from(select.options).some(function(opt) {
+              return opt.value === data.crashCompleteBy;
+            });
+            if (optionExists) select.value = data.crashCompleteBy;
+          }
+        }
+        
+        // Set Brite Tank dropdown values
+        if (data.transferredBy) {
+          var select = document.getElementById('btTransferredBy');
+          if (select && select.options.length > 1) {
+            var optionExists = Array.from(select.options).some(function(opt) {
+              return opt.value === data.transferredBy;
+            });
+            if (optionExists) select.value = data.transferredBy;
+          }
+        }
+        if (data.carbonatedBy) {
+          var select = document.getElementById('btCarbonatedBy');
+          if (select && select.options.length > 1) {
+            var optionExists = Array.from(select.options).some(function(opt) {
+              return opt.value === data.carbonatedBy;
+            });
+            if (optionExists) select.value = data.carbonatedBy;
+          }
+        }
+      });
       loadAvailableVessels();
     }
     
@@ -5393,6 +5766,97 @@ function renderOpExCategories(categories) {
     }
     
     function renderBrewerSheetTurn1(data) {
+      var turn1Section = document.getElementById('turn1Section');
+      if (!turn1Section) return;
+      
+      // If Turn 1 is complete, show read-only completed view
+      if (data.turn1Complete && data.turn1Data) {
+        var turn1Data = data.turn1Data;
+        var completedHtml = '<div class="turn-complete-display" style="padding:20px;background:#f0f8ff;border-radius:8px;border:2px solid #4CAF50;">' +
+          '<div style="text-align:center;margin-bottom:15px;">' +
+          '<div style="font-size:18px;font-weight:600;color:#4CAF50;margin-bottom:5px;">✅ TURN 1 COMPLETE</div>' +
+          '<div style="font-size:12px;color:#666;">Completed on ' + (turn1Data.date || '--') + '</div>' +
+          '</div>' +
+          '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:15px;margin-bottom:20px;">' +
+          '<div><strong>Brewer:</strong><br>' + escapeHtml(turn1Data.brewer || '--') + '</div>' +
+          '<div><strong>Date:</strong><br>' + escapeHtml(turn1Data.date || '--') + '</div>' +
+          '<div><strong>Vessel:</strong><br>' + escapeHtml(turn1Data.vessel || '--') + '</div>' +
+          '<div><strong>Efficiency:</strong><br>' + (turn1Data.efficiency || 0) + '%</div>' +
+          '<div><strong>Pre-Boil Gravity:</strong><br>' + (turn1Data.gravity || 0) + ' °P</div>' +
+          '<div><strong>Labor Hours:</strong><br>' + (data.turn1LaborHours || 0).toFixed(2) + ' hrs</div>' +
+          '</div>';
+        
+        if (turn1Data.notes) {
+          completedHtml += '<div style="margin-bottom:15px;"><strong>Notes:</strong><br>' + escapeHtml(turn1Data.notes) + '</div>';
+        }
+        
+        if (turn1Data.actuals && turn1Data.actuals.length > 0) {
+          completedHtml += '<div style="margin-top:15px;"><strong>Ingredients Used:</strong>' +
+            '<table style="width:100%;margin-top:10px;border-collapse:collapse;font-size:13px;">' +
+            '<thead><tr style="background:#8B0000;color:white;"><th style="padding:8px;text-align:left;">Item</th><th style="padding:8px;text-align:right;">Actual</th></tr></thead>' +
+            '<tbody>';
+          turn1Data.actuals.forEach(function(ing) {
+            completedHtml += '<tr><td style="padding:6px;border-bottom:1px solid #ddd;">' + escapeHtml(ing.name || '') + '</td>' +
+              '<td style="padding:6px;border-bottom:1px solid #ddd;text-align:right;">' + (ing.actual || 0).toFixed(2) + ' ' + escapeHtml(ing.unit || '') + '</td></tr>';
+          });
+          completedHtml += '</tbody></table></div>';
+        }
+        
+        completedHtml += '</div>';
+        
+        // Hide all form elements in Turn 1 section
+        var formElements = turn1Section.querySelectorAll('input, select, textarea, button');
+        formElements.forEach(function(el) {
+          if (el.id !== 'completeTurn1Btn') { // Keep button visible until we hide it separately
+            el.style.display = 'none';
+          }
+        });
+        
+        // Hide the header date input
+        var headerDate = turn1Section.querySelector('h3').parentElement.querySelector('input[type="date"]');
+        if (headerDate) headerDate.style.display = 'none';
+        
+        // Hide the Complete button
+        var completeBtn = document.getElementById('completeTurn1Btn');
+        if (completeBtn) completeBtn.style.display = 'none';
+        
+        // Remove existing completed view if present
+        var existingCompleted = turn1Section.querySelector('.turn-complete-display');
+        if (existingCompleted) {
+          existingCompleted.remove();
+        }
+        
+        // Insert completed view at the top (after header)
+        var header = turn1Section.querySelector('h3').parentElement;
+        if (header && header.nextElementSibling) {
+          header.nextElementSibling.insertAdjacentHTML('beforebegin', completedHtml);
+        } else {
+          turn1Section.insertAdjacentHTML('afterbegin', completedHtml);
+        }
+        
+        return; // Don't render editable form
+      }
+      
+      // Turn 1 is NOT complete - show editable form
+      var existingCompleted = turn1Section.querySelector('.turn-complete-display');
+      if (existingCompleted) {
+        existingCompleted.remove();
+      }
+      
+      // Show all form elements
+      var formElements = turn1Section.querySelectorAll('input, select, textarea, button');
+      formElements.forEach(function(el) {
+        el.style.display = '';
+      });
+      
+      // Show the header date input
+      var headerDate = turn1Section.querySelector('h3').parentElement.querySelector('input[type="date"]');
+      if (headerDate) headerDate.style.display = '';
+      
+      // Show Complete button
+      var completeBtn = document.getElementById('completeTurn1Btn');
+      if (completeBtn) completeBtn.style.display = 'block';
+      
       // Set date
       if (data.turn1CompleteDate) {
         var date1 = new Date(data.turn1CompleteDate);
@@ -5419,26 +5883,22 @@ function renderOpExCategories(categories) {
         }
       }, 500);
       
-      // Set checkboxes if complete
-      if (data.turn1Complete) {
-        document.getElementById('turn1Mill').checked = true;
-        document.getElementById('turn1Mash').checked = true;
-        document.getElementById('turn1Lauter').checked = true;
-        document.getElementById('turn1Boil').checked = true;
-        document.getElementById('turn1Whirlpool').checked = true;
-        document.getElementById('turn1Transfer').checked = true;
-      }
-      
       // Set efficiency and pre-boil gravity if available
-      if (data.turn1Efficiency) {
-        document.getElementById('turn1Efficiency').value = data.turn1Efficiency;
+      if (data.turn1Data && data.turn1Data.efficiency) {
+        document.getElementById('turn1Efficiency').value = data.turn1Data.efficiency;
       }
-      if (data.turn1PreBoilGravity) {
-        document.getElementById('turn1PreBoilGravity').value = data.turn1PreBoilGravity;
+      if (data.turn1Data && data.turn1Data.gravity) {
+        document.getElementById('turn1PreBoilGravity').value = data.turn1Data.gravity;
+      }
+      if (data.turn1Data && data.turn1Data.notes) {
+        document.getElementById('turn1Notes').value = data.turn1Data.notes;
       }
     }
     
     function renderBrewerSheetTurn2(data) {
+      var turn2Section = document.getElementById('turn2Section');
+      if (!turn2Section) return;
+      
       // Check if no turn 2
       if (data.noTurn2) {
         document.getElementById('noTurn2Checkbox').checked = true;
@@ -5447,6 +5907,102 @@ function renderOpExCategories(categories) {
       }
       
       document.getElementById('turn2Controls').style.display = 'block';
+      
+      // If Turn 2 is complete, show read-only completed view
+      if (data.turn2Complete && data.turn2Data) {
+        var turn2Data = data.turn2Data;
+        var completedHtml = '<div class="turn-complete-display" style="padding:20px;background:#f0f8ff;border-radius:8px;border:2px solid #4CAF50;margin-top:15px;">' +
+          '<div style="text-align:center;margin-bottom:15px;">' +
+          '<div style="font-size:18px;font-weight:600;color:#4CAF50;margin-bottom:5px;">✅ TURN 2 COMPLETE</div>' +
+          '<div style="font-size:12px;color:#666;">Completed on ' + (turn2Data.date || '--') + '</div>' +
+          '</div>' +
+          '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:15px;margin-bottom:20px;">' +
+          '<div><strong>Brewer:</strong><br>' + escapeHtml(turn2Data.brewer || '--') + '</div>' +
+          '<div><strong>Date:</strong><br>' + escapeHtml(turn2Data.date || '--') + '</div>' +
+          '<div><strong>Vessel:</strong><br>' + escapeHtml(turn2Data.vessel || '--') + '</div>' +
+          '<div><strong>Efficiency:</strong><br>' + (turn2Data.efficiency || 0) + '%</div>' +
+          '<div><strong>Pre-Boil Gravity:</strong><br>' + (turn2Data.gravity || 0) + ' °P</div>' +
+          '<div><strong>Labor Hours:</strong><br>' + (data.turn2LaborHours || 0).toFixed(2) + ' hrs</div>' +
+          '</div>';
+        
+        if (turn2Data.notes) {
+          completedHtml += '<div style="margin-bottom:15px;"><strong>Notes:</strong><br>' + escapeHtml(turn2Data.notes) + '</div>';
+        }
+        
+        if (turn2Data.actuals && turn2Data.actuals.length > 0) {
+          completedHtml += '<div style="margin-top:15px;"><strong>Ingredients Used:</strong>' +
+            '<table style="width:100%;margin-top:10px;border-collapse:collapse;font-size:13px;">' +
+            '<thead><tr style="background:#8B0000;color:white;"><th style="padding:8px;text-align:left;">Item</th><th style="padding:8px;text-align:right;">Actual</th></tr></thead>' +
+            '<tbody>';
+          turn2Data.actuals.forEach(function(ing) {
+            completedHtml += '<tr><td style="padding:6px;border-bottom:1px solid #ddd;">' + escapeHtml(ing.name || '') + '</td>' +
+              '<td style="padding:6px;border-bottom:1px solid #ddd;text-align:right;">' + (ing.actual || 0).toFixed(2) + ' ' + escapeHtml(ing.unit || '') + '</td></tr>';
+          });
+          completedHtml += '</tbody></table></div>';
+        }
+        
+        completedHtml += '</div>';
+        
+        // Hide all form elements in Turn 2 section
+        var formElements = turn2Section.querySelectorAll('input, select, textarea, button');
+        formElements.forEach(function(el) {
+          if (el.id !== 'completeTurn2Btn' && el.id !== 'noTurn2Checkbox') { // Keep these until we hide them separately
+            el.style.display = 'none';
+          }
+        });
+        
+        // Hide the header date input
+        var headerDate = turn2Section.querySelector('h3').parentElement.querySelector('input[type="date"]');
+        if (headerDate) headerDate.style.display = 'none';
+        
+        // Hide the "No Turn 2" checkbox
+        var noTurn2Checkbox = document.getElementById('noTurn2Checkbox');
+        if (noTurn2Checkbox) noTurn2Checkbox.style.display = 'none';
+        
+        // Hide the Complete button
+        var completeBtn = document.getElementById('completeTurn2Btn');
+        if (completeBtn) completeBtn.style.display = 'none';
+        
+        // Hide the turn2Controls div
+        var turn2Controls = document.getElementById('turn2Controls');
+        if (turn2Controls) turn2Controls.style.display = 'none';
+        
+        // Remove existing completed view if present
+        var existingCompleted = turn2Section.querySelector('.turn-complete-display');
+        if (existingCompleted) {
+          existingCompleted.remove();
+        }
+        
+        // Insert completed view at the top (after header)
+        var header = turn2Section.querySelector('h3').parentElement;
+        if (header && header.nextElementSibling) {
+          header.nextElementSibling.insertAdjacentHTML('beforebegin', completedHtml);
+        } else {
+          turn2Section.insertAdjacentHTML('afterbegin', completedHtml);
+        }
+        
+        return; // Don't render editable form
+      }
+      
+      // Turn 2 is NOT complete - show editable form
+      var existingCompleted = turn2Section.querySelector('.turn-complete-display');
+      if (existingCompleted) {
+        existingCompleted.remove();
+      }
+      
+      // Show all form elements
+      var formElements = turn2Section.querySelectorAll('input, select, textarea, button');
+      formElements.forEach(function(el) {
+        el.style.display = '';
+      });
+      
+      // Show the header date input
+      var headerDate = turn2Section.querySelector('h3').parentElement.querySelector('input[type="date"]');
+      if (headerDate) headerDate.style.display = '';
+      
+      // Show Complete button
+      var completeBtn = document.getElementById('completeTurn2Btn');
+      if (completeBtn) completeBtn.style.display = 'block';
       
       // Set date
       if (data.turn2CompleteDate) {
@@ -5466,28 +6022,160 @@ function renderOpExCategories(categories) {
         }
       }, 500);
       
-      // Set checkboxes if complete
-      if (data.turn2Complete) {
-        document.getElementById('turn2Mill').checked = true;
-        document.getElementById('turn2Mash').checked = true;
-        document.getElementById('turn2Lauter').checked = true;
-        document.getElementById('turn2Boil').checked = true;
-        document.getElementById('turn2Whirlpool').checked = true;
-        document.getElementById('turn2Transfer').checked = true;
-      }
-      
       // Set efficiency and pre-boil gravity
-      if (data.turn2Efficiency) {
-        document.getElementById('turn2Efficiency').value = data.turn2Efficiency;
+      if (data.turn2Data && data.turn2Data.efficiency) {
+        document.getElementById('turn2Efficiency').value = data.turn2Data.efficiency;
       }
-      if (data.turn2PreBoilGravity) {
-        document.getElementById('turn2PreBoilGravity').value = data.turn2PreBoilGravity;
+      if (data.turn2Data && data.turn2Data.gravity) {
+        document.getElementById('turn2PreBoilGravity').value = data.turn2Data.gravity;
+      }
+      if (data.turn2Data && data.turn2Data.notes) {
+        document.getElementById('turn2Notes').value = data.turn2Data.notes;
       }
     }
     
     function renderBrewerSheetFermentation(data) {
       // Set FV
       document.getElementById('fermentationFV').textContent = data.currentVessel || '--';
+      
+      // Set yeast data
+      if (data.actualYeastGeneration) {
+        document.getElementById('brewerSheetYeastGeneration').value = data.actualYeastGeneration;
+      }
+      if (data.propagationBatch) {
+        setTimeout(function() {
+          var select = document.getElementById('brewerSheetYeastPropBatch');
+          if (select) select.value = data.propagationBatch;
+        }, 500);
+      }
+      if (data.yeastPitchDate) {
+        var pitchDate = new Date(data.yeastPitchDate);
+        document.getElementById('brewerSheetYeastPitchDate').value = pitchDate.toISOString().split('T')[0];
+      }
+      if (data.yeastPitched) {
+        document.getElementById('brewerSheetYeastPitched').checked = true;
+      }
+      
+      // Set fermentation step dates and by fields
+      // Use a helper function to set dropdown value after it's populated
+      function setDropdownValue(selectId, value) {
+        if (!value || value === '') return;
+        
+        var attempts = 0;
+        var maxAttempts = 10;
+        var interval = setInterval(function() {
+          attempts++;
+          var select = document.getElementById(selectId);
+          if (select && select.options.length > 1) {
+            // Dropdown is populated, try to set value
+            var optionExists = Array.from(select.options).some(function(opt) {
+              return opt.value === value;
+            });
+            if (optionExists) {
+              select.value = value;
+              clearInterval(interval);
+            } else if (attempts >= maxAttempts) {
+              // Value doesn't exist in dropdown, log warning
+              Logger.log('Warning: Value "' + value + '" not found in dropdown ' + selectId);
+              clearInterval(interval);
+            }
+          } else if (attempts >= maxAttempts) {
+            // Dropdown not populated after max attempts
+            Logger.log('Warning: Dropdown ' + selectId + ' not populated after ' + maxAttempts + ' attempts');
+            clearInterval(interval);
+          }
+        }, 100);
+      }
+      
+      if (data.yeastPitchedBy) {
+        setDropdownValue('fermYeastPitchedBy', data.yeastPitchedBy);
+      }
+      if (data.yeastPitchedDate) {
+        var pitchDate = new Date(data.yeastPitchedDate);
+        document.getElementById('fermYeastPitchedDate').value = pitchDate.toISOString().split('T')[0];
+      }
+      if (data.fermYeastPitched) {
+        document.getElementById('fermYeastPitched').checked = true;
+      }
+      
+      if (data.fermentationCompleteBy) {
+        setDropdownValue('fermCompleteBy', data.fermentationCompleteBy);
+      }
+      if (data.fermentationCompleteDate) {
+        var completeDate = new Date(data.fermentationCompleteDate);
+        document.getElementById('fermCompleteDate').value = completeDate.toISOString().split('T')[0];
+      }
+      if (data.fermComplete) {
+        document.getElementById('fermComplete').checked = true;
+      }
+      
+      if (data.dryHopAddedBy) {
+        setDropdownValue('fermDryHopBy', data.dryHopAddedBy);
+      }
+      if (data.dryHopAddedDate) {
+        var dryHopDate = new Date(data.dryHopAddedDate);
+        document.getElementById('fermDryHopDate').value = dryHopDate.toISOString().split('T')[0];
+      }
+      if (data.fermDryHop) {
+        document.getElementById('fermDryHop').checked = true;
+      }
+      
+      if (data.qaCheckBy) {
+        setDropdownValue('fermQACheckBy', data.qaCheckBy);
+      }
+      if (data.qaCheckDate) {
+        var qaDate = new Date(data.qaCheckDate);
+        document.getElementById('fermQACheckDate').value = qaDate.toISOString().split('T')[0];
+      }
+      if (data.fermQACheck) {
+        document.getElementById('fermQACheck').checked = true;
+      }
+      
+      if (data.crashCompleteBy) {
+        setDropdownValue('fermCrashBy', data.crashCompleteBy);
+      }
+      if (data.crashCompleteDate) {
+        var crashDate = new Date(data.crashCompleteDate);
+        document.getElementById('fermCrashDate').value = crashDate.toISOString().split('T')[0];
+      }
+      if (data.fermCrash) {
+        document.getElementById('fermCrash').checked = true;
+      }
+      
+      // Legacy support for old data structure
+      if (data.fermentation) {
+        if (data.fermentation.yeastPitchedDate && !data.yeastPitchedDate) {
+          var pitchDate = new Date(data.fermentation.yeastPitchedDate);
+          document.getElementById('fermYeastPitchedDate').value = pitchDate.toISOString().split('T')[0];
+        }
+        if (data.fermentation.completeDate && !data.fermentationCompleteDate) {
+          var completeDate = new Date(data.fermentation.completeDate);
+          document.getElementById('fermCompleteDate').value = completeDate.toISOString().split('T')[0];
+        }
+        if (data.fermentation.dryHopDate && !data.dryHopAddedDate) {
+          var dryHopDate = new Date(data.fermentation.dryHopDate);
+          document.getElementById('fermDryHopDate').value = dryHopDate.toISOString().split('T')[0];
+        }
+        if (data.fermentation.crashDate && !data.crashCompleteDate) {
+          var crashDate = new Date(data.fermentation.crashDate);
+          document.getElementById('fermCrashDate').value = crashDate.toISOString().split('T')[0];
+        }
+        
+        // Set checkboxes
+        if (data.fermentation.yeastPitched && !data.yeastPitched) {
+          document.getElementById('brewerSheetYeastPitched').checked = true;
+          document.getElementById('fermYeastPitched').checked = true;
+        }
+        if (data.fermentation.complete && !data.fermComplete) {
+          document.getElementById('fermComplete').checked = true;
+        }
+        if (data.fermentation.dryHop && !data.fermDryHop) {
+          document.getElementById('fermDryHop').checked = true;
+        }
+        if (data.fermentation.crash && !data.fermCrash) {
+          document.getElementById('fermCrash').checked = true;
+        }
+      }
       
       // Load yeast data
       var recipeYeast = data.recipeYeastStrain || '';
@@ -5531,8 +6219,12 @@ function renderOpExCategories(categories) {
         document.getElementById('brewerSheetTargetFG').textContent = data.recipeQATargets.targetFG;
       }
       
-      // Render QA checks table
-      renderQAChecks(data.qaChecks || [], data.recipeQATargets || {});
+      // Render QA checks table (use saved data if available)
+      var qaChecksToRender = data.qaChecks || [];
+      if (qaChecksToRender.length === 0 && data.fermentation && data.fermentation.qaChecks) {
+        qaChecksToRender = data.fermentation.qaChecks;
+      }
+      renderQAChecks(qaChecksToRender, data.recipeQATargets || {});
       
       // Set checkboxes and dates based on batch status and data
       // This would need to be populated from Batch Details or Batch Tasks
@@ -5794,32 +6486,477 @@ function renderOpExCategories(categories) {
     }
     
     function renderBrewerSheetBriteTank(data) {
+      // Check if transfer is complete - if so, show locked view
+      if (data.transferComplete) {
+        var btSection = document.getElementById('turn2Section')?.parentElement?.querySelector('[id*="brite"]')?.parentElement;
+        if (!btSection) {
+          // Find brite tank section
+          var sections = document.querySelectorAll('[style*="BRITE TANK"]');
+          if (sections.length > 0) {
+            btSection = sections[0].closest('div');
+          }
+        }
+        
+        // Hide editable form elements
+        var formElements = document.querySelectorAll('#briteTankSelect, #btTransferredBy, #btTransferDate, #btTransfer, #btCO2Level, #btCarbonatedBy, #btCarbonateDate, #btCarbonate, #completeTransferBtn');
+        formElements.forEach(function(el) {
+          if (el) el.style.display = 'none';
+        });
+        
+        // Show completed view (similar to Turn 1 complete)
+        var completedHtml = '<div class="transfer-complete-display" style="padding:20px;background:#f0f8ff;border-radius:8px;border:2px solid #4CAF50;margin-top:15px;">' +
+          '<div style="text-align:center;margin-bottom:15px;">' +
+          '<div style="font-size:18px;font-weight:600;color:#4CAF50;margin-bottom:5px;">✅ TRANSFER COMPLETE</div>' +
+          '<div style="font-size:12px;color:#666;">Transferred on ' + (data.transferDate ? formatDate(new Date(data.transferDate)) : '--') + '</div>' +
+          '</div>' +
+          '<div style="display:grid;grid-template-columns:repeat(2,1fr);gap:15px;margin-bottom:20px;">' +
+          '<div><strong>BT Vessel:</strong><br>' + escapeHtml(data.btVessel || '--') + '</div>' +
+          '<div><strong>Transferred By:</strong><br>' + escapeHtml(data.transferredBy || '--') + '</div>' +
+          '<div><strong>Transfer Date:</strong><br>' + (data.transferDate ? formatDate(new Date(data.transferDate)) : '--') + '</div>';
+        
+        if (data.co2Level) {
+          completedHtml += '<div><strong>CO2 Level:</strong><br>' + escapeHtml(data.co2Level) + ' vol</div>';
+        }
+        if (data.carbonatedBy) {
+          completedHtml += '<div><strong>Carbonated By:</strong><br>' + escapeHtml(data.carbonatedBy) + '</div>';
+        }
+        if (data.carbonationDate) {
+          completedHtml += '<div><strong>Carbonation Date:</strong><br>' + formatDate(new Date(data.carbonationDate)) + '</div>';
+        }
+        if (data.carbonationComplete) {
+          completedHtml += '<div><strong>Carbonation:</strong><br>✅ Complete</div>';
+        }
+        
+        completedHtml += '</div></div>';
+        
+        // Insert completed view
+        var btContainer = document.querySelector('[id*="brite"]')?.parentElement || document.querySelector('h3:contains("BRITE TANK")')?.parentElement;
+        if (btContainer) {
+          var existing = btContainer.querySelector('.transfer-complete-display');
+          if (existing) existing.remove();
+          btContainer.insertAdjacentHTML('beforeend', completedHtml);
+        }
+        
+        return; // Don't render editable form
+      }
+      
+      // Transfer NOT complete - show editable form
+      var existingCompleted = document.querySelector('.transfer-complete-display');
+      if (existingCompleted) {
+        existingCompleted.remove();
+      }
+      
+      // Show all form elements
+      var formElements = document.querySelectorAll('#briteTankSelect, #btTransferredBy, #btTransferDate, #btTransfer, #btCO2Level, #btCarbonatedBy, #btCarbonateDate, #btCarbonate, #completeTransferBtn');
+      formElements.forEach(function(el) {
+        if (el) el.style.display = '';
+      });
+      
       // Set BT if available
-      if (data.briteTank) {
+      if (data.btVessel || data.briteTank || data.briteTankVessel) {
         var btSelect = document.getElementById('briteTankSelect');
         if (btSelect) {
-          btSelect.value = data.briteTank;
+          btSelect.value = data.btVessel || data.briteTank || data.briteTankVessel || '';
+        }
+      }
+      
+      // Set transfer and carbonation data using robust dropdown setting
+      function setDropdownValue(selectId, value) {
+        if (!value || value === '') return;
+        
+        var attempts = 0;
+        var maxAttempts = 10;
+        var interval = setInterval(function() {
+          attempts++;
+          var select = document.getElementById(selectId);
+          if (select && select.options.length > 1) {
+            // Dropdown is populated, try to set value
+            var optionExists = Array.from(select.options).some(function(opt) {
+              return opt.value === value;
+            });
+            if (optionExists) {
+              select.value = value;
+              clearInterval(interval);
+            } else if (attempts >= maxAttempts) {
+              // Value doesn't exist in dropdown, log warning
+              Logger.log('Warning: Value "' + value + '" not found in dropdown ' + selectId);
+              clearInterval(interval);
+            }
+          } else if (attempts >= maxAttempts) {
+            // Dropdown not populated after max attempts
+            Logger.log('Warning: Dropdown ' + selectId + ' not populated after ' + maxAttempts + ' attempts');
+            clearInterval(interval);
+          }
+        }, 100);
+      }
+      
+      if (data.transferredBy) {
+        setDropdownValue('btTransferredBy', data.transferredBy);
+      }
+      if (data.transferDate) {
+        var transferDate = new Date(data.transferDate);
+        document.getElementById('btTransferDate').value = transferDate.toISOString().split('T')[0];
+      }
+      if (data.transferComplete) {
+        document.getElementById('btTransfer').checked = true;
+      }
+      
+      if (data.co2Level) {
+        document.getElementById('btCO2Level').value = data.co2Level;
+      }
+      if (data.carbonatedBy) {
+        setDropdownValue('btCarbonatedBy', data.carbonatedBy);
+      }
+      if (data.carbonationDate) {
+        var carbDate = new Date(data.carbonationDate);
+        document.getElementById('btCarbonateDate').value = carbDate.toISOString().split('T')[0];
+      }
+      if (data.carbonationComplete) {
+        document.getElementById('btCarbonate').checked = true;
+      }
+      
+      // Legacy support for old data structure
+      if (data.briteTankData) {
+        if (data.briteTankData.transferredBy && !data.transferredBy) {
+          setDropdownValue('btTransferredBy', data.briteTankData.transferredBy);
+        }
+        if (data.briteTankData.transferDate && !data.transferDate) {
+          var transferDate = new Date(data.briteTankData.transferDate);
+          document.getElementById('btTransferDate').value = transferDate.toISOString().split('T')[0];
+        }
+        if (data.briteTankData.co2Level && !data.co2Level) {
+          document.getElementById('btCO2Level').value = data.briteTankData.co2Level;
+        }
+        if (data.briteTankData.carbonatedBy && !data.carbonatedBy) {
+          setDropdownValue('btCarbonatedBy', data.briteTankData.carbonatedBy);
+        }
+        if (data.briteTankData.carbonateDate && !data.carbonationDate) {
+          var carbDate = new Date(data.briteTankData.carbonateDate);
+          document.getElementById('btCarbonateDate').value = carbDate.toISOString().split('T')[0];
+        }
+        if (data.briteTankData.transfer && !data.transferComplete) {
+          document.getElementById('btTransfer').checked = true;
+        }
+        if (data.briteTankData.carbonate && !data.carbonationComplete) {
+          document.getElementById('btCarbonate').checked = true;
         }
       }
     }
     
     function renderBrewerSheetPackaging(data) {
-      // Set packaging quantities if available
-      if (data.packagingHalfBBL) {
-        document.getElementById('pkgHalfBBL').value = data.packagingHalfBBL;
+      // Load packaging runs from data or fetch if not present
+      if (data.packagingRuns && data.packagingRuns.length > 0) {
+        // Calculate totals from runs
+        var totals = {
+          halfBBL: 0,
+          sixthBBL: 0,
+          cases: 0,
+          waste: 0,
+          totalBBL: 0
+        };
+        data.packagingRuns.forEach(function(run) {
+          totals.halfBBL += parseFloat(run.halfBBL) || 0;
+          totals.sixthBBL += parseFloat(run.sixthBBL) || 0;
+          totals.cases += parseFloat(run.cases) || 0;
+          totals.waste += parseFloat(run.waste) || 0;
+          totals.totalBBL += parseFloat(run.totalBBL) || 0;
+        });
+        renderPackagingRuns(data.packagingRuns, totals);
+      } else if (brewerSheetState.batchNumber) {
+        // Fetch from backend
+        google.script.run
+          .withSuccessHandler(function(result) {
+            if (result.success && result.runs) {
+              renderPackagingRuns(result.runs, result.totals);
+            } else {
+              renderPackagingRuns([], {});
+            }
+          })
+          .withFailureHandler(function(error) {
+            console.error('Error loading packaging runs:', error);
+            renderPackagingRuns([], {});
+          })
+          .getPackagingRuns(brewerSheetState.batchNumber);
+      } else {
+        renderPackagingRuns([], {});
       }
-      if (data.packagingSixthBBL) {
-        document.getElementById('pkgSixthBBL').value = data.packagingSixthBBL;
-      }
-      if (data.packagingCases) {
-        document.getElementById('pkgCases').value = data.packagingCases;
-      }
-      if (data.packagingWaste) {
-        document.getElementById('pkgWaste').value = data.packagingWaste;
+    }
+    
+    function renderPackagingRuns(runs, totals) {
+      var tbody = document.getElementById('packagingRunsBody');
+      if (!tbody) return;
+      
+      if (!runs || runs.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:20px;color:#999;">No packaging runs yet</td></tr>';
+        updatePackagingSummary(totals || {});
+        return;
       }
       
-      // Calculate totals
-      updatePackagingTotals();
+      tbody.innerHTML = '';
+      runs.forEach(function(run) {
+        var row = '<tr>' +
+          '<td style="padding:8px;text-align:center;font-weight:600;">' + run.runNumber + '</td>' +
+          '<td style="padding:8px;text-align:center;">' + (run.date || '') + '</td>' +
+          '<td style="padding:8px;text-align:center;">' + (run.halfBBL || 0) + '</td>' +
+          '<td style="padding:8px;text-align:center;">' + (run.sixthBBL || 0) + '</td>' +
+          '<td style="padding:8px;text-align:center;">' + (run.cases || 0) + '</td>' +
+          '<td style="padding:8px;text-align:center;">' + escapeHtml(run.by || '') + '</td>' +
+          '</tr>';
+        tbody.innerHTML += row;
+      });
+      
+      // Update totals
+      if (totals) {
+        document.getElementById('pkgTotalHalfBBL').textContent = totals.halfBBL || 0;
+        document.getElementById('pkgTotalSixthBBL').textContent = totals.sixthBBL || 0;
+        document.getElementById('pkgTotalCases').textContent = totals.cases || 0;
+      }
+      
+      updatePackagingSummary(totals || {});
+    }
+    
+    function updatePackagingSummary(totals) {
+      var totalBBL = totals.totalBBL || 0;
+      document.getElementById('pkgTotalBBL').textContent = totalBBL.toFixed(2);
+      
+      var batchSize = parseFloat(document.getElementById('batchSizeHeader')?.textContent) || 60;
+      var yield = batchSize > 0 ? ((totalBBL / batchSize) * 100).toFixed(1) : '0.0';
+      document.getElementById('pkgYield').textContent = yield;
+      
+      var btRemaining = Math.max(0, batchSize - totalBBL);
+      document.getElementById('pkgBTRemaining').textContent = btRemaining.toFixed(2);
+    }
+    
+    // Show/hide 2nd person field based on cases input
+    function updatePackagingRunByFields() {
+      var cases = parseFloat(document.getElementById('pkgRunCases').value) || 0;
+      var by2Container = document.getElementById('pkgRunBy2Container');
+      var helpText = document.getElementById('pkgRunHelpText');
+      var byContainer = document.getElementById('pkgRunByContainer');
+      
+      if (cases > 0) {
+        // Show 2nd person field for canning line
+        if (by2Container) by2Container.style.display = 'block';
+        if (helpText) helpText.style.display = 'block';
+        // Update grid to accommodate 2 "By" fields
+        if (byContainer) byContainer.style.gridTemplateColumns = '1fr 1fr 1fr';
+      } else {
+        // Hide 2nd person field for keg-only runs
+        if (by2Container) {
+          by2Container.style.display = 'none';
+          document.getElementById('pkgRunBy2').value = ''; // Clear value
+        }
+        if (helpText) helpText.style.display = 'none';
+        // Update grid back to 2 columns
+        if (byContainer) byContainer.style.gridTemplateColumns = '1fr 1fr';
+      }
+    }
+    
+    function addPackagingRun() {
+      if (!brewerSheetState.batchNumber) {
+        showToast('No batch loaded', 'error');
+        return;
+      }
+      
+      var halfBBL = parseFloat(document.getElementById('pkgRunHalfBBL').value) || 0;
+      var sixthBBL = parseFloat(document.getElementById('pkgRunSixthBBL').value) || 0;
+      var cases = parseFloat(document.getElementById('pkgRunCases').value) || 0;
+      var waste = parseFloat(document.getElementById('pkgRunWaste').value) || 0;
+      var by = document.getElementById('pkgRunBy').value;
+      var by2 = document.getElementById('pkgRunBy2').value;
+      var date = document.getElementById('pkgRunDate').value;
+      
+      if (halfBBL === 0 && sixthBBL === 0 && cases === 0) {
+        showToast('Please enter at least one packaging quantity', 'warning');
+        return;
+      }
+      if (!by) {
+        showToast('Please select who packaged this run', 'warning');
+        return;
+      }
+      // If cases > 0, require 2nd person (canning line needs 2 people)
+      if (cases > 0 && !by2) {
+        showToast('Canning line requires 2 people. Please select a second person.', 'warning');
+        return;
+      }
+      // If only kegs (no cases), ensure 2nd person is not selected
+      if (cases === 0 && by2) {
+        showToast('Keg runs only need 1 person. Please clear the second person field.', 'warning');
+        return;
+      }
+      if (!date) {
+        showToast('Please enter the packaging date', 'warning');
+        return;
+      }
+      
+      // Combine names for display (if 2 people, show "Person1, Person2")
+      var byDisplay = by;
+      if (by2 && by2 !== '') {
+        byDisplay = by + ', ' + by2;
+      }
+      
+      showLoading('Adding packaging run...');
+      
+      google.script.run
+        .withSuccessHandler(function(result) {
+          hideLoading();
+          if (result.success) {
+            showToast('Packaging run added! Materials depleted, added to Finished Goods.', 'success');
+            // Clear form
+            document.getElementById('pkgRunHalfBBL').value = '';
+            document.getElementById('pkgRunSixthBBL').value = '';
+            document.getElementById('pkgRunCases').value = '';
+            document.getElementById('pkgRunWaste').value = '';
+            document.getElementById('pkgRunBy').value = '';
+            document.getElementById('pkgRunBy2').value = '';
+            document.getElementById('pkgRunDate').value = '';
+            // Hide 2nd person field if it was shown
+            document.getElementById('pkgRunBy2Container').style.display = 'none';
+            document.getElementById('pkgRunHelpText').style.display = 'none';
+            // Reload runs
+            renderBrewerSheetPackaging({});
+          } else {
+            showToast('Error: ' + result.error, 'error');
+          }
+        })
+        .withFailureHandler(function(error) {
+          hideLoading();
+          showToast('Error: ' + error.message, 'error');
+        })
+        .addPackagingRun(brewerSheetState.batchNumber, {
+          halfBBL: halfBBL,
+          sixthBBL: sixthBBL,
+          cases: cases,
+          waste: waste,
+          by: byDisplay, // Combined display name
+          by1: by, // First person
+          by2: by2 || '', // Second person (empty if not needed)
+          date: date
+        });
+    }
+    
+    function completeFVToBTTransfer() {
+      if (!brewerSheetState.batchNumber) {
+        showToast('No batch loaded', 'error');
+        return;
+      }
+      
+      var fvVessel = brewerSheetState.batchData?.currentVessel || brewerSheetState.batchData?.turn1Vessel || '';
+      var btVessel = document.getElementById('briteTankSelect').value;
+      var transferredBy = document.getElementById('btTransferredBy').value;
+      var transferDate = document.getElementById('btTransferDate').value;
+      
+      if (!fvVessel) {
+        showToast('FV vessel not found. Please check Turn 1 completion.', 'warning');
+        return;
+      }
+      if (!btVessel) {
+        showToast('Please select a Brite Tank', 'warning');
+        return;
+      }
+      if (!transferredBy) {
+        showToast('Please select who transferred the beer', 'warning');
+        return;
+      }
+      if (!transferDate) {
+        showToast('Please enter the transfer date', 'warning');
+        return;
+      }
+      
+      // Collect all fermentation and transfer data
+      var transferData = {
+        // Yeast data
+        actualYeastGeneration: document.getElementById('brewerSheetYeastGeneration')?.value || '',
+        propagationBatch: document.getElementById('brewerSheetYeastPropBatch')?.value || '',
+        yeastPitchDate: document.getElementById('brewerSheetYeastPitchDate')?.value || '',
+        yeastPitched: document.getElementById('brewerSheetYeastPitched')?.checked || false,
+        
+        // Fermentation task data
+        yeastPitchedBy: document.getElementById('fermYeastPitchedBy')?.value || '',
+        yeastPitchedDate: document.getElementById('fermYeastPitchedDate')?.value || '',
+        fermentationCompleteBy: document.getElementById('fermCompleteBy')?.value || '',
+        fermentationCompleteDate: document.getElementById('fermCompleteDate')?.value || '',
+        dryHopAddedBy: document.getElementById('fermDryHopBy')?.value || '',
+        dryHopAddedDate: document.getElementById('fermDryHopDate')?.value || '',
+        qaCheckBy: document.getElementById('fermQACheckBy')?.value || '',
+        qaCheckDate: document.getElementById('fermQACheckDate')?.value || '',
+        crashCompleteBy: document.getElementById('fermCrashBy')?.value || '',
+        crashCompleteDate: document.getElementById('fermCrashDate')?.value || '',
+        
+        // Fermentation checkboxes
+        fermYeastPitched: document.getElementById('fermYeastPitched')?.checked || false,
+        fermComplete: document.getElementById('fermComplete')?.checked || false,
+        fermDryHop: document.getElementById('fermDryHop')?.checked || false,
+        fermQACheck: document.getElementById('fermQACheck')?.checked || false,
+        fermCrash: document.getElementById('fermCrash')?.checked || false,
+        
+        // BT/Transfer data
+        btVessel: btVessel,
+        transferredBy: transferredBy,
+        transferDate: transferDate,
+        transferComplete: document.getElementById('btTransfer')?.checked || false,
+        co2Level: document.getElementById('btCO2Level')?.value || '',
+        carbonatedBy: document.getElementById('btCarbonatedBy')?.value || '',
+        carbonationDate: document.getElementById('btCarbonateDate')?.value || '',
+        carbonationComplete: document.getElementById('btCarbonate')?.checked || false,
+        
+        // QA Checks (collect from table)
+        qaChecks: collectQAChecksData()
+      };
+      
+      if (!confirm('Complete transfer from ' + fvVessel + ' to ' + btVessel + '?\n\nThis will:\n- Free ' + fvVessel + ' (set to Available)\n- Assign ' + btVessel + ' (set to In Use)\n- Save all fermentation and transfer data')) {
+        return;
+      }
+      
+      showLoading('Completing transfer and saving data...');
+      
+      google.script.run
+        .withSuccessHandler(function(result) {
+          hideLoading();
+          if (result.success) {
+            showToast('Transfer complete! FV freed, BT assigned, all data saved.', 'success');
+            openBrewerSheet(brewerSheetState.batchNumber); // Refresh
+          } else {
+            showToast('Error: ' + result.error, 'error');
+          }
+        })
+        .withFailureHandler(function(error) {
+          hideLoading();
+          showToast('Error: ' + error.message, 'error');
+        })
+        .saveFermentationAndTransferData(brewerSheetState.batchNumber, fvVessel, btVessel, transferredBy, transferDate, transferData);
+    }
+    
+    // Helper function to collect QA checks data from table
+    function collectQAChecksData() {
+      var qaChecks = [];
+      var tbody = document.getElementById('brewerSheetQAChecksBody');
+      if (tbody) {
+        var rows = tbody.querySelectorAll('tr');
+        rows.forEach(function(row) {
+          var cells = row.querySelectorAll('td');
+          if (cells.length >= 8) {
+            var dateInput = row.querySelector('.qa-date-input');
+            var gravityInput = row.querySelector('.qa-gravity-input');
+            var phInput = row.querySelector('.qa-ph-input');
+            var co2Input = row.querySelector('.qa-co2-input');
+            var doInput = row.querySelector('.qa-do-input');
+            var notesInput = row.querySelector('.qa-notes-input');
+            
+            if (dateInput || gravityInput || phInput) {
+              qaChecks.push({
+                date: dateInput ? dateInput.value : '',
+                gravity: gravityInput ? gravityInput.value : '',
+                pH: phInput ? phInput.value : '',
+                co2: co2Input ? co2Input.value : '',
+                do: doInput ? doInput.value : '',
+                notes: notesInput ? notesInput.value : ''
+              });
+            }
+          }
+        });
+      }
+      return qaChecks;
     }
     
     function renderBrewerSheetCosts(data) {
@@ -5988,12 +7125,12 @@ function renderOpExCategories(categories) {
           carbonateDate: getElementValue('btCarbonateDate', '')
         },
         packaging: {
-          complete: getElementChecked('pkgComplete'),
-          completeDate: getElementValue('pkgCompleteDate', ''),
-          halfBBL: getElementNumber('pkgHalfBBL', 0),
-          sixthBBL: getElementNumber('pkgSixthBBL', 0),
-          cases: getElementNumber('pkgCases', 0),
-          waste: getElementNumber('pkgWaste', 0)
+          complete: true, // Batch is complete when this is called
+          // Packaging runs are handled separately - totals will be calculated from runs
+          halfBBL: parseFloat(document.getElementById('pkgTotalHalfBBL')?.textContent) || 0,
+          sixthBBL: parseFloat(document.getElementById('pkgTotalSixthBBL')?.textContent) || 0,
+          cases: parseFloat(document.getElementById('pkgTotalCases')?.textContent) || 0,
+          totalBBL: parseFloat(document.getElementById('pkgTotalBBL')?.textContent) || 0
         },
         actualIngredients: collectActualIngredients()
       };
@@ -6292,7 +7429,7 @@ function renderOpExCategories(categories) {
     function completeTurn1() {
       var brewer = document.getElementById('turn1Brewer').value;
       var vessel = document.getElementById('turn1Vessel').value;
-      var laborHours = brewerSheetState.turn1Seconds / 3600;
+      var laborHours = 0; // Timer not implemented yet - default to 0
       
       if (!brewer) {
         showToast('Please select a brewer', 'warning');
@@ -6302,26 +7439,66 @@ function renderOpExCategories(categories) {
         showToast('Please select a vessel', 'warning');
         return;
       }
-      if (laborHours < 0.01) {
-        showToast('Please start the timer before completing', 'warning');
+      
+      // Collect actual ingredients from ingredients table for Turn 1
+      var actualIngredients = { grains: [], hops: [], other: [] };
+      var tbody = document.getElementById('brewerSheetIngredientsBody');
+      if (tbody) {
+        var rows = tbody.querySelectorAll('tr');
+        rows.forEach(function(row) {
+          var cells = row.querySelectorAll('td');
+          if (cells.length >= 5) {
+            var ingredientName = (cells[0].textContent || '').trim();
+            var category = (cells[1].textContent || '').trim().toLowerCase();
+            var turn1Input = cells[2].querySelector('input'); // Turn 1 Actual column
+            var unit = (cells[4].textContent || '').trim();
+            
+            if (turn1Input && ingredientName) {
+              var qty = parseFloat(turn1Input.value) || 0;
+              if (qty > 0) {
+                var item = {
+                  ingredient: ingredientName,
+                  amount: qty,
+                  uom: unit || 'lb'
+                };
+                
+                // Categorize by ingredient type
+                if (category.indexOf('grain') !== -1 || category.indexOf('malt') !== -1) {
+                  actualIngredients.grains.push(item);
+                } else if (category.indexOf('hop') !== -1) {
+                  actualIngredients.hops.push(item);
+                } else {
+                  actualIngredients.other.push(item);
+                }
+              }
+            }
+          }
+        });
+      }
+      
+      // Collect all turn data
+      var turnData = {
+        brewer: brewer,
+        date: document.getElementById('turn1Date').value || new Date().toISOString().split('T')[0],
+        vessel: vessel,
+        efficiency: parseFloat(document.getElementById('turn1Efficiency').value) || 0,
+        gravity: parseFloat(document.getElementById('turn1PreBoilGravity').value) || 0,
+        notes: document.getElementById('turn1Notes').value || '',
+        actuals: actualIngredients
+      };
+      
+      if (!confirm('Complete Turn 1 and transfer to ' + vessel + '?\n\nThis will:\n- Deplete Turn 1 materials\n- Mark ' + vessel + ' as In Use\n- Save all turn data')) {
         return;
       }
       
-      var actualIngredients = collectActualIngredients('turn1');
-      
-      if (!confirm('Complete Turn 1 and transfer to ' + vessel + '?\n\nThis will:\n- Deplete Turn 1 materials\n- Log ' + laborHours.toFixed(2) + ' labor hours\n- Mark ' + vessel + ' as In Use')) {
-        return;
-      }
-      
-      stopTurn1Timer();
       showLoading('Completing Turn 1...');
       
       google.script.run
         .withSuccessHandler(function(result) {
           hideLoading();
           if (result.success) {
-            showToast('Turn 1 complete!', 'success');
-            openBrewerSheet(brewerSheetState.batchNumber); // Refresh
+            showToast('Turn 1 complete! Materials depleted, FV assigned, data saved.', 'success');
+            openBrewerSheet(brewerSheetState.batchNumber); // Refresh to show completed state
           } else {
             showToast('Error: ' + result.error, 'error');
           }
@@ -6330,38 +7507,78 @@ function renderOpExCategories(categories) {
           hideLoading();
           showToast('Error: ' + error.message, 'error');
         })
-        .completeTurn(brewerSheetState.batchNumber, 1, brewer, laborHours, vessel, actualIngredients);
+        .completeTurn(brewerSheetState.batchNumber, 1, brewer, laborHours, vessel, actualIngredients, turnData);
     }
 
     function completeTurn2() {
       var brewer = document.getElementById('turn2Brewer').value;
       var vessel = brewerSheetState.batchData.turn1Vessel;
-      var laborHours = brewerSheetState.turn2Seconds / 3600;
+      var laborHours = 0; // Timer not implemented yet - default to 0
       
       if (!brewer) {
         showToast('Please select a brewer', 'warning');
         return;
       }
-      if (laborHours < 0.01) {
-        showToast('Please start the timer before completing', 'warning');
+      
+      // Collect actual ingredients from ingredients table for Turn 2
+      var actualIngredients = { grains: [], hops: [], other: [] };
+      var tbody = document.getElementById('brewerSheetIngredientsBody');
+      if (tbody) {
+        var rows = tbody.querySelectorAll('tr');
+        rows.forEach(function(row) {
+          var cells = row.querySelectorAll('td');
+          if (cells.length >= 5) {
+            var ingredientName = (cells[0].textContent || '').trim();
+            var category = (cells[1].textContent || '').trim().toLowerCase();
+            var turn2Input = cells[3].querySelector('input'); // Turn 2 Actual column
+            var unit = (cells[4].textContent || '').trim();
+            
+            if (turn2Input && ingredientName) {
+              var qty = parseFloat(turn2Input.value) || 0;
+              if (qty > 0) {
+                var item = {
+                  ingredient: ingredientName,
+                  amount: qty,
+                  uom: unit || 'lb'
+                };
+                
+                // Categorize by ingredient type
+                if (category.indexOf('grain') !== -1 || category.indexOf('malt') !== -1) {
+                  actualIngredients.grains.push(item);
+                } else if (category.indexOf('hop') !== -1) {
+                  actualIngredients.hops.push(item);
+                } else {
+                  actualIngredients.other.push(item);
+                }
+              }
+            }
+          }
+        });
+      }
+      
+      // Collect all turn data
+      var turnData = {
+        brewer: brewer,
+        date: document.getElementById('turn2Date').value || new Date().toISOString().split('T')[0],
+        vessel: vessel,
+        efficiency: parseFloat(document.getElementById('turn2Efficiency').value) || 0,
+        gravity: parseFloat(document.getElementById('turn2PreBoilGravity').value) || 0,
+        notes: document.getElementById('turn2Notes').value || '',
+        actuals: actualIngredients
+      };
+      
+      if (!confirm('Complete Turn 2?\n\nThis will:\n- Deplete Turn 2 materials\n- Set batch status to Fermenting\n- Save all turn data')) {
         return;
       }
       
-      var actualIngredients = collectActualIngredients('turn2');
-      
-      if (!confirm('Complete Turn 2?\n\nThis will:\n- Deplete Turn 2 materials\n- Log ' + laborHours.toFixed(2) + ' labor hours\n- Set batch status to Fermenting')) {
-        return;
-      }
-      
-      stopTurn2Timer();
       showLoading('Completing Turn 2...');
       
       google.script.run
         .withSuccessHandler(function(result) {
           hideLoading();
           if (result.success) {
-            showToast('Turn 2 complete! Batch now fermenting.', 'success');
-            openBrewerSheet(brewerSheetState.batchNumber); // Refresh
+            showToast('Turn 2 complete! Materials depleted, batch now fermenting, data saved.', 'success');
+            openBrewerSheet(brewerSheetState.batchNumber); // Refresh to show completed state
           } else {
             showToast('Error: ' + result.error, 'error');
           }
@@ -6370,7 +7587,7 @@ function renderOpExCategories(categories) {
           hideLoading();
           showToast('Error: ' + error.message, 'error');
         })
-        .completeTurn(brewerSheetState.batchNumber, 2, brewer, laborHours, vessel, actualIngredients);
+        .completeTurn(brewerSheetState.batchNumber, 2, brewer, laborHours, vessel, actualIngredients, turnData);
     }
 
     function collectActualIngredients(turn) {
@@ -6434,50 +7651,119 @@ function renderOpExCategories(categories) {
     function updateTurn1ButtonState() {
       var brewer = document.getElementById('turn1Brewer');
       var vessel = document.getElementById('turn1Vessel');
-      var btn = document.getElementById('turn1CompleteBtn');
+      var btn = document.getElementById('completeTurn1Btn');
       
       if (!brewer || !vessel || !btn) return;
       
       var hasBrewer = brewer.value && brewer.value !== '';
       var hasVessel = vessel.value && vessel.value !== '';
-      var timerStarted = brewerSheetState.turn1Seconds > 0;
       
-      btn.disabled = !(hasBrewer && hasVessel && timerStarted);
+      // Button enabled when brewer and vessel are selected (timer not required)
+      btn.disabled = !(hasBrewer && hasVessel);
     }
 
     function updateTurn2ButtonState() {
       var brewer = document.getElementById('turn2Brewer');
-      var btn = document.getElementById('turn2CompleteBtn');
+      var btn = document.getElementById('completeTurn2Btn');
       
       if (!brewer || !btn) return;
       
       var hasBrewer = brewer.value && brewer.value !== '';
-      var timerStarted = brewerSheetState.turn2Seconds > 0;
       
-      btn.disabled = !(hasBrewer && timerStarted);
+      // Button enabled when brewer is selected (timer not required)
+      btn.disabled = !hasBrewer;
     }
 
     // Load Dropdowns
-    function loadBrewersDropdown() {
+    function loadBrewersDropdown(callback) {
       google.script.run
-        .withSuccessHandler(function(brewers) {
-          var html = '<option value="">-- Select Brewer --</option>';
-          if (brewers && Array.isArray(brewers)) {
-            brewers.forEach(function(brewer) {
-              html += '<option value="' + escapeHtml(brewer) + '">' + escapeHtml(brewer) + '</option>';
-            });
+        .withSuccessHandler(function(response) {
+          // Handle both direct array response and wrapped response
+          var brewers = response;
+          if (response && typeof response === 'object' && !Array.isArray(response)) {
+            // If response is an object, try to extract array
+            brewers = response.brewers || response.data || response;
           }
           
-          // Populate all brewer dropdowns
-          ['turn1Brewer', 'turn2Brewer'].forEach(function(id) {
+          // Ensure we have an array
+          if (!Array.isArray(brewers)) {
+            Logger.log('Warning: getBrewersList did not return an array. Got: ' + typeof brewers);
+            brewers = ['Richard Mar', 'Alex Velasco', 'Jeremy Ueberroth', 'Zach Schneider', 'Dwayne Klaus'];
+          }
+          
+          var html = '<option value="">-- Select --</option>';
+          if (brewers && brewers.length > 0) {
+            brewers.forEach(function(brewer) {
+              // Handle both string and object formats
+              var brewerName = typeof brewer === 'string' ? brewer : (brewer.name || brewer);
+              if (brewerName && brewerName.trim() !== '') {
+                html += '<option value="' + escapeHtml(brewerName) + '">' + escapeHtml(brewerName) + '</option>';
+              }
+            });
+          }
+
+          // Populate all brewer dropdowns (Turn 1, Turn 2, Fermentation tasks, BT transfer, Packaging)
+          var dropdownIds = [
+            'turn1Brewer', 'turn2Brewer',
+            'fermYeastPitchedBy', 'fermCompleteBy', 'fermDryHopBy', 'fermQACheckBy', 'fermCrashBy',
+            'btTransferredBy', 'btCarbonatedBy',
+            'pkgRunBy', 'pkgRunBy2'
+          ];
+          
+          dropdownIds.forEach(function(id) {
             var select = document.getElementById(id);
             if (select) {
+              // Store current value before replacing options
+              var currentValue = select.value;
               select.innerHTML = html;
+              // Restore value if it exists in new options
+              if (currentValue && currentValue !== '') {
+                var optionExists = Array.from(select.options).some(function(opt) {
+                  return opt.value === currentValue;
+                });
+                if (optionExists) {
+                  select.value = currentValue;
+                }
+              }
             }
           });
+          
+          // Call callback if provided
+          if (callback && typeof callback === 'function') {
+            callback();
+          }
         })
         .withFailureHandler(function(error) {
           Logger.log('Error loading brewers: ' + error);
+          // Fallback to default brewers on error
+          var html = '<option value="">-- Select --</option>';
+          var defaultBrewers = ['Richard Mar', 'Alex Velasco', 'Jeremy Ueberroth', 'Zach Schneider', 'Dwayne Klaus'];
+          defaultBrewers.forEach(function(brewer) {
+            html += '<option value="' + escapeHtml(brewer) + '">' + escapeHtml(brewer) + '</option>';
+          });
+          
+          var dropdownIds = [
+            'turn1Brewer', 'turn2Brewer',
+            'fermYeastPitchedBy', 'fermCompleteBy', 'fermDryHopBy', 'fermQACheckBy', 'fermCrashBy',
+            'btTransferredBy', 'btCarbonatedBy',
+            'pkgRunBy', 'pkgRunBy2'
+          ];
+          
+          dropdownIds.forEach(function(id) {
+            var select = document.getElementById(id);
+            if (select) {
+              var currentValue = select.value;
+              select.innerHTML = html;
+              if (currentValue && currentValue !== '') {
+                var optionExists = Array.from(select.options).some(function(opt) {
+                  return opt.value === currentValue;
+                });
+                if (optionExists) {
+                  select.value = currentValue;
+                }
+              }
+            }
+          });
         })
         .getBrewersList();
     }
@@ -11527,7 +12813,7 @@ document.getElementById('editRecipeModal').addEventListener('click', function(e)
       </div>
       
       <!-- TURN 1 SECTION -->
-      <div style="margin-bottom:30px;border:1px solid #ddd;border-radius:8px;padding:20px;">
+      <div id="turn1Section" style="margin-bottom:30px;border:1px solid #ddd;border-radius:8px;padding:20px;">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:15px;">
           <h3 style="margin:0;color:#8B0000;">TURN 1</h3>
           <div style="font-size:13px;">
@@ -11580,10 +12866,18 @@ document.getElementById('editRecipeModal').addEventListener('click', function(e)
           <label style="display:block;margin-bottom:5px;font-weight:600;">Notes:</label>
           <textarea id="turn1Notes" rows="3" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:4px;resize:vertical;"></textarea>
         </div>
+        <div style="margin-top:20px;text-align:center;">
+          <button onclick="completeTurn1()" id="completeTurn1Btn" class="btn btn-primary" style="background:#8B0000;color:white;padding:12px 40px;font-size:16px;font-weight:600;border:none;border-radius:8px;cursor:pointer;">
+            [ COMPLETE TURN 1 ]
+          </button>
+          <div style="margin-top:10px;font-size:12px;color:#666;">
+            This will deplete Turn 1 ingredients, assign FV vessel, and log labor
+          </div>
+        </div>
       </div>
       
       <!-- TURN 2 SECTION -->
-      <div style="margin-bottom:30px;border:1px solid #ddd;border-radius:8px;padding:20px;">
+      <div id="turn2Section" style="margin-bottom:30px;border:1px solid #ddd;border-radius:8px;padding:20px;">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:15px;">
           <h3 style="margin:0;color:#8B0000;">TURN 2</h3>
           <div style="font-size:13px;">
@@ -11642,6 +12936,14 @@ document.getElementById('editRecipeModal').addEventListener('click', function(e)
             <label style="display:block;margin-bottom:5px;font-weight:600;">Notes:</label>
             <textarea id="turn2Notes" rows="3" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:4px;resize:vertical;"></textarea>
           </div>
+          <div style="margin-top:20px;text-align:center;">
+            <button onclick="completeTurn2()" id="completeTurn2Btn" class="btn btn-primary" style="background:#8B0000;color:white;padding:12px 40px;font-size:16px;font-weight:600;border:none;border-radius:8px;cursor:pointer;">
+              [ COMPLETE TURN 2 ]
+            </button>
+            <div style="margin-top:10px;font-size:12px;color:#666;">
+              This will deplete Turn 2 ingredients and set batch status to Fermenting
+            </div>
+          </div>
         </div>
       </div>
       
@@ -11695,28 +12997,45 @@ document.getElementById('editRecipeModal').addEventListener('click', function(e)
             <label style="display:flex;align-items:center;gap:8px;">
               <input type="checkbox" id="fermYeastPitched" style="width:18px;height:18px;"> Yeast Pitched
             </label>
-            <span>Date:</span>
+            <select id="fermYeastPitchedBy" style="padding:4px;border:1px solid #ddd;border-radius:4px;">
+              <option value="">-- Select --</option>
+            </select>
             <input type="date" id="fermYeastPitchedDate" style="padding:4px;border:1px solid #ddd;border-radius:4px;">
           </div>
           <div style="display:grid;grid-template-columns:2fr 1fr 1fr;gap:10px;align-items:center;margin-bottom:10px;">
             <label style="display:flex;align-items:center;gap:8px;">
               <input type="checkbox" id="fermComplete" style="width:18px;height:18px;"> Fermentation Complete
             </label>
-            <span>Date:</span>
+            <select id="fermCompleteBy" style="padding:4px;border:1px solid #ddd;border-radius:4px;">
+              <option value="">-- Select --</option>
+            </select>
             <input type="date" id="fermCompleteDate" style="padding:4px;border:1px solid #ddd;border-radius:4px;">
           </div>
           <div style="display:grid;grid-template-columns:2fr 1fr 1fr;gap:10px;align-items:center;margin-bottom:10px;">
             <label style="display:flex;align-items:center;gap:8px;">
               <input type="checkbox" id="fermDryHop" style="width:18px;height:18px;"> Dry Hop Added
             </label>
-            <span>Date:</span>
+            <select id="fermDryHopBy" style="padding:4px;border:1px solid #ddd;border-radius:4px;">
+              <option value="">-- Select --</option>
+            </select>
             <input type="date" id="fermDryHopDate" style="padding:4px;border:1px solid #ddd;border-radius:4px;">
+          </div>
+          <div style="display:grid;grid-template-columns:2fr 1fr 1fr;gap:10px;align-items:center;margin-bottom:10px;">
+            <label style="display:flex;align-items:center;gap:8px;">
+              <input type="checkbox" id="fermQACheck" style="width:18px;height:18px;"> QA Check
+            </label>
+            <select id="fermQACheckBy" style="padding:4px;border:1px solid #ddd;border-radius:4px;">
+              <option value="">-- Select --</option>
+            </select>
+            <input type="date" id="fermQACheckDate" style="padding:4px;border:1px solid #ddd;border-radius:4px;">
           </div>
           <div style="display:grid;grid-template-columns:2fr 1fr 1fr;gap:10px;align-items:center;">
             <label style="display:flex;align-items:center;gap:8px;">
               <input type="checkbox" id="fermCrash" style="width:18px;height:18px;"> Crash Complete
             </label>
-            <span>Date:</span>
+            <select id="fermCrashBy" style="padding:4px;border:1px solid #ddd;border-radius:4px;">
+              <option value="">-- Select --</option>
+            </select>
             <input type="date" id="fermCrashDate" style="padding:4px;border:1px solid #ddd;border-radius:4px;">
           </div>
         </div>
@@ -11758,62 +13077,178 @@ document.getElementById('editRecipeModal').addEventListener('click', function(e)
       <!-- BRITE TANK SECTION -->
       <div style="margin-bottom:30px;border:1px solid #ddd;border-radius:8px;padding:20px;">
         <h3 style="margin:0 0 15px 0;color:#8B0000;">BRITE TANK</h3>
-        <div style="margin-bottom:10px;">
+        <div style="margin-bottom:15px;">
           <label style="display:block;margin-bottom:5px;font-weight:600;">BT:</label>
           <select id="briteTankSelect" style="padding:8px;border:1px solid #ddd;border-radius:4px;min-width:200px;">
             <option value="">-- Select BT --</option>
           </select>
         </div>
-        <div style="display:grid;grid-template-columns:2fr 1fr 1fr;gap:10px;align-items:center;margin-bottom:10px;">
+        
+        <div style="margin-bottom:20px;padding:15px;background:#f9f9f9;border-radius:8px;border:1px solid #ddd;">
+          <h4 style="margin:0 0 10px 0;color:#8B0000;font-size:14px;">Transfer:</h4>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px;">
+            <div>
+              <label style="display:block;margin-bottom:5px;font-weight:600;font-size:12px;">Transferred By:</label>
+              <select id="btTransferredBy" style="width:100%;padding:6px;border:1px solid #ddd;border-radius:4px;">
+                <option value="">-- Select --</option>
+              </select>
+            </div>
+            <div>
+              <label style="display:block;margin-bottom:5px;font-weight:600;font-size:12px;">Date:</label>
+              <input type="date" id="btTransferDate" style="width:100%;padding:6px;border:1px solid #ddd;border-radius:4px;">
+            </div>
+          </div>
           <label style="display:flex;align-items:center;gap:8px;">
-            <input type="checkbox" id="btTransfer" style="width:18px;height:18px;"> Transfer to BT
+            <input type="checkbox" id="btTransfer" style="width:18px;height:18px;"> Transfer to BT Complete
           </label>
-          <span>Date:</span>
-          <input type="date" id="btTransferDate" style="padding:4px;border:1px solid #ddd;border-radius:4px;">
+          <div style="margin-top:10px;text-align:center;">
+            <button onclick="completeFVToBTTransfer()" id="completeTransferBtn" class="btn btn-primary" style="background:#8B0000;color:white;padding:10px 30px;font-size:14px;font-weight:600;border:none;border-radius:6px;cursor:pointer;">
+              [ COMPLETE TRANSFER ]
+            </button>
+            <div style="margin-top:8px;font-size:11px;color:#666;">
+              This will free FV and assign BT
+            </div>
+          </div>
         </div>
-        <div style="display:grid;grid-template-columns:2fr 1fr 1fr;gap:10px;align-items:center;">
+        
+        <div style="padding:15px;background:#f9f9f9;border-radius:8px;border:1px solid #ddd;">
+          <h4 style="margin:0 0 10px 0;color:#8B0000;font-size:14px;">Carbonation:</h4>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px;">
+            <div>
+              <label style="display:block;margin-bottom:5px;font-weight:600;font-size:12px;">CO2 Level:</label>
+              <input type="number" id="btCO2Level" step="0.1" placeholder="2.4" style="width:100%;padding:6px;border:1px solid #ddd;border-radius:4px;"> <span style="font-size:12px;">vol</span>
+            </div>
+            <div>
+              <label style="display:block;margin-bottom:5px;font-weight:600;font-size:12px;">Target:</label>
+              <span id="btCO2Target" style="font-size:14px;font-weight:600;color:#666;">2.5 vol</span>
+            </div>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px;">
+            <div>
+              <label style="display:block;margin-bottom:5px;font-weight:600;font-size:12px;">Carbonated By:</label>
+              <select id="btCarbonatedBy" style="width:100%;padding:6px;border:1px solid #ddd;border-radius:4px;">
+                <option value="">-- Select --</option>
+              </select>
+            </div>
+            <div>
+              <label style="display:block;margin-bottom:5px;font-weight:600;font-size:12px;">Date:</label>
+              <input type="date" id="btCarbonateDate" style="width:100%;padding:6px;border:1px solid #ddd;border-radius:4px;">
+            </div>
+          </div>
           <label style="display:flex;align-items:center;gap:8px;">
-            <input type="checkbox" id="btCarbonate" style="width:18px;height:18px;"> Carbonate Complete
+            <input type="checkbox" id="btCarbonate" style="width:18px;height:18px;"> Carbonation Complete
           </label>
-          <span>Date:</span>
-          <input type="date" id="btCarbonateDate" style="padding:4px;border:1px solid #ddd;border-radius:4px;">
         </div>
       </div>
       
       <!-- PACKAGING SECTION -->
       <div style="margin-bottom:30px;border:1px solid #ddd;border-radius:8px;padding:20px;">
         <h3 style="margin:0 0 15px 0;color:#8B0000;">PACKAGING</h3>
-        <div style="display:grid;grid-template-columns:2fr 1fr 1fr;gap:10px;align-items:center;margin-bottom:15px;">
-          <label style="display:flex;align-items:center;gap:8px;">
-            <input type="checkbox" id="pkgComplete" style="width:18px;height:18px;"> Package Complete
-          </label>
-          <span>Date:</span>
-          <input type="date" id="pkgCompleteDate" style="padding:4px;border:1px solid #ddd;border-radius:4px;">
+        
+        <!-- Packaging Runs Table -->
+        <div style="margin-bottom:20px;">
+          <h4 style="margin:0 0 10px 0;color:#8B0000;font-size:14px;">Packaging Runs:</h4>
+          <table id="packagingRunsTable" style="width:100%;border-collapse:collapse;font-size:13px;border:1px solid #ddd;margin-bottom:15px;">
+            <thead>
+              <tr style="background:#8B0000;color:white;">
+                <th style="padding:8px;text-align:center;font-weight:600;width:50px;">#</th>
+                <th style="padding:8px;text-align:center;font-weight:600;width:100px;">Date</th>
+                <th style="padding:8px;text-align:center;font-weight:600;">Half BBL</th>
+                <th style="padding:8px;text-align:center;font-weight:600;">Sixth BBL</th>
+                <th style="padding:8px;text-align:center;font-weight:600;">Cases</th>
+                <th style="padding:8px;text-align:center;font-weight:600;">By</th>
+              </tr>
+            </thead>
+            <tbody id="packagingRunsBody">
+              <tr><td colspan="6" style="text-align:center;padding:20px;color:#999;">No packaging runs yet</td></tr>
+            </tbody>
+            <tfoot id="packagingRunsTotals" style="background:#f5f5f5;font-weight:600;">
+              <tr>
+                <td colspan="2" style="padding:8px;text-align:right;">TOTALS:</td>
+                <td style="padding:8px;text-align:center;" id="pkgTotalHalfBBL">0</td>
+                <td style="padding:8px;text-align:center;" id="pkgTotalSixthBBL">0</td>
+                <td style="padding:8px;text-align:center;" id="pkgTotalCases">0</td>
+                <td style="padding:8px;"></td>
+              </tr>
+            </tfoot>
+          </table>
         </div>
-        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:15px;margin-bottom:15px;">
-          <div>
-            <label style="display:block;margin-bottom:5px;font-weight:600;">Half BBL:</label>
-            <input type="number" id="pkgHalfBBL" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:4px;">
+        
+        <!-- New Run Form -->
+        <div style="padding:15px;background:#f9f9f9;border-radius:8px;border:1px solid #ddd;margin-bottom:15px;">
+          <h4 style="margin:0 0 15px 0;color:#8B0000;font-size:14px;">New Run:</h4>
+          <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:15px;margin-bottom:15px;">
+            <div>
+              <label style="display:block;margin-bottom:5px;font-weight:600;font-size:12px;">Half BBL:</label>
+              <input type="number" id="pkgRunHalfBBL" min="0" style="width:100%;padding:6px;border:1px solid #ddd;border-radius:4px;">
+            </div>
+            <div>
+              <label style="display:block;margin-bottom:5px;font-weight:600;font-size:12px;">Sixth BBL:</label>
+              <input type="number" id="pkgRunSixthBBL" min="0" style="width:100%;padding:6px;border:1px solid #ddd;border-radius:4px;">
+            </div>
+            <div>
+              <label style="display:block;margin-bottom:5px;font-weight:600;font-size:12px;">Cases:</label>
+              <input type="number" id="pkgRunCases" min="0" onchange="updatePackagingRunByFields()" style="width:100%;padding:6px;border:1px solid #ddd;border-radius:4px;">
+            </div>
+            <div>
+              <label style="display:block;margin-bottom:5px;font-weight:600;font-size:12px;">Waste (gal):</label>
+              <input type="number" id="pkgRunWaste" step="0.1" min="0" style="width:100%;padding:6px;border:1px solid #ddd;border-radius:4px;">
+            </div>
           </div>
-          <div>
-            <label style="display:block;margin-bottom:5px;font-weight:600;">Sixth BBL:</label>
-            <input type="number" id="pkgSixthBBL" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:4px;">
+          <div id="pkgRunByContainer" style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:15px;">
+            <div>
+              <label style="display:block;margin-bottom:5px;font-weight:600;font-size:12px;">Packaged By:</label>
+              <select id="pkgRunBy" style="width:100%;padding:6px;border:1px solid #ddd;border-radius:4px;">
+                <option value="">-- Select --</option>
+              </select>
+            </div>
+            <div id="pkgRunBy2Container" style="display:none;">
+              <label style="display:block;margin-bottom:5px;font-weight:600;font-size:12px;">Packaged By (2nd Person):</label>
+              <select id="pkgRunBy2" style="width:100%;padding:6px;border:1px solid #ddd;border-radius:4px;">
+                <option value="">-- Select --</option>
+              </select>
+              <div style="font-size:11px;color:#666;margin-top:4px;">Required for canning</div>
+            </div>
+            <div>
+              <label style="display:block;margin-bottom:5px;font-weight:600;font-size:12px;">Date:</label>
+              <input type="date" id="pkgRunDate" style="width:100%;padding:6px;border:1px solid #ddd;border-radius:4px;">
+            </div>
           </div>
-          <div>
-            <label style="display:block;margin-bottom:5px;font-weight:600;">Cases:</label>
-            <input type="number" id="pkgCases" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:4px;">
+          <div id="pkgRunHelpText" style="font-size:11px;color:#666;margin-bottom:15px;display:none;">
+            💡 <strong>Canning line requires 2 people.</strong> Keg runs only need 1 person.
           </div>
-          <div>
-            <label style="display:block;margin-bottom:5px;font-weight:600;">Waste (gal):</label>
-            <input type="number" id="pkgWaste" step="0.1" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:4px;">
+          <div style="text-align:center;">
+            <button onclick="addPackagingRun()" class="btn btn-primary" style="background:#8B0000;color:white;padding:10px 30px;font-size:14px;font-weight:600;border:none;border-radius:6px;cursor:pointer;">
+              [ ADD PACKAGING RUN ]
+            </button>
+            <div style="margin-top:8px;font-size:11px;color:#666;">
+              This will deplete packaging materials and add to Finished Goods
+            </div>
           </div>
         </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:15px;font-size:14px;">
-          <div>
-            <strong>Total Packaged:</strong> <span id="pkgTotalBBL">--</span> BBL
+        
+        <!-- Summary -->
+        <div style="padding:15px;background:#f0f8ff;border-radius:8px;border:1px solid #ddd;margin-top:15px;">
+          <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:15px;font-size:14px;">
+            <div>
+              <strong>Total Packaged:</strong> <span id="pkgTotalBBL">0.00</span> BBL
+            </div>
+            <div>
+              <strong>Yield:</strong> <span id="pkgYield">0.0</span>%
+            </div>
+            <div>
+              <strong>BT Remaining:</strong> <span id="pkgBTRemaining">--</span> BBL
+            </div>
           </div>
-          <div>
-            <strong>Yield:</strong> <span id="pkgYield">--</span>%
+        </div>
+        
+        <!-- Complete Batch Button -->
+        <div style="margin-top:20px;text-align:center;padding-top:20px;border-top:2px solid #ddd;">
+          <button onclick="completeBatchFromSheet()" id="completeBatchBtn" class="btn btn-primary" style="background:#8B0000;color:white;padding:15px 40px;font-size:18px;font-weight:600;border:none;border-radius:8px;cursor:pointer;">
+            [ COMPLETE BATCH ]
+          </button>
+          <div style="margin-top:10px;font-size:12px;color:#666;">
+            Only click when BT is empty. This will calculate final COGS, free BT, and archive PDF.
           </div>
         </div>
       </div>
