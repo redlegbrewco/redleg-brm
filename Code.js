@@ -14,6 +14,9 @@ var BRM_SPREADSHEET_ID = '1HMNLmLHKmeIdvqN9P6GYPQtg8kYyIqMDjlkDtnx-ZsM';
 var CRM_SPREADSHEET_ID = '1jIoGT59ipG1bF5PBa9oQ1H8_c0H65JSALAoVQKRF3Ls';
 var KEG_TRACKER_ID = '1JF0R0OoMCePWBIF-AZWyAAQaMMLTupC9a7sdOw3gric';
 
+// Alias for backward compatibility
+var CRM_ID = CRM_SPREADSHEET_ID;
+
 // CANONICAL SHEET NAMES - These match your actual spreadsheet tabs
 var SHEETS = {
   // Core Operations
@@ -18579,5 +18582,812 @@ function migrateAllBatches() {
   } catch(e) {
     Logger.log('Error in migration: ' + e.toString());
     return { success: false, error: e.toString() };
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SECTION 15: PRODUCTION CALENDAR WITH SALES VELOCITY
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Get sales data from CRM Orders sheet
+ * Only counts DELIVERED orders
+ * @returns {array} Array of sale objects
+ */
+function getSalesDataFromCRM() {
+  try {
+    var ss = SpreadsheetApp.openById(CRM_SPREADSHEET_ID);
+    var ordersSheet = ss.getSheetByName('Orders');
+    if (!ordersSheet) {
+      Logger.log('Orders sheet not found in CRM');
+      return [];
+    }
+    
+    var data = ordersSheet.getDataRange().getValues();
+    if (data.length < 2) return [];
+    
+    var headers = data[0];
+    var colIndex = {};
+    headers.forEach(function(h, idx) { 
+      colIndex[h.toString().trim()] = idx; 
+    });
+    
+    var sales = [];
+    for (var i = 1; i < data.length; i++) {
+      var row = data[i];
+      var status = (row[colIndex['Status']] || '').toString().trim();
+      
+      // Only count delivered orders
+      if (status === 'Delivered') {
+        var orderDate = row[colIndex['Order Date']] || row[colIndex['Delivery Date']];
+        var product = row[colIndex['Product']] || '';
+        var packageType = row[colIndex['Package Type']] || '';
+        var quantity = parseFloat(row[colIndex['Quantity']]) || 0;
+        
+        if (product && quantity > 0) {
+          sales.push({
+            date: orderDate,
+            beer: product.toString().trim(),
+            packageType: packageType.toString().trim(),
+            quantity: quantity,
+            customer: (row[colIndex['Customer Name']] || '').toString().trim(),
+            channel: (row[colIndex['Channel']] || '').toString().trim(),
+            orderId: (row[colIndex['Order ID']] || '').toString().trim()
+          });
+        }
+      }
+    }
+    
+    Logger.log('Loaded ' + sales.length + ' delivered orders from CRM');
+    return sales;
+    
+  } catch(e) {
+    Logger.log('Error reading CRM: ' + e.toString());
+    return [];
+  }
+}
+
+/**
+ * Convert package quantity to BBL
+ * @param {number} quantity - Quantity of packages
+ * @param {string} packageType - Package type description
+ * @returns {number} Equivalent BBL
+ */
+function convertToBarrels(quantity, packageType) {
+  var pkg = (packageType || '').toLowerCase();
+  
+  if (pkg.indexOf('1/2 bbl') >= 0 || pkg.indexOf('half bbl') >= 0 || pkg.indexOf('12 bbl') >= 0) {
+    return quantity * 0.5;
+  } else if (pkg.indexOf('1/6 bbl') >= 0 || pkg.indexOf('sixth bbl') >= 0 || pkg.indexOf('16 bbl') >= 0) {
+    return quantity * (1/6);
+  } else if (pkg.indexOf('case') >= 0 || pkg.indexOf('12oz') >= 0) {
+    // 24 x 12oz cans = 288 oz = 2.25 gal = 0.0726 BBL per case
+    return quantity * 0.0726;
+  } else if (pkg.indexOf('keg') >= 0) {
+    // Default keg = 1/2 BBL
+    return quantity * 0.5;
+  }
+  
+  // Default: assume 1/6 BBL
+  return quantity * (1/6);
+}
+
+/**
+ * Calculate sales velocity for a beer/package combination
+ * Now reads from CRM Orders sheet (only Delivered orders)
+ * @param {string} beerName - Name of the beer
+ * @param {string} packageType - Package type (e.g., "1/2 BBL Keg")
+ * @param {number} days - Number of days to look back (default: 30)
+ * @returns {object} { dailyVelocity, weeklyVelocity, monthlyVelocity, trend, trendPercent, totalBBL, orderCount, daysAnalyzed }
+ */
+function calculateSalesVelocity(beerName, packageType, days) {
+  days = days || 30;
+  try {
+    // Get sales from CRM
+    var allSales = getSalesDataFromCRM();
+    
+    var cutoffDate = new Date();
+    cutoffDate.setDate(cutoffDate.getDate() - days);
+    cutoffDate.setHours(0, 0, 0, 0);
+    
+    // Filter relevant sales
+    var relevantSales = allSales.filter(function(sale) {
+      var saleDate = new Date(sale.date);
+      if (isNaN(saleDate.getTime())) return false;
+      saleDate.setHours(0, 0, 0, 0);
+      
+      var beerMatch = !beerName || sale.beer.toLowerCase().trim() === beerName.toLowerCase().trim();
+      var packageMatch = !packageType || sale.packageType.toLowerCase().trim() === packageType.toLowerCase().trim();
+      
+      return beerMatch && packageMatch && saleDate >= cutoffDate;
+    });
+    
+    // Calculate total BBL sold
+    var totalBBL = 0;
+    relevantSales.forEach(function(sale) {
+      totalBBL += convertToBarrels(sale.quantity, sale.packageType);
+    });
+    
+    var dailyVelocity = days > 0 ? totalBBL / days : 0;
+    var weeklyVelocity = dailyVelocity * 7;
+    var monthlyVelocity = dailyVelocity * 30;
+    
+    // Calculate trend (last 7 days vs previous 7 days)
+    var now = new Date();
+    now.setHours(0, 0, 0, 0);
+    var sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+    var fourteenDaysAgo = new Date(now.getTime() - 14 * 24 * 60 * 60 * 1000);
+    
+    var last7DaysBBL = 0;
+    var prev7DaysBBL = 0;
+    
+    allSales.forEach(function(sale) {
+      var saleDate = new Date(sale.date);
+      if (isNaN(saleDate.getTime())) return;
+      saleDate.setHours(0, 0, 0, 0);
+      
+      var beerMatch = !beerName || sale.beer.toLowerCase().trim() === beerName.toLowerCase().trim();
+      var packageMatch = !packageType || sale.packageType.toLowerCase().trim() === packageType.toLowerCase().trim();
+      if (!beerMatch || !packageMatch) return;
+      
+      var bbl = convertToBarrels(sale.quantity, sale.packageType);
+      
+      if (saleDate >= sevenDaysAgo) {
+        last7DaysBBL += bbl;
+      } else if (saleDate >= fourteenDaysAgo && saleDate < sevenDaysAgo) {
+        prev7DaysBBL += bbl;
+      }
+    });
+    
+    var trend = prev7DaysBBL > 0 ? ((last7DaysBBL - prev7DaysBBL) / prev7DaysBBL) : 0;
+    var trendDirection = trend > 0.1 ? '↑' : trend < -0.1 ? '↓' : '→';
+    
+    return serializeForHtml({
+      beerName: beerName || 'All',
+      packageType: packageType || 'All',
+      dailyVelocity: Math.round(dailyVelocity * 100) / 100,
+      weeklyVelocity: Math.round(weeklyVelocity * 100) / 100,
+      monthlyVelocity: Math.round(monthlyVelocity * 30 * 100) / 100,
+      trend: trendDirection,
+      trendPercent: Math.round(trend * 100),
+      totalBBL: Math.round(totalBBL * 100) / 100,
+      orderCount: relevantSales.length,
+      daysAnalyzed: days,
+      last7DaysBBL: Math.round(last7DaysBBL * 100) / 100,
+      prev7DaysBBL: Math.round(prev7DaysBBL * 100) / 100
+    });
+    
+  } catch (e) {
+    Logger.log('Error calculating sales velocity: ' + e.toString());
+    return serializeForHtml({ 
+      error: e.toString(),
+      beerName: beerName || 'All',
+      packageType: packageType || 'All',
+      dailyVelocity: 0,
+      weeklyVelocity: 0,
+      monthlyVelocity: 0,
+      trend: '→',
+      trendPercent: 0,
+      totalBBL: 0,
+      orderCount: 0,
+      daysAnalyzed: 0
+    });
+  }
+}
+
+/**
+ * Test CRM connection and velocity calculation
+ * @returns {object} Test results
+ */
+function testCRMConnection() {
+  try {
+    var sales = getSalesDataFromCRM();
+    Logger.log('Total delivered orders from CRM: ' + sales.length);
+    
+    if (sales.length > 0) {
+      Logger.log('Sample order: ' + JSON.stringify(sales[0]));
+    }
+    
+    // Test velocity calculation for a specific beer (if we have sales data)
+    var testBeer = null;
+    if (sales.length > 0) {
+      testBeer = sales[0].beer;
+    }
+    
+    var velocity = calculateSalesVelocity(testBeer, null, 30);
+    Logger.log('Velocity test result: ' + JSON.stringify(velocity));
+    
+    return serializeForHtml({
+      success: true,
+      salesCount: sales.length,
+      testBeer: testBeer,
+      velocity: velocity
+    });
+    
+  } catch (e) {
+    Logger.log('Test error: ' + e.toString());
+    return serializeForHtml({
+      success: false,
+      error: e.toString(),
+      salesCount: 0
+    });
+  }
+}
+
+/**
+ * Get velocity trend for a beer/package
+ * @param {string} beerName - Name of the beer
+ * @param {string} packageType - Package type
+ * @returns {object} { trend, trendPercent, message }
+ */
+function getVelocityTrend(beerName, packageType) {
+  var velocity = calculateSalesVelocity(beerName, packageType, 30);
+  return {
+    trend: velocity.trend || '→',
+    trendPercent: velocity.trendPercent || 0,
+    message: velocity.trendPercent > 0 ? 
+      'Velocity up ' + Math.abs(velocity.trendPercent) + '%' :
+      velocity.trendPercent < 0 ?
+      'Velocity down ' + Math.abs(velocity.trendPercent) + '%' :
+      'Velocity stable'
+  };
+}
+
+/**
+ * Get sales velocity for all beers in Finished Goods inventory
+ * @returns {array} Array of { beerName, packageType, velocity, trend } objects
+ */
+function getAllBeersVelocity() {
+  try {
+    var fgData = getFinishedGoodsData({});
+    if (!fgData.success) {
+      return serializeForHtml({ success: false, error: 'Could not load finished goods', velocities: [] });
+    }
+    
+    var velocities = [];
+    var processed = {}; // Track beer+package combinations we've already processed
+    
+    fgData.inventory.forEach(function(item) {
+      var key = (item.beerName || '').toLowerCase().trim() + '|' + (item.packageType || '').trim();
+      if (processed[key]) return; // Skip duplicates
+      processed[key] = true;
+      
+      var velocity = calculateSalesVelocity(item.beerName, item.packageType, 30);
+      velocities.push({
+        beerName: item.beerName,
+        packageType: item.packageType,
+        dailyVelocity: velocity.dailyVelocity || 0,
+        weeklyVelocity: velocity.weeklyVelocity || 0,
+        monthlyVelocity: velocity.monthlyVelocity || 0,
+        trend: velocity.trend || '→',
+        trendPercent: velocity.trendPercent || 0,
+        totalSold: velocity.totalSold || 0
+      });
+    });
+    
+    return serializeForHtml({ success: true, velocities: velocities });
+    
+  } catch (e) {
+    Logger.log('Error getting all beers velocity: ' + e.toString());
+    return serializeForHtml({ success: false, error: e.toString(), velocities: [] });
+  }
+}
+
+/**
+ * Calculate days of inventory remaining
+ * @param {string} beerName - Name of the beer
+ * @param {string} packageType - Package type
+ * @returns {object} { daysRemaining, currentInventory, dailyVelocity, weeklyVelocity, trend, status }
+ */
+function getInventoryDaysRemaining(beerName, packageType) {
+  try {
+    var fgData = getFinishedGoodsData({});
+    if (!fgData.success) {
+      return { 
+        error: 'Could not load inventory',
+        daysRemaining: 0,
+        currentInventory: 0,
+        status: 'ERROR'
+      };
+    }
+    
+    var inventory = fgData.inventory.find(function(item) {
+      return (item.beerName || '').toString().toLowerCase().trim() === beerName.toLowerCase().trim() && 
+             (item.packageType || '').toString().trim() === packageType.trim();
+    });
+    
+    if (!inventory) {
+      return { 
+        daysRemaining: 0, 
+        currentInventory: 0, 
+        dailyVelocity: 0,
+        weeklyVelocity: 0,
+        trend: '→',
+        status: 'NOT_FOUND' 
+      };
+    }
+    
+    var velocity = calculateSalesVelocity(beerName, packageType, 30);
+    if (velocity.error || velocity.dailyVelocity <= 0) {
+      return {
+        daysRemaining: 999, // Infinite if no sales
+        currentInventory: inventory.qtyOnHand || 0,
+        dailyVelocity: 0,
+        weeklyVelocity: 0,
+        trend: '→',
+        status: 'NO_SALES'
+      };
+    }
+    
+    // Convert inventory to BBL if needed (package yields are in cases/kegs per BBL)
+    var inventoryBBL = inventory.qtyOnHand || 0;
+    var packageYield = FG_CONFIG.packageYields[packageType] || 1;
+    if (packageYield > 1) {
+      // If packageYield is cases/kegs per BBL, convert inventory
+      inventoryBBL = inventory.qtyOnHand / packageYield;
+    }
+    
+    var daysRemaining = velocity.dailyVelocity > 0 ? inventoryBBL / velocity.dailyVelocity : 999;
+    
+    var status = 'OK';
+    if (daysRemaining <= 7) status = 'CRITICAL';
+    else if (daysRemaining <= 14) status = 'LOW';
+    else if (daysRemaining <= 21) status = 'WARNING';
+    
+    return serializeForHtml({
+      daysRemaining: Math.round(daysRemaining * 10) / 10,
+      currentInventory: inventory.qtyOnHand || 0,
+      inventoryBBL: Math.round(inventoryBBL * 10) / 10,
+      dailyVelocity: velocity.dailyVelocity,
+      weeklyVelocity: velocity.weeklyVelocity,
+      trend: velocity.trend,
+      trendPercent: velocity.trendPercent,
+      status: status
+    });
+    
+  } catch (e) {
+    Logger.log('Error calculating inventory days: ' + e.toString());
+    return { 
+      error: e.toString(),
+      daysRemaining: 0,
+      currentInventory: 0,
+      status: 'ERROR'
+    };
+  }
+}
+
+/**
+ * Get inventory status for all beers
+ * @returns {array} Array of inventory status objects
+ */
+function getAllBeersInventoryStatus() {
+  try {
+    var fgData = getFinishedGoodsData({});
+    if (!fgData.success) {
+      return serializeForHtml({ success: false, error: 'Could not load inventory', statuses: [] });
+    }
+    
+    var statuses = [];
+    var processed = {};
+    
+    fgData.inventory.forEach(function(item) {
+      var key = (item.beerName || '').toLowerCase().trim() + '|' + (item.packageType || '').trim();
+      if (processed[key]) return;
+      processed[key] = true;
+      
+      var inventoryDays = getInventoryDaysRemaining(item.beerName, item.packageType);
+      statuses.push({
+        beerName: item.beerName,
+        packageType: item.packageType,
+        currentInventory: item.qtyOnHand || 0,
+        inventoryBBL: inventoryDays.inventoryBBL || 0,
+        dailyVelocity: inventoryDays.dailyVelocity || 0,
+        weeklyVelocity: inventoryDays.weeklyVelocity || 0,
+        daysRemaining: inventoryDays.daysRemaining || 0,
+        trend: inventoryDays.trend || '→',
+        trendPercent: inventoryDays.trendPercent || 0,
+        status: inventoryDays.status || 'OK'
+      });
+    });
+    
+    // Sort by days remaining (lowest first)
+    statuses.sort(function(a, b) {
+      return (a.daysRemaining || 999) - (b.daysRemaining || 999);
+    });
+    
+    return serializeForHtml({ success: true, statuses: statuses });
+    
+  } catch (e) {
+    Logger.log('Error getting all beers inventory status: ' + e.toString());
+    return serializeForHtml({ success: false, error: e.toString(), statuses: [] });
+  }
+}
+
+/**
+ * Get smart production suggestions based on inventory and velocity
+ * @returns {array} Array of suggestion objects
+ */
+function getProductionSuggestions() {
+  try {
+    var suggestions = [];
+    var fgData = getFinishedGoodsData({});
+    if (!fgData.success) return serializeForHtml({ success: true, suggestions: [] });
+    
+    var processed = {};
+    
+    fgData.inventory.forEach(function(item) {
+      var key = (item.beerName || '').toLowerCase().trim() + '|' + (item.packageType || '').trim();
+      if (processed[key]) return;
+      processed[key] = true;
+      
+      var inventoryDays = getInventoryDaysRemaining(item.beerName, item.packageType);
+      
+      if (inventoryDays.status === 'CRITICAL' || inventoryDays.status === 'LOW') {
+        // Get recipe to calculate lead time
+        var recipe = null;
+        try {
+          var recipesResult = getAllRecipesEnhanced();
+          if (recipesResult.success && recipesResult.recipes) {
+            recipe = recipesResult.recipes.find(function(r) {
+              return (r.recipeName || r.beerType || '').toString().toLowerCase().trim() === 
+                     (item.beerName || '').toLowerCase().trim();
+            });
+          }
+        } catch (e) {
+          Logger.log('Error getting recipe: ' + e.toString());
+        }
+        
+        // Calculate lead time: 7 days brewing + fermentation days + 3 days packaging
+        var fermentationDays = recipe ? (parseFloat(recipe.fermentationDays) || 14) : 14;
+        var leadTimeDays = 7 + fermentationDays + 3;
+        
+        // Target: 30 days of inventory
+        var targetInventoryDays = 30;
+        var daysUntilTarget = targetInventoryDays - inventoryDays.daysRemaining;
+        var suggestedBrewDate = new Date();
+        suggestedBrewDate.setDate(suggestedBrewDate.getDate() + daysUntilTarget - leadTimeDays);
+        
+        var suggestedPackageDate = new Date(suggestedBrewDate);
+        suggestedPackageDate.setDate(suggestedPackageDate.getDate() + leadTimeDays);
+        
+        suggestions.push({
+          beerName: item.beerName,
+          packageType: item.packageType,
+          priority: inventoryDays.status === 'CRITICAL' ? 'HIGH' : 'MEDIUM',
+          currentInventory: inventoryDays.currentInventory || 0,
+          inventoryBBL: inventoryDays.inventoryBBL || 0,
+          daysRemaining: inventoryDays.daysRemaining || 0,
+          dailyVelocity: inventoryDays.dailyVelocity || 0,
+          weeklyVelocity: inventoryDays.weeklyVelocity || 0,
+          trend: inventoryDays.trend || '→',
+          trendPercent: inventoryDays.trendPercent || 0,
+          suggestedBrewDate: suggestedBrewDate,
+          suggestedPackageDate: suggestedPackageDate,
+          leadTimeDays: leadTimeDays,
+          message: item.beerName + ': ' + Math.round(inventoryDays.daysRemaining * 10) / 10 + 
+                   ' days inventory remaining - schedule brew by ' + 
+                   Utilities.formatDate(suggestedBrewDate, Session.getScriptTimeZone(), 'MMM d, yyyy')
+        });
+      }
+      
+      // Check for velocity trends
+      if (inventoryDays.trend === '↑' && inventoryDays.daysRemaining < 30 && inventoryDays.dailyVelocity > 0) {
+        suggestions.push({
+          beerName: item.beerName,
+          packageType: item.packageType,
+          priority: 'LOW',
+          type: 'VELOCITY_INCREASE',
+          trend: inventoryDays.trend,
+          trendPercent: inventoryDays.trendPercent || 0,
+          daysRemaining: inventoryDays.daysRemaining || 0,
+          weeklyVelocity: inventoryDays.weeklyVelocity || 0,
+          message: item.beerName + ' velocity up ' + Math.abs(inventoryDays.trendPercent || 0) + 
+                   '% - consider increasing batch frequency'
+        });
+      }
+    });
+    
+    // Sort by priority
+    var priorityOrder = { 'HIGH': 3, 'MEDIUM': 2, 'LOW': 1 };
+    suggestions.sort(function(a, b) {
+      return (priorityOrder[b.priority] || 0) - (priorityOrder[a.priority] || 0);
+    });
+    
+    return serializeForHtml({ success: true, suggestions: suggestions });
+    
+  } catch (e) {
+    Logger.log('Error getting production suggestions: ' + e.toString());
+    return serializeForHtml({ success: false, error: e.toString(), suggestions: [] });
+  }
+}
+
+/**
+ * Get production calendar for a specific year/month
+ * @param {number} year - Year (e.g., 2025)
+ * @param {number} month - Month (0-11, where 0 = January)
+ * @returns {object} { success, batches, error }
+ */
+function getProductionCalendar(year, month) {
+  try {
+    var ss = getBrmSpreadsheet();
+    var sheet = ss.getSheetByName(SHEETS.PRODUCTION_CALENDAR);
+    
+    if (!sheet) {
+      return serializeForHtml({ success: false, error: 'Production Calendar sheet not found', batches: [] });
+    }
+    
+    var data = sheet.getDataRange().getValues();
+    
+    // Production Calendar structure:
+    // Row 1: Headers (Week #, Beer Type, Brew Date, Package Date, Batch Size (BBL), Expected Yield, Product Type, Status, Tank, Notes)
+    var headerRow = 0; // Assuming headers in row 1
+    var dataStartRow = 1;
+    
+    // Find column indices
+    var headers = data[headerRow] || [];
+    var cols = {
+      weekNumber: -1,
+      beerType: -1,
+      brewDate: -1,
+      packageDate: -1,
+      batchSize: -1,
+      expectedYield: -1,
+      productType: -1,
+      status: -1,
+      tank: -1,
+      notes: -1
+    };
+    
+    for (var h = 0; h < headers.length; h++) {
+      var header = (headers[h] || '').toString().toLowerCase();
+      if (header.includes('week')) cols.weekNumber = h;
+      if (header.includes('beer') && header.includes('type')) cols.beerType = h;
+      if (header.includes('brew') && header.includes('date')) cols.brewDate = h;
+      if (header.includes('package') && header.includes('date')) cols.packageDate = h;
+      if (header.includes('batch') && header.includes('size')) cols.batchSize = h;
+      if (header.includes('expected') && header.includes('yield')) cols.expectedYield = h;
+      if (header.includes('product') && header.includes('type')) cols.productType = h;
+      if (header === 'status') cols.status = h;
+      if (header === 'tank') cols.tank = h;
+      if (header === 'notes') cols.notes = h;
+    }
+    
+    // Fallback to column positions if headers not found
+    if (cols.weekNumber === -1) cols.weekNumber = 0;
+    if (cols.beerType === -1) cols.beerType = 1;
+    if (cols.brewDate === -1) cols.brewDate = 2;
+    if (cols.packageDate === -1) cols.packageDate = 3;
+    if (cols.batchSize === -1) cols.batchSize = 4;
+    if (cols.expectedYield === -1) cols.expectedYield = 5;
+    if (cols.productType === -1) cols.productType = 6;
+    if (cols.status === -1) cols.status = 7;
+    if (cols.tank === -1) cols.tank = 8;
+    if (cols.notes === -1) cols.notes = 9;
+    
+    var batches = [];
+    var startDate = new Date(year, month, 1);
+    var endDate = new Date(year, month + 1, 0, 23, 59, 59);
+    
+    for (var i = dataStartRow; i < data.length; i++) {
+      var row = data[i];
+      if (!row[cols.beerType] && !row[cols.brewDate]) continue;
+      
+      var brewDate = row[cols.brewDate];
+      if (!brewDate) continue;
+      
+      var brewDateObj = brewDate instanceof Date ? brewDate : new Date(brewDate);
+      if (isNaN(brewDateObj.getTime())) continue;
+      
+      // Filter by month if specified
+      if (year !== undefined && month !== undefined) {
+        if (brewDateObj.getFullYear() !== year || brewDateObj.getMonth() !== month) {
+          continue;
+        }
+      }
+      
+      batches.push({
+        rowIndex: i + 1,
+        weekNumber: row[cols.weekNumber] || '',
+        beerType: row[cols.beerType] || '',
+        brewDate: brewDateObj,
+        packageDate: row[cols.packageDate] ? (row[cols.packageDate] instanceof Date ? row[cols.packageDate] : new Date(row[cols.packageDate])) : null,
+        batchSize: parseFloat(row[cols.batchSize]) || 0,
+        expectedYield: parseFloat(row[cols.expectedYield]) || 0,
+        productType: row[cols.productType] || '',
+        status: row[cols.status] || 'Planned',
+        tank: row[cols.tank] || '',
+        notes: row[cols.notes] || ''
+      });
+    }
+    
+    // Sort by brew date
+    batches.sort(function(a, b) {
+      return a.brewDate - b.brewDate;
+    });
+    
+    return serializeForHtml({ success: true, batches: batches });
+    
+  } catch (e) {
+    Logger.log('Error getting production calendar: ' + e.toString());
+    return serializeForHtml({ success: false, error: e.toString(), batches: [] });
+  }
+}
+
+/**
+ * Schedule a batch in Production Calendar
+ * @param {object} batchData - { beerType, brewDate, packageDate, batchSize, expectedYield, productType, status, tank, notes }
+ * @returns {object} { success, message, rowIndex }
+ */
+function scheduleBatch(batchData) {
+  try {
+    var ss = getBrmSpreadsheet();
+    var sheet = ss.getSheetByName(SHEETS.PRODUCTION_CALENDAR);
+    
+    if (!sheet) {
+      return { success: false, error: 'Production Calendar sheet not found' };
+    }
+    
+    if (!batchData.beerType || !batchData.brewDate) {
+      return { success: false, error: 'Beer type and brew date are required' };
+    }
+    
+    // Calculate week number
+    var brewDate = batchData.brewDate instanceof Date ? batchData.brewDate : new Date(batchData.brewDate);
+    var weekNumber = getWeekNumber(brewDate);
+    
+    // Append row
+    sheet.appendRow([
+      weekNumber,
+      batchData.beerType || '',
+      brewDate,
+      batchData.packageDate ? (batchData.packageDate instanceof Date ? batchData.packageDate : new Date(batchData.packageDate)) : '',
+      parseFloat(batchData.batchSize) || 60,
+      parseFloat(batchData.expectedYield) || 57,
+      batchData.productType || '',
+      batchData.status || 'Planned',
+      batchData.tank || '',
+      batchData.notes || ''
+    ]);
+    
+    var rowIndex = sheet.getLastRow();
+    
+    Logger.log('Scheduled batch: ' + batchData.beerType + ' for ' + brewDate);
+    
+    return serializeForHtml({ 
+      success: true, 
+      message: 'Batch scheduled successfully',
+      rowIndex: rowIndex
+    });
+    
+  } catch (e) {
+    Logger.log('Error scheduling batch: ' + e.toString());
+    return { success: false, error: e.toString() };
+  }
+}
+
+/**
+ * Update production calendar status
+ * @param {number} rowIndex - Row number in Production Calendar sheet
+ * @param {string} status - New status
+ * @returns {object} { success, message }
+ */
+function updateProductionCalendarStatus(rowIndex, status) {
+  try {
+    var ss = getBrmSpreadsheet();
+    var sheet = ss.getSheetByName(SHEETS.PRODUCTION_CALENDAR);
+    
+    if (!sheet) {
+      return { success: false, error: 'Production Calendar sheet not found' };
+    }
+    
+    // Find status column (assume column 8, 0-indexed = 7)
+    var statusCol = 8; // Column I (1-indexed)
+    
+    sheet.getRange(rowIndex, statusCol).setValue(status);
+    
+    return serializeForHtml({ 
+      success: true, 
+      message: 'Status updated to ' + status
+    });
+    
+  } catch (e) {
+    Logger.log('Error updating production calendar status: ' + e.toString());
+    return { success: false, error: e.toString() };
+  }
+}
+
+/**
+ * Helper function to get week number from date
+ */
+function getWeekNumber(date) {
+  var d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+  var dayNum = d.getUTCDay() || 7;
+  d.setUTCDate(d.getUTCDate() + 4 - dayNum);
+  var yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+  return Math.ceil((((d - yearStart) / 86400000) + 1) / 7);
+}
+
+/**
+ * Check raw materials availability for a batch
+ * @param {string} recipeName - Recipe name
+ * @param {number} batchSize - Batch size in BBL
+ * @returns {object} { success, materials, hasInsufficient, message }
+ */
+function checkMaterialsForBatch(recipeName, batchSize) {
+  try {
+    var recipe = null;
+    var recipesResult = getAllRecipesEnhanced();
+    if (recipesResult.success && recipesResult.recipes) {
+      recipe = recipesResult.recipes.find(function(r) {
+        return (r.recipeName || '').toString().toLowerCase().trim() === recipeName.toLowerCase().trim();
+      });
+    }
+    
+    if (!recipe) {
+      return serializeForHtml({ 
+        success: false, 
+        error: 'Recipe not found: ' + recipeName,
+        materials: [],
+        hasInsufficient: false
+      });
+    }
+    
+    var rmData = getRawMaterialsInventory({});
+    if (!rmData.success) {
+      return serializeForHtml({ 
+        success: false, 
+        error: 'Could not load raw materials',
+        materials: [],
+        hasInsufficient: false
+      });
+    }
+    
+    var scaleFactor = batchSize / (recipe.batchSize || 60);
+    var allIngredients = (recipe.grains || []).concat(recipe.hops || []).concat(recipe.other || []);
+    var materials = [];
+    var hasInsufficient = false;
+    
+    allIngredients.forEach(function(ing) {
+      var needed = (parseFloat(ing.amount) || 0) * scaleFactor;
+      var unit = ing.uom || 'lb';
+      
+      // Find in raw materials
+      var rmItem = rmData.materials.find(function(m) {
+        return (m.item || '').toString().toLowerCase().trim() === (ing.ingredient || '').toLowerCase().trim();
+      });
+      
+      var available = rmItem ? (parseFloat(rmItem.qtyOnHand) || 0) : 0;
+      var sufficient = available >= needed;
+      
+      if (!sufficient) hasInsufficient = true;
+      
+      materials.push({
+        ingredient: ing.ingredient || '',
+        needed: Math.round(needed * 100) / 100,
+        available: available,
+        unit: unit,
+        sufficient: sufficient,
+        shortfall: sufficient ? 0 : Math.round((needed - available) * 100) / 100,
+        status: sufficient ? '✅' : '⚠️'
+      });
+    });
+    
+    return serializeForHtml({
+      success: true,
+      materials: materials,
+      hasInsufficient: hasInsufficient,
+      message: hasInsufficient ? 
+        'Some materials are insufficient' : 
+        'All materials are available'
+    });
+    
+  } catch (e) {
+    Logger.log('Error checking materials: ' + e.toString());
+    return serializeForHtml({ 
+      success: false, 
+      error: e.toString(),
+      materials: [],
+      hasInsufficient: false
+    });
   }
 }

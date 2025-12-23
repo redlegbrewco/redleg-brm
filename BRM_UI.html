@@ -652,6 +652,7 @@
     <button class="nav-tab" data-tab="opex">💳 OpEx</button>
     <button class="nav-tab" data-tab="floor-pricing">🏷️ Pricing</button>
     <button class="nav-tab" data-tab="yeast">🧫 Yeast</button>
+    <button class="nav-tab" data-tab="calendar">📅 Calendar</button>
   </nav>
   
   <div class="content">
@@ -1651,6 +1652,95 @@
     </div>
     
     <!-- ═══════════════════════════════════════════════════════════════════════════════
+         PRODUCTION CALENDAR TAB
+         ═══════════════════════════════════════════════════════════════════════════════ -->
+    <div id="calendar" class="tab-content">
+      <div class="card" style="margin-bottom:20px;">
+        <div class="card-header">
+          <span class="card-title">📅 PRODUCTION CALENDAR</span>
+          <button class="btn btn-primary btn-sm" onclick="showScheduleBatchModal()">+ Schedule Batch</button>
+        </div>
+      </div>
+      
+      <!-- Smart Suggestions -->
+      <div class="card" style="margin-bottom:20px;">
+        <div class="card-header">
+          <span class="card-title">🔴 SMART SUGGESTIONS</span>
+        </div>
+        <div class="card-body" id="productionSuggestions">
+          <div class="loading">Loading suggestions...</div>
+        </div>
+      </div>
+      
+      <!-- Inventory Status -->
+      <div class="card" style="margin-bottom:20px;">
+        <div class="card-header">
+          <span class="card-title">📊 INVENTORY STATUS</span>
+        </div>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Beer</th>
+                <th>Package</th>
+                <th style="text-align:right;">On Hand</th>
+                <th style="text-align:right;">Velocity</th>
+                <th style="text-align:right;">Days Left</th>
+                <th>Trend</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody id="inventoryStatusTable">
+              <tr><td colspan="7" class="loading">Loading inventory status...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+      
+      <!-- Scheduled Batches -->
+      <div class="card" style="margin-bottom:20px;">
+        <div class="card-header">
+          <span class="card-title">📅 SCHEDULED BATCHES</span>
+          <div style="display:flex;gap:10px;align-items:center;">
+            <select id="calendarMonth" onchange="loadProductionCalendar()" style="padding:6px;border:1px solid var(--border);border-radius:4px;">
+              <option value="0">January</option>
+              <option value="1">February</option>
+              <option value="2">March</option>
+              <option value="3">April</option>
+              <option value="4">May</option>
+              <option value="5">June</option>
+              <option value="6">July</option>
+              <option value="7">August</option>
+              <option value="8">September</option>
+              <option value="9">October</option>
+              <option value="10">November</option>
+              <option value="11">December</option>
+            </select>
+            <input type="number" id="calendarYear" value="2025" onchange="loadProductionCalendar()" style="padding:6px;border:1px solid var(--border);border-radius:4px;width:80px;">
+            <button class="btn btn-primary btn-sm" onclick="showScheduleBatchModal()">+ Schedule Batch</button>
+          </div>
+        </div>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Brew Date</th>
+                <th>Beer</th>
+                <th style="text-align:right;">Size</th>
+                <th>Tank</th>
+                <th>Status</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="scheduledBatchesTable">
+              <tr><td colspan="6" class="loading">Loading scheduled batches...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+    
+    <!-- ═══════════════════════════════════════════════════════════════════════════════
          FLOOR PRICING TAB
          ═══════════════════════════════════════════════════════════════════════════════ -->
     <div id="floor-pricing" class="tab-content">
@@ -1977,6 +2067,89 @@
     <div class="modal-actions">
       <button class="btn btn-secondary" onclick="closeNewPOModal()">Cancel</button>
       <button class="btn btn-primary" onclick="submitPurchaseRequest()">📝 Submit Request</button>
+    </div>
+  </div>
+</div>
+
+<!-- Schedule Batch Modal -->
+<div id="scheduleBatchModal" class="modal">
+  <div class="modal-content" style="max-width:600px;">
+    <div class="modal-header">
+      <h2>📅 Schedule New Batch</h2>
+      <button class="close-btn" onclick="closeScheduleBatchModal()">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-group">
+        <label>Beer Type <span style="color:red;">*</span></label>
+        <select id="scheduleBeerType" onchange="onScheduleBeerChange()" required>
+          <option value="">-- Select Beer --</option>
+        </select>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Batch Size (BBL) <span style="color:red;">*</span></label>
+          <input type="number" id="scheduleBatchSize" step="0.1" min="0" value="60" oninput="calculatePackageDate()" required>
+        </div>
+        <div class="form-group">
+          <label>Expected Yield (BBL)</label>
+          <input type="number" id="scheduleExpectedYield" step="0.1" min="0" value="57">
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Brew Date <span style="color:red;">*</span></label>
+          <input type="date" id="scheduleBrewDate" onchange="calculatePackageDate()" required>
+        </div>
+        <div class="form-group">
+          <label>Expected Package Date</label>
+          <input type="date" id="schedulePackageDate" readonly style="background:#f3f4f6;">
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Product Type</label>
+          <select id="scheduleProductType">
+            <option value="Keg">Keg</option>
+            <option value="Can">Can</option>
+            <option value="Bottle">Bottle</option>
+            <option value="Mixed">Mixed</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Tank</label>
+          <input type="text" id="scheduleTank" placeholder="e.g., FV-1">
+        </div>
+      </div>
+      <div class="form-group">
+        <label>Status</label>
+        <select id="scheduleStatus">
+          <option value="Planned">Planned</option>
+          <option value="Brewing">Brewing</option>
+          <option value="Fermenting">Fermenting</option>
+          <option value="Packaging">Packaging</option>
+          <option value="Complete">Complete</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Notes</label>
+        <textarea id="scheduleNotes" rows="2"></textarea>
+      </div>
+      
+      <!-- Raw Materials Check -->
+      <div id="scheduleMaterialsCheck" style="display:none;margin-top:20px;padding:15px;background:#f8f9fa;border-radius:8px;">
+        <h4 style="margin-top:0;">📦 Raw Materials Check</h4>
+        <div id="scheduleMaterialsList">
+          <div class="loading">Checking materials...</div>
+        </div>
+        <div style="margin-top:10px;">
+          <button type="button" class="btn btn-secondary btn-sm" onclick="checkScheduleMaterials()">🔄 Refresh Check</button>
+          <button type="button" class="btn btn-warning btn-sm" onclick="createPOsForMissingMaterials()" id="createPOsBtn" style="display:none;">📝 Create PO for Missing</button>
+        </div>
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" onclick="closeScheduleBatchModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="submitScheduleBatch()">📅 Schedule Batch</button>
     </div>
   </div>
 </div>
@@ -2354,6 +2527,7 @@
     function loadTabData(tabId) {
       switch(tabId) {
         case 'dashboard': loadDashboardData(); break;
+        case 'calendar': loadCalendarData(); break;
         case 'production': loadBatches(); break;
         case 'recipes': loadRecipes(); break;
         case 'raw-materials': loadRawMaterials(); break;
@@ -2366,6 +2540,7 @@
         case 'ttb': break;
         case 'opex': loadOpEx(); break;
         case 'floor-pricing': loadFloorPricing(); break;
+        case 'calendar': loadCalendarData(); break;
       }
     }
     
@@ -13521,6 +13696,438 @@ document.getElementById('editRecipeModal').addEventListener('click', function(e)
     </div>
   </div>
 </div>
+
+  <script>
+  // ═══════════════════════════════════════════════════════════════════════════
+  // PRODUCTION CALENDAR FUNCTIONS
+  // ═══════════════════════════════════════════════════════════════════════════
+  
+  // Production Calendar state
+  var calendarCurrentYear = new Date().getFullYear();
+  var calendarCurrentMonth = new Date().getMonth();
+  var scheduleBatchRecipe = null;
+  var scheduleBatchMaterials = null;
+  
+  function loadCalendarData() {
+    // Set current month/year in dropdowns
+    var monthSelect = document.getElementById('calendarMonth');
+    var yearInput = document.getElementById('calendarYear');
+    if (monthSelect) monthSelect.value = calendarCurrentMonth;
+    if (yearInput) yearInput.value = calendarCurrentYear;
+    
+    // Load all data
+    loadProductionSuggestions();
+    loadInventoryStatus();
+    loadProductionCalendar();
+  }
+  
+  function loadProductionSuggestions() {
+    var container = document.getElementById('productionSuggestions');
+    if (!container) return;
+    container.innerHTML = '<div class="loading">Loading suggestions...</div>';
+    
+    google.script.run
+      .withSuccessHandler(function(result) {
+        if (!result.success) {
+          container.innerHTML = '<div class="alert alert-warning">' + (result.error || 'No suggestions available') + '</div>';
+          return;
+        }
+        
+        var suggestions = result.suggestions || [];
+        if (suggestions.length === 0) {
+          container.innerHTML = '<div style="padding:15px;text-align:center;color:#666;">✅ All beers have adequate inventory</div>';
+          return;
+        }
+        
+        var html = '';
+        suggestions.forEach(function(s) {
+          var priorityClass = s.priority === 'HIGH' ? 'alert-danger' : s.priority === 'MEDIUM' ? 'alert-warning' : 'alert-info';
+          var priorityIcon = s.priority === 'HIGH' ? '🔴' : s.priority === 'MEDIUM' ? '⚠️' : 'ℹ️';
+          var brewDate = s.suggestedBrewDate ? new Date(s.suggestedBrewDate).toISOString().split('T')[0] : '';
+          
+          html += '<div class="alert ' + priorityClass + '" style="margin-bottom:10px;padding:15px;border-radius:8px;">';
+          html += '<div style="display:flex;justify-content:space-between;align-items:start;margin-bottom:8px;">';
+          html += '<div><strong>' + priorityIcon + ' ' + escapeHtml(s.beerName) + '</strong> (' + escapeHtml(s.packageType) + ')</div>';
+          html += '<div style="display:flex;gap:8px;">';
+          html += '<button class="btn btn-sm btn-primary" onclick="scheduleBatchFromSuggestion(\'' + 
+                  escapeHtml(s.beerName).replace(/'/g, "\\'") + '\', \'' + escapeHtml(s.packageType).replace(/'/g, "\\'") + 
+                  '\', \'' + brewDate + '\')">Schedule</button>';
+          html += '<button class="btn btn-sm btn-secondary" onclick="viewRecipe(\'' + 
+                  escapeHtml(s.beerName).replace(/'/g, "\\'") + '\')">View Recipe</button>';
+          html += '</div></div>';
+          html += '<div style="font-size:13px;color:#666;">' + escapeHtml(s.message) + '</div>';
+          if (s.weeklyVelocity) {
+            html += '<div style="font-size:12px;margin-top:5px;">Velocity: ' + formatNumber(s.weeklyVelocity) + ' BBL/week ' + s.trend + '</div>';
+          }
+          html += '</div>';
+        });
+        
+        container.innerHTML = html;
+      })
+      .withFailureHandler(function(error) {
+        container.innerHTML = '<div class="alert alert-danger">Error loading suggestions: ' + error.message + '</div>';
+      })
+      .getProductionSuggestions();
+  }
+  
+  function loadInventoryStatus() {
+    var table = document.getElementById('inventoryStatusTable');
+    if (!table) return;
+    table.innerHTML = '<tr><td colspan="7" class="loading">Loading...</td></tr>';
+    
+    google.script.run
+      .withSuccessHandler(function(result) {
+        if (!result.success) {
+          table.innerHTML = '<tr><td colspan="7">' + (result.error || 'Error') + '</td></tr>';
+          return;
+        }
+        
+        var statuses = result.statuses || [];
+        if (statuses.length === 0) {
+          table.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:20px;color:#666;">No inventory data</td></tr>';
+          return;
+        }
+        
+        table.innerHTML = statuses.map(function(s) {
+          var statusIcon = s.status === 'CRITICAL' ? '🔴' : s.status === 'LOW' ? '⚠️' : s.status === 'WARNING' ? '🟡' : '✅';
+          var statusColor = s.status === 'CRITICAL' ? '#ef4444' : s.status === 'LOW' ? '#f59e0b' : s.status === 'WARNING' ? '#fbbf24' : '#10b981';
+          
+          return '<tr>' +
+            '<td><strong>' + escapeHtml(s.beerName) + '</strong></td>' +
+            '<td>' + escapeHtml(s.packageType) + '</td>' +
+            '<td style="text-align:right;">' + formatNumber(s.currentInventory) + '</td>' +
+            '<td style="text-align:right;">' + formatNumber(s.weeklyVelocity) + '/wk</td>' +
+            '<td style="text-align:right;color:' + statusColor + ';font-weight:600;">' + 
+            statusIcon + ' ' + (s.daysRemaining >= 999 ? '∞' : Math.round(s.daysRemaining * 10) / 10) + ' days</td>' +
+            '<td style="text-align:center;font-size:18px;">' + s.trend + '</td>' +
+            '<td><span style="color:' + statusColor + ';">' + s.status + '</span></td>' +
+            '</tr>';
+        }).join('');
+      })
+      .withFailureHandler(function(error) {
+        table.innerHTML = '<tr><td colspan="7">Error: ' + error.message + '</td></tr>';
+      })
+      .getAllBeersInventoryStatus();
+  }
+  
+  function loadProductionCalendar() {
+    var monthSelect = document.getElementById('calendarMonth');
+    var yearInput = document.getElementById('calendarYear');
+    if (!monthSelect || !yearInput) return;
+    
+    var month = parseInt(monthSelect.value) || calendarCurrentMonth;
+    var year = parseInt(yearInput.value) || calendarCurrentYear;
+    
+    var table = document.getElementById('scheduledBatchesTable');
+    if (!table) return;
+    table.innerHTML = '<tr><td colspan="6" class="loading">Loading...</td></tr>';
+    
+    google.script.run
+      .withSuccessHandler(function(result) {
+        if (!result.success) {
+          table.innerHTML = '<tr><td colspan="6">' + (result.error || 'Error') + '</td></tr>';
+          return;
+        }
+        
+        var batches = result.batches || [];
+        if (batches.length === 0) {
+          table.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:20px;color:#666;">No batches scheduled for this month</td></tr>';
+          return;
+        }
+        
+        table.innerHTML = batches.map(function(b) {
+          var brewDate = b.brewDate instanceof Date ? b.brewDate : new Date(b.brewDate);
+          var statusColor = b.status === 'Complete' ? '#10b981' : 
+                           b.status === 'Brewing' || b.status === 'Fermenting' ? '#f59e0b' : 
+                           b.status === 'Packaging' ? '#3b82f6' : '#6b7280';
+          var statusIcon = b.status === 'Complete' ? '✅' : 
+                          b.status === 'Brewing' || b.status === 'Fermenting' ? '🟡' : 
+                          b.status === 'Packaging' ? '🔵' : '⚪';
+          
+          return '<tr>' +
+            '<td>' + formatDate(brewDate) + '</td>' +
+            '<td><strong>' + escapeHtml(b.beerType) + '</strong></td>' +
+            '<td style="text-align:right;">' + formatNumber(b.batchSize) + ' BBL</td>' +
+            '<td>' + escapeHtml(b.tank) + '</td>' +
+            '<td><span style="color:' + statusColor + ';">' + statusIcon + ' ' + escapeHtml(b.status) + '</span></td>' +
+            '<td class="action-cell">' +
+            '<button class="btn-icon" onclick="updateBatchStatus(' + b.rowIndex + ', \'Brewing\')" title="Mark as Brewing">🟡</button>' +
+            '<button class="btn-icon" onclick="updateBatchStatus(' + b.rowIndex + ', \'Complete\')" title="Mark as Complete">✅</button>' +
+            '</td>' +
+            '</tr>';
+        }).join('');
+      })
+      .withFailureHandler(function(error) {
+        table.innerHTML = '<tr><td colspan="6">Error: ' + error.message + '</td></tr>';
+      })
+      .getProductionCalendar(year, month);
+  }
+  
+  function showScheduleBatchModal() {
+    // Load beer types from recipes
+    google.script.run
+      .withSuccessHandler(function(result) {
+        var select = document.getElementById('scheduleBeerType');
+        if (!select) return;
+        select.innerHTML = '<option value="">-- Select Beer --</option>';
+        if (result.success && result.recipes) {
+          result.recipes.forEach(function(r) {
+            var option = document.createElement('option');
+            option.value = r.recipeName || r.beerType || '';
+            option.textContent = r.recipeName || r.beerType || '';
+            select.appendChild(option);
+          });
+        }
+      })
+      .getAllRecipesEnhanced();
+    
+    // Set default dates
+    var today = new Date();
+    var brewDateInput = document.getElementById('scheduleBrewDate');
+    if (brewDateInput) brewDateInput.value = today.toISOString().split('T')[0];
+    calculatePackageDate();
+    
+    var modal = document.getElementById('scheduleBatchModal');
+    if (modal) modal.style.display = 'flex';
+    var materialsCheck = document.getElementById('scheduleMaterialsCheck');
+    if (materialsCheck) materialsCheck.style.display = 'none';
+  }
+  
+  function closeScheduleBatchModal() {
+    var modal = document.getElementById('scheduleBatchModal');
+    if (modal) modal.style.display = 'none';
+    scheduleBatchRecipe = null;
+    scheduleBatchMaterials = null;
+  }
+  
+  function onScheduleBeerChange() {
+    var beerName = document.getElementById('scheduleBeerType')?.value;
+    if (!beerName) {
+      var materialsCheck = document.getElementById('scheduleMaterialsCheck');
+      if (materialsCheck) materialsCheck.style.display = 'none';
+      return;
+    }
+    
+    // Get recipe to set default batch size and calculate package date
+    google.script.run
+      .withSuccessHandler(function(result) {
+        if (result.success && result.recipes) {
+          var recipe = result.recipes.find(function(r) {
+            return (r.recipeName || r.beerType || '').toString().toLowerCase().trim() === beerName.toLowerCase().trim();
+          });
+          
+          if (recipe) {
+            scheduleBatchRecipe = recipe;
+            var batchSizeInput = document.getElementById('scheduleBatchSize');
+            var yieldInput = document.getElementById('scheduleExpectedYield');
+            if (batchSizeInput) batchSizeInput.value = recipe.batchSize || 60;
+            if (yieldInput) yieldInput.value = Math.round((recipe.batchSize || 60) * (recipe.yieldPct || 0.95) * 10) / 10;
+            calculatePackageDate();
+            checkScheduleMaterials();
+          }
+        }
+      })
+      .getAllRecipesEnhanced();
+  }
+  
+  function calculatePackageDate() {
+    var brewDateInput = document.getElementById('scheduleBrewDate');
+    if (!brewDateInput || !brewDateInput.value) return;
+    
+    var brewDate = new Date(brewDateInput.value);
+    if (isNaN(brewDate.getTime())) return;
+    
+    // Lead time: 7 days brewing + fermentation days + 3 days packaging
+    var fermentationDays = scheduleBatchRecipe ? (parseFloat(scheduleBatchRecipe.fermentationDays) || 14) : 14;
+    var leadTimeDays = 7 + fermentationDays + 3;
+    
+    var packageDate = new Date(brewDate);
+    packageDate.setDate(packageDate.getDate() + leadTimeDays);
+    
+    var packageDateInput = document.getElementById('schedulePackageDate');
+    if (packageDateInput) packageDateInput.value = packageDate.toISOString().split('T')[0];
+  }
+  
+  function checkScheduleMaterials() {
+    var beerName = document.getElementById('scheduleBeerType')?.value;
+    var batchSizeInput = document.getElementById('scheduleBatchSize');
+    var batchSize = batchSizeInput ? parseFloat(batchSizeInput.value) || 60 : 60;
+    
+    if (!beerName) {
+      var materialsCheck = document.getElementById('scheduleMaterialsCheck');
+      if (materialsCheck) materialsCheck.style.display = 'none';
+      return;
+    }
+    
+    var materialsList = document.getElementById('scheduleMaterialsList');
+    if (materialsList) materialsList.innerHTML = '<div class="loading">Checking materials...</div>';
+    var materialsCheck = document.getElementById('scheduleMaterialsCheck');
+    if (materialsCheck) materialsCheck.style.display = 'block';
+    
+    google.script.run
+      .withSuccessHandler(function(result) {
+        if (!result.success) {
+          if (materialsList) materialsList.innerHTML = '<div class="alert alert-warning">' + (result.error || 'Could not check materials') + '</div>';
+          return;
+        }
+        
+        var materials = result.materials || [];
+        var hasInsufficient = result.hasInsufficient || false;
+        
+        if (materials.length === 0) {
+          if (materialsList) materialsList.innerHTML = '<div class="alert alert-info">No materials found for this recipe</div>';
+          return;
+        }
+        
+        scheduleBatchMaterials = materials;
+        
+        var html = '<table style="width:100%;font-size:13px;border-collapse:collapse;">';
+        html += '<thead><tr style="background:#f3f4f6;font-weight:600;"><th style="padding:8px;text-align:left;">Material</th>';
+        html += '<th style="padding:8px;text-align:right;">Needed</th>';
+        html += '<th style="padding:8px;text-align:right;">Available</th>';
+        html += '<th style="padding:8px;text-align:center;">Status</th></tr></thead><tbody>';
+        
+        materials.forEach(function(m) {
+          html += '<tr style="border-bottom:1px solid #e5e7eb;">';
+          html += '<td style="padding:8px;">' + escapeHtml(m.ingredient) + '</td>';
+          html += '<td style="padding:8px;text-align:right;">' + formatNumber(m.needed) + ' ' + escapeHtml(m.unit) + '</td>';
+          html += '<td style="padding:8px;text-align:right;">' + formatNumber(m.available) + ' ' + escapeHtml(m.unit) + '</td>';
+          html += '<td style="padding:8px;text-align:center;">';
+          if (m.sufficient) {
+            html += '<span style="color:#10b981;">✅</span>';
+          } else {
+            html += '<span style="color:#ef4444;">⚠️ Short ' + formatNumber(m.shortfall) + ' ' + escapeHtml(m.unit) + '</span>';
+          }
+          html += '</td></tr>';
+        });
+        
+        html += '</tbody></table>';
+        if (materialsList) materialsList.innerHTML = html;
+        
+        var createPOsBtn = document.getElementById('createPOsBtn');
+        if (createPOsBtn) createPOsBtn.style.display = hasInsufficient ? 'inline-block' : 'none';
+      })
+      .withFailureHandler(function(error) {
+        if (materialsList) materialsList.innerHTML = '<div class="alert alert-danger">Error: ' + error.message + '</div>';
+      })
+      .checkMaterialsForBatch(beerName, batchSize);
+  }
+  
+  function createPOsForMissingMaterials() {
+    if (!scheduleBatchMaterials) return;
+    
+    var missing = scheduleBatchMaterials.filter(function(m) { return !m.sufficient; });
+    if (missing.length === 0) {
+      showToast('All materials are available', 'info');
+      return;
+    }
+    
+    if (!confirm('Create purchase requests for ' + missing.length + ' missing materials?')) return;
+    
+    var created = 0;
+    var beerName = document.getElementById('scheduleBeerType')?.value || '';
+    missing.forEach(function(m) {
+      google.script.run
+        .withSuccessHandler(function(result) {
+          created++;
+          if (created === missing.length) {
+            showToast('Created ' + created + ' purchase requests', 'success');
+            checkScheduleMaterials(); // Refresh
+          }
+        })
+        .withFailureHandler(function(error) {
+          showToast('Error creating PO for ' + m.ingredient + ': ' + error.message, 'error');
+        })
+        .addPurchaseRequest({
+          item: m.ingredient,
+          qty: m.shortfall,
+          unit: m.unit,
+          unitCost: 0,
+          notes: 'Auto-generated from Production Calendar - Batch: ' + beerName
+        });
+    });
+  }
+  
+  function submitScheduleBatch() {
+    var beerType = document.getElementById('scheduleBeerType')?.value;
+    var brewDate = document.getElementById('scheduleBrewDate')?.value;
+    var batchSizeInput = document.getElementById('scheduleBatchSize');
+    var batchSize = batchSizeInput ? parseFloat(batchSizeInput.value) : 0;
+    
+    if (!beerType || !brewDate || !batchSize) {
+      showToast('Please fill in all required fields', 'error');
+      return;
+    }
+    
+    var batchData = {
+      beerType: beerType,
+      brewDate: brewDate,
+      packageDate: document.getElementById('schedulePackageDate')?.value,
+      batchSize: batchSize,
+      expectedYield: parseFloat(document.getElementById('scheduleExpectedYield')?.value) || (batchSize * 0.95),
+      productType: document.getElementById('scheduleProductType')?.value,
+      status: document.getElementById('scheduleStatus')?.value,
+      tank: document.getElementById('scheduleTank')?.value,
+      notes: document.getElementById('scheduleNotes')?.value
+    };
+    
+    showLoading('Scheduling batch...');
+    google.script.run
+      .withSuccessHandler(function(result) {
+        hideLoading();
+        if (result.success) {
+          showToast('Batch scheduled successfully!', 'success');
+          closeScheduleBatchModal();
+          loadProductionCalendar();
+          loadProductionSuggestions();
+        } else {
+          showToast('Error: ' + result.error, 'error');
+        }
+      })
+      .withFailureHandler(function(error) {
+        hideLoading();
+        showToast('Error: ' + error.message, 'error');
+      })
+      .scheduleBatch(batchData);
+  }
+  
+  function scheduleBatchFromSuggestion(beerName, packageType, suggestedDate) {
+    showScheduleBatchModal();
+    setTimeout(function() {
+      var select = document.getElementById('scheduleBeerType');
+      var dateInput = document.getElementById('scheduleBrewDate');
+      if (select) select.value = beerName;
+      if (dateInput && suggestedDate) dateInput.value = suggestedDate;
+      onScheduleBeerChange();
+    }, 500);
+  }
+  
+  function updateBatchStatus(rowIndex, newStatus) {
+    if (!confirm('Update batch status to "' + newStatus + '"?')) return;
+    
+    google.script.run
+      .withSuccessHandler(function(result) {
+        if (result.success) {
+          showToast('Status updated', 'success');
+          loadProductionCalendar();
+        } else {
+          showToast('Error: ' + result.error, 'error');
+        }
+      })
+      .withFailureHandler(function(error) {
+        showToast('Error: ' + error.message, 'error');
+      })
+      .updateProductionCalendarStatus(rowIndex, newStatus);
+  }
+  
+  function viewRecipe(beerName) {
+    if (typeof openRecipeModal === 'function') {
+      openRecipeModal(beerName);
+    } else {
+      showToast('Recipe view not available', 'info');
+    }
+  }
+  </script>
 
 </body>
 </html>
