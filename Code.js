@@ -124,7 +124,59 @@ const BATCH_CONFIG = {
  * Prevents postMessage errors from Date objects, undefined values, etc.
  */
 function serializeForHtml(obj) {
-  return JSON.parse(JSON.stringify(obj));
+  // Enhanced serialization to handle Date objects and other non-serializable values
+  try {
+    // Use a replacer function to handle Date objects and other edge cases
+    var seen = []; // Track circular references
+    var replacer = function(key, value) {
+      // Skip circular references
+      if (typeof value === 'object' && value !== null) {
+        if (seen.indexOf(value) !== -1) {
+          return '[Circular]';
+        }
+        seen.push(value);
+      }
+      
+      // Convert Date objects to ISO strings
+      if (value instanceof Date) {
+        return value.toISOString();
+      }
+      
+      // Handle undefined (JSON.stringify converts to null, but be explicit)
+      if (value === undefined) {
+        return null;
+      }
+      
+      // Handle functions (shouldn't be in data, but just in case)
+      if (typeof value === 'function') {
+        return '[Function]';
+      }
+      
+      return value;
+    };
+    
+    var serialized = JSON.stringify(obj, replacer);
+    var result = JSON.parse(serialized);
+    return result;
+    
+  } catch(e) {
+    Logger.log('Error serializing for HTML: ' + e.toString());
+    Logger.log('Error stack: ' + (e.stack || 'No stack'));
+    
+    // Fallback: try basic serialization without replacer
+    try {
+      var basic = JSON.parse(JSON.stringify(obj));
+      return basic;
+    } catch(e2) {
+      Logger.log('Fallback serialization also failed: ' + e2.toString());
+      // Last resort: return error object
+      return { 
+        success: false,
+        error: 'Serialization failed: ' + e.toString(),
+        originalError: e2.toString()
+      };
+    }
+  }
 }
 
 function getBrmSpreadsheet() {
@@ -16552,12 +16604,21 @@ function getRecipeTasksWithDefaults(recipeName) {
  * @returns {Object} Recipe view data
  */
 function getRecipeViewData(recipeName) {
+  Logger.log('=== getRecipeViewData START ===');
+  Logger.log('Recipe name: ' + recipeName);
+  
   try {
     var ss = getBrmSpreadsheet();
+    Logger.log('Spreadsheet opened successfully');
+    
     var recipesSheet = ss.getSheetByName(SHEETS.RECIPES);
     var ingredientsSheet = ss.getSheetByName(SHEETS.RECIPE_INGREDIENTS);
     
+    Logger.log('Recipes sheet: ' + (recipesSheet ? 'found' : 'NOT FOUND'));
+    Logger.log('Ingredients sheet: ' + (ingredientsSheet ? 'found' : 'NOT FOUND'));
+    
     if (!recipesSheet) {
+      Logger.log('ERROR: Recipes sheet not found');
       return { success: false, error: 'Recipes sheet not found' };
     }
     
@@ -16605,12 +16666,20 @@ function getRecipeViewData(recipeName) {
     }
     
     if (!recipe) {
+      Logger.log('ERROR: Recipe not found: ' + recipeName);
       return { success: false, error: 'Recipe not found: ' + recipeName };
     }
     
+    Logger.log('Recipe found: ' + recipe.name);
+    
     // Get ingredients by turn
+    Logger.log('Getting Turn 1 ingredients...');
     var turn1Result = getRecipeIngredientsByTurn(recipeName, 1);
+    Logger.log('Turn 1 result: ' + (turn1Result.success ? 'success' : 'failed'));
+    
+    Logger.log('Getting Turn 2 ingredients...');
     var turn2Result = getRecipeIngredientsByTurn(recipeName, 2);
+    Logger.log('Turn 2 result: ' + (turn2Result.success ? 'success' : 'failed'));
     
     var turn1Ingredients = [];
     var turn2Ingredients = [];
@@ -16749,7 +16818,9 @@ function getRecipeViewData(recipeName) {
     var cogsPerBBL = totalCost / (recipe.batchSize * (recipe.expectedYield / 100));
     
     // Get cellar tasks (with defaults)
+    Logger.log('Getting cellar tasks...');
     var cellarTasks = getRecipeTasksWithDefaults(recipeName);
+    Logger.log('Cellar tasks count: ' + (cellarTasks ? cellarTasks.length : 0));
     
     // Format cellar tasks for fermentation section
     // Recipe View defines TARGET steps with TARGET readings (source of truth)
@@ -16804,7 +16875,8 @@ function getRecipeViewData(recipeName) {
       ];
     }
     
-    return serializeForHtml({
+    Logger.log('Building result object...');
+    var result = {
       success: true,
       recipe: recipe,
       turn1Ingredients: turn1Ingredients,
@@ -16837,10 +16909,29 @@ function getRecipeViewData(recipeName) {
         total: totalCost,
         perBBL: cogsPerBBL
       }
-    });
+    };
+    
+    Logger.log('Serializing result...');
+    try {
+      var serialized = serializeForHtml(result);
+      Logger.log('Serialization successful');
+      Logger.log('Serialized data size: ' + JSON.stringify(serialized).length + ' chars');
+      Logger.log('=== getRecipeViewData END - returning data ===');
+      return serialized;
+    } catch(serialError) {
+      Logger.log('ERROR during serialization: ' + serialError.toString());
+      Logger.log('Stack: ' + (serialError.stack || 'No stack'));
+      // Try to return a minimal success response
+      return {
+        success: false,
+        error: 'Failed to serialize recipe data: ' + serialError.toString(),
+        recipeName: recipeName
+      };
+    }
     
   } catch(e) {
-    Logger.log('Error in getRecipeViewData: ' + e.toString());
+    Logger.log('ERROR in getRecipeViewData: ' + e.toString());
+    Logger.log('Stack trace: ' + (e.stack || 'No stack trace'));
     return { success: false, error: e.toString() };
   }
 }
@@ -19390,4 +19481,25 @@ function checkMaterialsForBatch(recipeName, batchSize) {
       hasInsufficient: false
     });
   }
+}
+
+/**
+ * Test function for Recipe View debugging
+ * Run this in Apps Script editor to test getRecipeViewData()
+ */
+function testRecipeView() {
+  Logger.log('=== Testing Recipe View ===');
+  var result = getRecipeViewData('Howitzer Amber');
+  Logger.log('Result success: ' + (result.success || false));
+  Logger.log('Result error: ' + (result.error || 'none'));
+  
+  if (result.success) {
+    var jsonStr = JSON.stringify(result);
+    Logger.log('Result JSON length: ' + jsonStr.length);
+    Logger.log('First 500 chars: ' + jsonStr.substring(0, 500));
+  } else {
+    Logger.log('Error: ' + result.error);
+  }
+  
+  return result;
 }

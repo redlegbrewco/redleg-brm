@@ -3146,6 +3146,9 @@
         })
         .getRecipeViewData(recipeName);
     }
+    
+    // Make openRecipeView globally accessible
+    window.openRecipeView = openRecipeView;
 
     function renderRecipeView(data) {
       var recipe = data.recipe;
@@ -12230,9 +12233,11 @@ function loadRecipeHistory(recipeName) {
 function saveRecipeChanges() {
   // Check if we're in the Edit Recipe modal (has editChangeReason field)
   var editReasonField = document.getElementById('editChangeReason');
+  var reason = ''; // Declare at function scope
+  
   if (editReasonField) {
     // This is the Edit Recipe modal - use the same modal approach
-    var reason = editReasonField.value.trim();
+    reason = editReasonField.value.trim(); // Assign, don't declare
     if (!reason) {
       // Show the modal instead of alert
       showReasonForChangeModalForEditRecipe();
@@ -12263,8 +12268,7 @@ function saveRecipeChanges() {
   }
   
   // Continue with Edit Recipe modal save logic...
-  const reason = editReasonField.value.trim();
-  
+  // reason is now accessible here since it's declared at function scope
   // Call the actual save function
   saveRecipeChangesFromEditModal(reason);
 }
@@ -14121,10 +14125,15 @@ document.getElementById('editRecipeModal').addEventListener('click', function(e)
   }
   
   function viewRecipe(beerName) {
-    if (typeof openRecipeModal === 'function') {
-      openRecipeModal(beerName);
+    // Use the globally accessible openRecipeView function
+    if (typeof window.openRecipeView === 'function') {
+      window.openRecipeView(beerName);
+    } else if (typeof openRecipeView === 'function') {
+      // Fallback to local scope if window.openRecipeView not set yet
+      openRecipeView(beerName);
     } else {
-      showToast('Recipe view not available', 'info');
+      showToast('Recipe view not available - openRecipeView function not found', 'error');
+      console.error('openRecipeView function not found');
     }
   }
   </script>
